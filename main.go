@@ -102,9 +102,11 @@ func run() error {
 	}
 	defer a.Shutdown()
 
+	h := web.New(a, log, *token, filepath.Join(*data, "attachments"))
+	defer h.Close()
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           web.New(a, log, *token),
+		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

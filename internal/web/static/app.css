@@ -123,6 +123,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 #sidebar { width: var(--sidebar-w); border-right: var(--border-w) solid var(--border); }
 #gitpanel { width: var(--gitpanel-w); border-left: var(--border-w) solid var(--border); overflow: auto; }
+.mid { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 #main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .backdrop { display: none; }
 
@@ -360,6 +361,7 @@ details.item.tool > .block { margin: 4px 0 4px 1.2em; }
   flex-direction: column;
 }
 .composer:focus-within { border-color: var(--accent); }
+.composer.dropping { border-color: var(--accent); background: var(--sel); }
 .composer .prompt {
   background: transparent;
   border: 0;
@@ -372,6 +374,55 @@ details.item.tool > .block { margin: 4px 0 4px 1.2em; }
   font-size: 1.02em;
 }
 .composer-row { display: flex; align-items: flex-end; gap: 6px; padding: 6px 10px 10px; }
+.attachments { padding: 2px 16px 4px; color: var(--fg-dim); font-size: 0.85em; }
+.attach-thumbs { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.attach-item { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 240px; }
+.attach-item img { height: 48px; max-width: 96px; object-fit: cover; border-radius: var(--radius-sm); border: var(--border-w) solid var(--border); display: block; }
+.attach-item.file { padding: 4px 22px 4px 10px; border-radius: 999px; border: var(--border-w) solid var(--border); background: var(--bg-3); }
+.attach-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: var(--border-w) solid var(--border);
+  background: var(--bg-4);
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.attach-item.file .attach-remove { top: 50%; transform: translateY(-50%); right: 2px; border: 0; background: transparent; color: var(--fg-dim); }
+.attach-remove:hover { color: var(--err); border-color: var(--err); }
+
+/* Attachment legend on sent messages: image previews and file chips. */
+.user-msg { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 85%; }
+.item.user .user-msg .bubble { max-width: 100%; }
+.attach-legend { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.attach-legend .attach-thumb {
+  display: block;
+  max-height: 180px;
+  max-width: 260px;
+  border-radius: var(--radius);
+  border: var(--border-w) solid var(--border);
+  cursor: zoom-in;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: var(--border-w) solid var(--border);
+  background: var(--bg-3);
+  font-size: 0.9em;
+}
+.attach-chip:hover { border-color: var(--fg-dim); }
 .composer-row .chips { flex: 1; }
 .composer-row .spacer, .mainhead .spacer { flex: 0 0 4px; }
 .composer.busy .prompt { opacity: 0.7; }
@@ -434,6 +485,36 @@ details.item.tool > .block { margin: 4px 0 4px 1.2em; }
 .file-editor { flex: 1; min-height: 240px; resize: none; border: 0; outline: none; background: var(--bg); padding: var(--pad); font: 0.85em/1.5 var(--font-mono); tab-size: 2; }
 .git-editor-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px var(--pad); border-top: var(--border-w) solid var(--border); }
 
+/* ---- terminal ---- */
+
+#termpanel {
+  display: none;
+  flex: none;
+  position: relative;
+  flex-direction: column;
+  height: min(280px, 45dvh);
+  min-height: 120px;
+  max-height: 80dvh;
+  border-top: var(--border-w) solid var(--border);
+  background: var(--bg);
+}
+#termpanel.open { display: flex; }
+.term-drag { position: absolute; top: -4px; left: 0; right: 0; height: 8px; cursor: row-resize; z-index: 5; touch-action: none; }
+.term-drag:hover, .term-drag:active { background: var(--sel); }
+.term-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 2px var(--pad);
+  border-bottom: var(--border-w) solid var(--border);
+  background: var(--bg-2);
+  font-size: 0.9em;
+  min-height: 30px;
+  flex: none;
+}
+.term-mount { flex: 1; min-height: 0; padding: 6px 0 2px 10px; }
+.term-mount .terminal { height: 100%; }
+
 /* ---- toast ---- */
 
 .toast {
@@ -485,4 +566,5 @@ details.item.tool > .block { margin: 4px 0 4px 1.2em; }
   .chip select { max-width: 150px; }
   .items-inner { padding: 10px 10px 20px; }
   .item.user .bubble { max-width: 100%; }
+  .user-msg { max-width: 100%; }
 }

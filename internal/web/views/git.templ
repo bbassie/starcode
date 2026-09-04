@@ -91,6 +91,15 @@ templ FileExplorer(d ExplorerData) {
 				<button class="btn icon ghost tiny" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(explorerParent(d.Dir)) + "')" } title="Parent directory" aria-label="Parent directory">@Icon("arrow-up", "ui-icon")</button>
 			}
 			<span class="mono ellipsis" title={ d.Dir }>{ explorerPath(d) }</span>
+			if d.Project.ID != "" {
+				// data-bind fills $upload asynchronously after the picker
+				// closes; the effect fires on that signal change and posts
+				// to the directory shown here.
+				<label class="btn icon ghost tiny" title="Upload files here" data-effect={ "$upload.length > 0 && @post('/api/projects/" + d.Project.ID + "/upload?path=" + urlQuery(d.Dir) + "')" }>
+					@Icon("upload", "ui-icon")
+					<input type="file" multiple data-bind:upload data-on:click="el.value = ''" style="display: none"/>
+				</label>
+			}
 		</div>
 		if len(d.Files) == 0 && d.Project.ID != "" {
 			<p class="dim pad">this directory is empty.</p>

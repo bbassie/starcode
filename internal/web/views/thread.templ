@@ -111,6 +111,7 @@ templ MainHead(d ThreadData) {
 		if d.Branch != "" {
 			<span class="dim tiny-text hide-sm">@Icon("git-branch", "ui-icon") { d.Branch }</span>
 		}
+		<button class="btn ghost" data-on:click="$term = !$term" title="Toggle terminal">@Icon("terminal", "ui-icon") <span class="hide-sm">terminal</span></button>
 		<button class="btn ghost" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
 		<button class="btn ghost dim" data-on:click={ "confirm('Delete this thread?') && @post('/api/threads/" + d.Thread.ID + "/delete')" } title="Delete thread"><span class="hide-sm">delete</span><span class="show-sm">@Icon("trash-2", "ui-icon")</span></button>
 	</header>
@@ -169,6 +170,27 @@ func plural(n int, one, many string) string {
 	return many
 }
 
+// AttachButton is the composer's paperclip: a hidden file input whose picks
+// land base64-encoded in the $attach signal and ride along with the send.
+templ AttachButton() {
+	<label class="btn icon ghost" title="Attach files to the message">
+		@Icon("paperclip", "ui-icon")
+		// The value resets when $attach empties (clear button, sent turn) so
+		// picking the same file again always fires a change event.
+		<input type="file" multiple data-bind:attach data-on:click="el.value = ''" data-effect="$attach.length === 0 && (el.value = '')" style="display: none"/>
+	</label>
+}
+
+// AttachStrip shows the picked files above the composer row. The layout's
+// change listener renders one removable item per file into .attach-thumbs
+// from the input, which is the source of truth; the strip hides when
+// $attach empties, so stale items never show.
+templ AttachStrip() {
+	<div class="attachments" data-show="$attach.length > 0">
+		<div class="attach-thumbs"></div>
+	</div>
+}
+
 // Composer is the prompt card. Its setting chips post on change; they are
 // disabled while a turn runs since changes only apply to the next one.
 templ Composer(d ThreadData) {
@@ -189,7 +211,9 @@ templ Composer(d ThreadData) {
 			autocomplete="off"
 			spellcheck="false"
 		></textarea>
+		@AttachStrip()
 		<div class="composer-row">
+			@AttachButton()
 			@Chips(d.Settings, "@post('/api/threads/"+t.ID+"/settings')", locked, len(d.Items) > 0)
 			<span class="spacer"></span>
 			if locked {

@@ -24,12 +24,18 @@ templ Layout(title string, p Page) {
 			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 			<meta name="color-scheme" content="dark light"/>
 			<title>{ title } · starcode</title>
-			<link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/>
-			<link rel="stylesheet" href="/static/app.css"/>
-			<script type="module" src="/static/datastar.js"></script>
+			<link rel="icon" href={ asset("/static/favicon.svg") } type="image/svg+xml"/>
+			<link rel="stylesheet" href={ asset("/static/app.css") }/>
+			<script type="module" src={ asset("/static/datastar.js") }></script>
+			if p.View == "thread" {
+				<link rel="stylesheet" href={ asset("/static/xterm.css") }/>
+				<script defer src={ asset("/static/xterm.js") }></script>
+				<script defer src={ asset("/static/xterm-addon-fit.js") }></script>
+				<script defer src={ asset("/static/term.js") }></script>
+			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', _hb: 0}`, p.View == "thread", p.Theme) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], _hb: 0}`, p.View == "thread", p.Theme) }
 			data-attr:data-theme="$theme"
 			data-init={ fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000})", p.streamURL()) }
 		>
@@ -38,9 +44,14 @@ templ Layout(title string, p Page) {
 					<div class="dim pad">loading…</div>
 				</aside>
 				<div class="backdrop" data-show="$nav || $git" data-on:click="$nav = false; $git = false"></div>
-				<main id="main">
-					<div class="dim pad">connecting…</div>
-				</main>
+				<div class="mid">
+					<main id="main">
+						<div class="dim pad">connecting…</div>
+					</main>
+					if p.View == "thread" {
+						@TermPanel(p.ThreadID)
+					}
+				</div>
 				<aside id="gitpanel" data-class:open="$git"></aside>
 			</div>
 			<div id="toast"></div>
@@ -58,6 +69,89 @@ templ Layout(title string, p Page) {
 						const m = document.getElementById('items');
 						if (m && stick) m.scrollTop = m.scrollHeight;
 					}).observe(document.body, { childList: true, subtree: true, characterData: true });
+				})();
+			</script>
+			// Pasting or dropping files on a composer adds them to its attach
+			// input (merged with what is already picked) and fires a change
+			// event so the Datastar binding lifts them into the signal.
+			<script>
+				(() => {
+					const addFiles = (target, files) => {
+						const form = target instanceof Element && target.closest('form.composer');
+						const input = form && form.querySelector('input[type=file]');
+						if (!input || !files.length) return false;
+						const merged = new DataTransfer();
+						for (const f of input.files) merged.items.add(f);
+						for (const f of files) merged.items.add(f);
+						input.files = merged.files;
+						input.dispatchEvent(new Event('change', { bubbles: true }));
+						return true;
+					};
+					document.addEventListener('paste', (e) => {
+						if (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')
+							&& e.clipboardData && addFiles(e.target, e.clipboardData.files)) e.preventDefault();
+					});
+					// The strip above the composer row: one removable item per
+					// picked file, rebuilt from the input on every change
+					// (picker, paste, and drop all end in one).
+					const removeFile = (input, index) => {
+						const kept = new DataTransfer();
+						[...input.files].forEach((f, i) => { if (i !== index) kept.items.add(f); });
+						input.files = kept.files;
+						input.dispatchEvent(new Event('change', { bubbles: true }));
+					};
+					const renderStrip = (input) => {
+						const box = input.closest('form.composer')?.querySelector('.attach-thumbs');
+						if (!box) return;
+						box.replaceChildren(...[...input.files].map((f, i) => {
+							const item = document.createElement('div');
+							if (f.type.startsWith('image/')) {
+								item.className = 'attach-item';
+								const img = document.createElement('img');
+								img.src = URL.createObjectURL(f);
+								img.onload = () => URL.revokeObjectURL(img.src);
+								img.alt = img.title = f.name;
+								item.append(img);
+							} else {
+								item.className = 'attach-item file';
+								item.append(Object.assign(document.createElement('span'), { className: 'ellipsis', textContent: f.name }));
+							}
+							const x = Object.assign(document.createElement('button'), {
+								type: 'button', className: 'attach-remove', title: 'Remove ' + f.name, textContent: '×',
+							});
+							x.addEventListener('click', () => removeFile(input, i));
+							item.append(x);
+							return item;
+						}));
+					};
+					document.addEventListener('change', (e) => {
+						if (e.target instanceof HTMLInputElement && e.target.type === 'file') renderStrip(e.target);
+					});
+					// A morphed composer comes back with an empty strip while
+					// the input still holds files; refill it.
+					new MutationObserver(() => {
+						for (const input of document.querySelectorAll('form.composer input[type=file]')) {
+							const box = input.closest('form.composer').querySelector('.attach-thumbs');
+							if (box && !box.childElementCount && input.files.length) renderStrip(input);
+						}
+					}).observe(document.body, { childList: true, subtree: true });
+					document.addEventListener('dragover', (e) => {
+						const c = e.target instanceof Element && e.target.closest('form.composer');
+						if (c && e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+							e.preventDefault();
+							c.classList.add('dropping');
+						}
+					});
+					document.addEventListener('dragleave', (e) => {
+						const c = e.target instanceof Element && e.target.closest('form.composer');
+						if (c && !(e.relatedTarget instanceof Node && c.contains(e.relatedTarget))) c.classList.remove('dropping');
+					});
+					document.addEventListener('drop', (e) => {
+						const c = e.target instanceof Element && e.target.closest('form.composer');
+						if (!c) return;
+						c.classList.remove('dropping');
+						if (e.dataTransfer && addFiles(e.target, e.dataTransfer.files)) e.preventDefault();
+					});
 				})();
 			</script>
 			<script>

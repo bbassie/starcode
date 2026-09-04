@@ -37,11 +37,19 @@ func PrettyJSON(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return string(raw)
 	}
+	if v == nil {
+		// Adapters emit null for inputs they never saw completed; showing
+		// the word "null" helps nobody.
+		return ""
+	}
 	// Long string fields (file contents) read better unescaped.
 	if m, ok := v.(map[string]any); ok {
 		var sb strings.Builder
 		for _, k := range sortedKeys(m) {
 			val := m[k]
+			if val == nil {
+				continue
+			}
 			if s, ok := val.(string); ok {
 				if strings.Contains(s, "\n") || len(s) > 80 {
 					sb.WriteString(k + ":\n" + indent(s) + "\n")

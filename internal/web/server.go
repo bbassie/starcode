@@ -4,8 +4,10 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"starcode/internal/app"
 	"starcode/internal/gitx"
 	"starcode/internal/store"
+	"starcode/internal/term"
 	"starcode/internal/web/views"
 )
 
@@ -27,15 +30,18 @@ var Themes = []string{"dark", "amber", "green", "light"}
 const tokenCookie = "starcode_token"
 
 type Server struct {
-	App   *app.App
-	Log   *slog.Logger
-	Token string // empty disables auth
-	mux   *http.ServeMux
-	cache capsCache
+	App       *app.App
+	Log       *slog.Logger
+	Token     string // empty disables auth
+	Term      *term.Manager
+	AttachDir string // where prompt attachments are saved, per thread
+	mux       *http.ServeMux
+	cache     capsCache
 }
 
-func New(a *app.App, log *slog.Logger, token string) *Server {
-	s := &Server{App: a, Log: log, Token: token, mux: http.NewServeMux()}
+func New(a *app.App, log *slog.Logger, token, attachDir string) *Server {
+	s := &Server{App: a, Log: log, Token: token, Term: term.NewManager(log), AttachDir: attachDir, mux: http.NewServeMux()}
+	views.SetAssetVersion(staticHash())
 	static, _ := fs.Sub(staticFS, "static")
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", cacheStatic(http.FileServerFS(static))))
 
@@ -46,6 +52,8 @@ func New(a *app.App, log *slog.Logger, token string) *Server {
 	s.mux.HandleFunc("POST /api/projects", s.addProject)
 	s.mux.HandleFunc("GET /api/project-paths", s.projectPaths)
 	s.mux.HandleFunc("GET /api/projects/{id}/files", s.projectFiles)
+	s.mux.HandleFunc("POST /api/projects/{id}/upload", s.uploadFiles)
+	s.mux.HandleFunc("GET /api/attachments/{id}/{name}", s.attachmentFile)
 	s.mux.HandleFunc("POST /api/projects/{id}/remove", s.removeProject)
 	s.mux.HandleFunc("POST /api/projects/{id}/threads", s.newThreadForProject)
 	s.mux.HandleFunc("POST /api/threads", s.newThread)
@@ -59,8 +67,18 @@ func New(a *app.App, log *slog.Logger, token string) *Server {
 	s.mux.HandleFunc("GET /api/git/{id}/diff", s.gitDiff)
 	s.mux.HandleFunc("GET /api/git/{id}/file", s.gitFile)
 	s.mux.HandleFunc("POST /api/git/{id}/file", s.saveGitFile)
+	s.mux.HandleFunc("GET /api/term/{id}/stream", s.termStream)
+	s.mux.HandleFunc("POST /api/term/{id}/input", s.termInput)
+	s.mux.HandleFunc("POST /api/term/{id}/resize", s.termResize)
+	s.mux.HandleFunc("POST /api/term/{id}/kill", s.termKill)
 	s.warm()
 	return s
+}
+
+// Close ends every terminal shell; their ptys give them their own process
+// session, so they would outlive the server otherwise.
+func (s *Server) Close() {
+	s.Term.Shutdown()
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -128,9 +146,31 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	views.Login(next, false, s.theme(r)).Render(r.Context(), w)
 }
 
+// staticHash fingerprints the embedded assets. It feeds the ?v= parameter on
+// every /static URL, so a rebuild busts browser caches on a normal refresh.
+func staticHash() string {
+	h := sha256.New()
+	fs.WalkDir(staticFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		h.Write([]byte(path))
+		data, _ := staticFS.ReadFile(path)
+		h.Write(data)
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
 func cacheStatic(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=3600")
+		// Versioned URLs change when the content does, so they can be
+		// cached forever; anything else must be revalidated.
+		if r.URL.Query().Get("v") != "" {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		h.ServeHTTP(w, r)
 	})
 }

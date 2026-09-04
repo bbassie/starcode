@@ -39,7 +39,9 @@ templ Home(d HomeData) {
 							autocomplete="off"
 							spellcheck="false"
 						></textarea>
+						@AttachStrip()
 						<div class="composer-row">
+							@AttachButton()
 							<label class="chip" title="Project">
 								<span class="chip-icon">@Icon("folder", "ui-icon")</span>
 								<select data-bind:project>

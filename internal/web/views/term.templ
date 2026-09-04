@@ -1,0 +1,17 @@
+package views
+
+// TermPanel is the collapsible shell panel under the transcript. It lives in
+// the layout, outside #main, so SSE re-renders never touch the xterm DOM;
+// static/term.js owns everything inside .term-mount.
+templ TermPanel(threadID string) {
+	<div id="termpanel" data-class:open="$term" data-thread={ threadID }>
+		<div class="term-drag" title="Drag to resize"></div>
+		<div class="term-head">
+			<span class="dim">@Icon("terminal", "ui-icon") terminal</span>
+			<span class="spacer"></span>
+			<button class="btn icon ghost tiny term-restart" title="Restart shell" aria-label="Restart shell">@Icon("rotate-cw", "ui-icon")</button>
+			<button class="btn icon ghost tiny" data-on:click="$term = false" title="Close" aria-label="Close terminal">@Icon("x", "ui-icon")</button>
+		</div>
+		<div class="term-mount"></div>
+	</div>
+}

@@ -2,8 +2,12 @@ package views
 
 import (
 	"encoding/json"
+	"net/url"
+	pathpkg "path"
+	"regexp"
 	"starcode/internal/domain"
 	"starcode/internal/store"
+	"strings"
 )
 
 type toolMeta struct {
@@ -17,11 +21,79 @@ func meta(it store.Item) toolMeta {
 	return m
 }
 
+// toolSummary is the one-line label next to the tool name. Command tools
+// carry a human-written description ("Run the test suite") that reads better
+// than the command itself, which stays visible in the expanded input block.
+func toolSummary(name string, m toolMeta) string {
+	n := strings.ToLower(name)
+	if strings.Contains(n, "bash") || strings.Contains(n, "command") || strings.Contains(n, "shell") {
+		var in struct {
+			Description string `json:"description"`
+		}
+		if json.Unmarshal(m.Input, &in) == nil && strings.TrimSpace(in.Description) != "" {
+			return strings.TrimSpace(in.Description)
+		}
+	}
+	return m.Summary
+}
+
+// attachmentRef is one "[Attached image "x" is saved at: /path]" line from a
+// user message, split off the prompt so it renders as a legend instead.
+type attachmentRef struct {
+	Kind string // "image" | "file"
+	Name string
+	Path string
+}
+
+var attachLine = regexp.MustCompile(`^\[Attached (image|file) "(.+)" is saved at: (.+)\]$`)
+
+// splitAttachments peels trailing attachment lines off a user message.
+func splitAttachments(body string) (string, []attachmentRef) {
+	lines := strings.Split(body, "\n")
+	i := len(lines)
+	var atts []attachmentRef
+	for i > 0 {
+		m := attachLine.FindStringSubmatch(strings.TrimSpace(lines[i-1]))
+		if m == nil {
+			break
+		}
+		atts = append([]attachmentRef{{Kind: m[1], Name: m[2], Path: m[3]}}, atts...)
+		i--
+	}
+	return strings.TrimRight(strings.Join(lines[:i], "\n"), "\n"), atts
+}
+
+// attachmentURL serves the file through the attachments endpoint; the last
+// two path segments are the thread id and the stored file name.
+func attachmentURL(p string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
+	return "/api/attachments/" + url.PathEscape(pathpkg.Base(pathpkg.Dir(p))) + "/" + url.PathEscape(pathpkg.Base(p))
+}
+
 templ Item(it store.Item) {
 	switch it.Kind {
 		case domain.KindUser:
+			{{ text, atts := splitAttachments(it.Body) }}
 			<div id={ "it-" + it.ID } class="item user">
-				<pre class="wrap bubble">{ it.Body }</pre>
+				<div class="user-msg">
+					if text != "" {
+						<pre class="wrap bubble">{ text }</pre>
+					}
+					if len(atts) > 0 {
+						<div class="attach-legend">
+							for _, a := range atts {
+								if a.Kind == "image" {
+									<a href={ templ.SafeURL(attachmentURL(a.Path)) } target="_blank" title={ a.Name }><img class="attach-thumb" src={ attachmentURL(a.Path) } alt={ a.Name } loading="lazy"/></a>
+								} else {
+									<a class="attach-chip" href={ templ.SafeURL(attachmentURL(a.Path)) } target="_blank">
+										@Icon("paperclip", "ui-icon")
+										<span class="ellipsis">{ a.Name }</span>
+									</a>
+								}
+							}
+						</div>
+					}
+				</div>
 			</div>
 		case domain.KindAssistant:
 			<div id={ "it-" + it.ID } class={ "item", "assistant", "md", templ.KV("streaming", it.Status == domain.ItemRunning) }>
@@ -54,14 +126,15 @@ templ Item(it store.Item) {
 
 templ Tool(it store.Item) {
 	{{ m := meta(it) }}
+	{{ input := PrettyJSON(m.Input) }}
 	<details id={ "it-" + it.ID } class={ "item", "tool", "st-" + it.Status } open?={ it.Status == domain.ItemRunning } data-preserve-attr="open">
 		<summary>
 			<span class={ "glyph", "st-" + it.Status }>@ItemIcon(it.Status)</span>
 			<span class="tag">{ it.ToolName }</span>
-			<span class="ellipsis mono">{ m.Summary }</span>
+			<span class="ellipsis mono">{ toolSummary(it.ToolName, m) }</span>
 		</summary>
-		if len(m.Input) > 0 {
-			<pre class="block input">{ PrettyJSON(m.Input) }</pre>
+		if input != "" {
+			<pre class="block input">{ input }</pre>
 		}
 		if it.Output != "" {
 			<pre class="block output">{ clip(it.Output, 20000) }</pre>
@@ -76,8 +149,9 @@ templ Approval(a store.Approval) {
 			<span class="mono">{ a.ToolName }</span>
 			<span class="dim ellipsis">{ a.Description }</span>
 		</div>
-		if len(a.Input) > 0 {
-			<pre class="block input">{ clip(PrettyJSON(a.Input), 4000) }</pre>
+		{{ input := PrettyJSON(a.Input) }}
+		if input != "" {
+			<pre class="block input">{ clip(input, 4000) }</pre>
 		}
 		<div class="approval-actions">
 			<button class="btn primary" data-on:click={ approveURL(a, domain.DecisionAllow) }>allow</button>

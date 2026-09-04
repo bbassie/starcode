@@ -1,7 +1,10 @@
 package web
 
 import (
+	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/starfederation/datastar-go/datastar"
@@ -18,15 +21,16 @@ import (
 // the caller: clearing the composer, showing an error, redirecting.
 
 type signals struct {
-	Path    string `json:"path"`
-	Prompt  string `json:"prompt"`
-	Agent   string `json:"agent"`
-	Model   string `json:"model"`
-	Project string `json:"project"`
-	Theme   string `json:"theme"`
-	Effort  string `json:"effort"`
-	Mode    string `json:"mode"`
-	File    string `json:"file"`
+	Path    string       `json:"path"`
+	Prompt  string       `json:"prompt"`
+	Agent   string       `json:"agent"`
+	Model   string       `json:"model"`
+	Project string       `json:"project"`
+	Theme   string       `json:"theme"`
+	Effort  string       `json:"effort"`
+	Mode    string       `json:"mode"`
+	File    string       `json:"file"`
+	Attach  []UploadFile `json:"attach"`
 }
 
 func (s *Server) readSignals(r *http.Request) signals {
@@ -84,19 +88,59 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
 	sse.PatchElementTempl(views.FileExplorer(views.ExplorerData{Project: p, Dir: dir, Files: files}))
 }
 
+// uploadFiles saves browser-picked files (base64 in the "upload" signal, put
+// there by data-bind on the file input) into the explorer's current
+// directory. The signal is cleared in every outcome, so a morphed explorer
+// re-running the effect cannot post the same files again.
+func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<20) // decoded cap is checked in saveUploads
+	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var sig struct {
+		Upload []UploadFile `json:"upload"`
+	}
+	datastar.ReadSignals(r, &sig)
+	if len(sig.Upload) == 0 {
+		s.ok(w, r)
+		return
+	}
+	saveErr := saveUploads(p.Path, r.URL.Query().Get("path"), sig.Upload)
+	sse := datastar.NewSSE(w, r)
+	sse.MarshalAndPatchSignals(map[string]any{"upload": []any{}})
+	if saveErr != nil {
+		s.Log.Warn("upload failed", "project", p.ID, "err", saveErr)
+		sse.PatchElementTempl(views.Toast(saveErr.Error()))
+		return
+	}
+	s.App.Bus.Publish(domain.GitChanged{})
+	dir, entries, err := listProjectDir(p.Path, r.URL.Query().Get("path"))
+	if err != nil {
+		return
+	}
+	files := make([]views.ProjectFile, len(entries))
+	for i, entry := range entries {
+		files[i] = views.ProjectFile{Name: entry.Name, Path: entry.Path, IsDir: entry.IsDir}
+	}
+	sse.PatchElementTempl(views.FileExplorer(views.ExplorerData{Project: p, Dir: dir, Files: files}))
+}
+
 func (s *Server) newThreadForProject(w http.ResponseWriter, r *http.Request) {
 	sig := s.readSignals(r)
-	s.createThread(w, r, r.PathValue("id"), sig.Agent, sig.Model, sig.Effort, sig.Mode, "")
+	s.createThread(w, r, r.PathValue("id"), sig.Agent, sig.Model, sig.Effort, sig.Mode, "", nil)
 }
 
 func (s *Server) newThread(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<20) // attachments ride the signals as base64
 	sig := s.readSignals(r)
-	s.createThread(w, r, sig.Project, sig.Agent, sig.Model, sig.Effort, sig.Mode, sig.Prompt)
+	s.createThread(w, r, sig.Project, sig.Agent, sig.Model, sig.Effort, sig.Mode, sig.Prompt, sig.Attach)
 }
 
 // createThread makes a thread, applies settings, and when the home
 // composer carried a prompt, sends it as the first turn before redirecting.
-func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID, agent, model, effort, mode, prompt string) {
+func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID, agent, model, effort, mode, prompt string, attach []UploadFile) {
 	if agent == "" {
 		agent = "claude"
 		if _, ok := s.App.Agents[agent]; !ok {
@@ -114,7 +158,12 @@ func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID,
 			return
 		}
 	}
-	if strings.TrimSpace(prompt) != "" {
+	if strings.TrimSpace(prompt) != "" || len(attach) > 0 {
+		prompt, err := s.attachToPrompt(id, prompt, attach)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
 		if err := s.App.SendPrompt(r.Context(), id, prompt); err != nil {
 			s.fail(w, r, err)
 			return
@@ -125,17 +174,52 @@ func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID,
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<20) // attachments ride the signals as base64
 	sig := s.readSignals(r)
-	if strings.TrimSpace(sig.Prompt) == "" {
+	if strings.TrimSpace(sig.Prompt) == "" && len(sig.Attach) == 0 {
 		s.ok(w, r)
 		return
 	}
-	if err := s.App.SendPrompt(r.Context(), r.PathValue("id"), sig.Prompt); err != nil {
+	prompt, err := s.attachToPrompt(r.PathValue("id"), sig.Prompt, sig.Attach)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if err := s.App.SendPrompt(r.Context(), r.PathValue("id"), prompt); err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"prompt": ""})
+	sse.MarshalAndPatchSignals(map[string]any{"prompt": "", "attach": []any{}})
+}
+
+// attachmentFile serves a stored attachment for transcript previews. Both
+// path segments are flattened to base names, so the lookup cannot leave the
+// attachments directory.
+func (s *Server) attachmentFile(w http.ResponseWriter, r *http.Request) {
+	tid := filepath.Base(r.PathValue("id"))
+	name := filepath.Base(r.PathValue("name"))
+	if s.AttachDir == "" || tid == "." || tid == ".." || name == "." || name == ".." {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(s.AttachDir, tid, name))
+}
+
+// attachToPrompt saves the composer's attachments for threadID and appends
+// their paths to the prompt text. No attachments returns the text as is.
+func (s *Server) attachToPrompt(threadID, text string, files []UploadFile) (string, error) {
+	if len(files) == 0 {
+		return text, nil
+	}
+	if s.AttachDir == "" {
+		return "", errors.New("attachments are not configured")
+	}
+	paths, err := saveAttachments(filepath.Join(s.AttachDir, threadID), files)
+	if err != nil {
+		return "", err
+	}
+	return promptWithAttachments(text, files, paths), nil
 }
 
 func (s *Server) interrupt(w http.ResponseWriter, r *http.Request) {
@@ -160,6 +244,10 @@ func (s *Server) deleteThread(w http.ResponseWriter, r *http.Request) {
 	if err := s.App.DeleteThread(r.Context(), r.PathValue("id")); err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	s.Term.Kill(r.PathValue("id"))
+	if s.AttachDir != "" {
+		os.RemoveAll(filepath.Join(s.AttachDir, r.PathValue("id")))
 	}
 	sse := datastar.NewSSE(w, r)
 	sse.Redirect("/")

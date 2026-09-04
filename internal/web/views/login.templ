@@ -10,7 +10,7 @@ templ Login(next string, failed bool, theme string) {
 			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 			<meta name="color-scheme" content="dark light"/>
 			<title>login · starcode</title>
-			<link rel="stylesheet" href="/static/app.css"/>
+			<link rel="stylesheet" href={ asset("/static/app.css") }/>
 		</head>
 		<body class="login-page">
 			<form class="login" method="post" action="/login">

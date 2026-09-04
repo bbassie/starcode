@@ -62,7 +62,7 @@ Changing settings on an idle thread closes its live session; the next prompt res
 
 ## UI
 
-Three columns: a sidebar (search, projects with their threads, running threads pinned on top), the thread (breadcrumb header, transcript, composer) and a changes panel with `git status` and per-file diffs. Agent activity between two messages (thinking, tool calls, notices) folds into a "Worked for 12s · 3 steps" block that stays open while it runs. The composer carries the thread's settings as chips: model, reasoning, permission mode (and agent, until the first prompt). On the home page the same composer starts a new thread with its first prompt.
+Three columns: a sidebar (search, projects with their threads, running threads pinned on top), the thread (breadcrumb header, transcript, composer) and a changes panel with `git status` and per-file diffs. The panel's files tab browses the project and has an upload button that saves picked files (25 MiB per request) into the directory being viewed; a name that already exists gets a `-1` suffix instead of overwriting. Both composers take attachments too, through a paperclip button, pasting into the prompt, or dropping files onto the composer: the files land in `<data>/attachments/<thread>/` (removed with the thread) and each gets an `[Attached image "shot.png" is saved at: …]` line appended to the prompt, so the agent reads them with its own tools. Claude Code renders images it reads from disk, which makes screenshots work. A terminal button in the header opens a resizable xterm.js panel under the transcript: one shell per thread in a pty (`internal/term`), started in the project directory. The shell survives page reloads; reconnecting replays up to 128 KiB of scrollback. Output arrives as base64 chunks on its own SSE stream, keystrokes go out as POSTs, and the shell dies on thread delete, server shutdown, or `exit` (the panel then offers a restart). xterm.js and its fit addon are vendored in `internal/web/static`, loaded only on thread pages. Agent activity between two messages (thinking, tool calls, notices) folds into a "Worked for 12s · 3 steps" block that stays open while it runs. The composer carries the thread's settings as chips: model, reasoning, permission mode (and agent, until the first prompt). On the home page the same composer starts a new thread with its first prompt.
 
 Under 900px the sidebar and changes panel become slide-overs.
 
@@ -85,6 +85,7 @@ internal/agent/codex        Codex app-server JSON-RPC adapter
 internal/agent/fake         scripted agent for UI development
 internal/app                commands (write side) and the session pump
 internal/gitx               git status/diff via exec
+internal/term               pty shell sessions for the terminal panel
 internal/web                router, auth, SSE read side, command endpoints
 internal/web/views          templ components
 internal/web/static         datastar.js (vendored v1.0.3), app.css

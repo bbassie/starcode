@@ -71,33 +71,144 @@ func Layout(title string, p Page) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, " · starcode</title><link rel=\"icon\" href=\"/static/favicon.svg\" type=\"image/svg+xml\"><link rel=\"stylesheet\" href=\"/static/app.css\"><script type=\"module\" src=\"/static/datastar.js\"></script></head><body data-signals=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, " · starcode</title><link rel=\"icon\" href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var4 string
-		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', _hb: 0}`, p.View == "thread", p.Theme))
+		var templ_7745c5c3_Var4 templ.SafeURL
+		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/favicon.svg"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 32, Col: 228}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 27, Col: 55}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "\" data-attr:data-theme=\"$theme\" data-init=\"")
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var5 string
-		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000})", p.streamURL()))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 34, Col: 100}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "\" type=\"image/svg+xml\"><link rel=\"stylesheet\" href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\"><div class=\"shell\"><aside id=\"sidebar\" data-class:open=\"$nav\"><div class=\"dim pad\">loading…</div></aside><div class=\"backdrop\" data-show=\"$nav || $git\" data-on:click=\"$nav = false; $git = false\"></div><main id=\"main\"><div class=\"dim pad\">connecting…</div></main><aside id=\"gitpanel\" data-class:open=\"$git\"></aside></div><div id=\"toast\"></div><datalist id=\"project-paths\"></datalist><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst near = (m) => m.scrollHeight - m.scrollTop - m.clientHeight < 160;\n\t\t\t\t\tlet stick = true;\n\t\t\t\t\tdocument.addEventListener('scroll', (e) => {\n\t\t\t\t\t\tif (e.target && e.target.id === 'items') stick = near(e.target);\n\t\t\t\t\t}, true);\n\t\t\t\t\tnew MutationObserver(() => {\n\t\t\t\t\t\tconst m = document.getElementById('items');\n\t\t\t\t\t\tif (m && stick) m.scrollTop = m.scrollHeight;\n\t\t\t\t\t}).observe(document.body, { childList: true, subtree: true, characterData: true });\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tlet timer, controller;\n\t\t\t\t\tconst update = (input) => {\n\t\t\t\t\t\tclearTimeout(timer);\n\t\t\t\t\t\ttimer = setTimeout(async () => {\n\t\t\t\t\t\t\tcontroller?.abort();\n\t\t\t\t\t\t\tcontroller = new AbortController();\n\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\tconst response = await fetch('/api/project-paths?path=' + encodeURIComponent(input.value), { signal: controller.signal });\n\t\t\t\t\t\t\t\tif (!response.ok) return;\n\t\t\t\t\t\t\t\tconst paths = await response.json();\n\t\t\t\t\t\t\t\tconst list = document.getElementById('project-paths');\n\t\t\t\t\t\t\t\tlist.replaceChildren(...paths.map((path) => Object.assign(document.createElement('option'), { value: path })));\n\t\t\t\t\t\t\t} catch (error) {\n\t\t\t\t\t\t\t\tif (error.name !== 'AbortError') console.warn('project path completion failed', error);\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}, 100);\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('input', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('focusin', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t})();\n\t\t\t</script></body></html>")
+		var templ_7745c5c3_Var5 templ.SafeURL
+		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/app.css"))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 28, Col: 57}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\"><script type=\"module\" src=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var6 string
+		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/datastar.js"))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 29, Col: 59}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var6)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "\"></script>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if p.View == "thread" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<link rel=\"stylesheet\" href=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var7 templ.SafeURL
+			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/xterm.css"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 31, Col: 60}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "\"><script defer src=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var8 string
+			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm.js"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 32, Col: 49}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "\"></script> <script defer src=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var9 string
+			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm-addon-fit.js"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 33, Col: 59}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "\"></script> <script defer src=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var10 string
+			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/term.js"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 34, Col: 48}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "\"></script>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</head><body data-signals=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var11 string
+		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], _hb: 0}`, p.View == "thread", p.Theme))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 38, Col: 265}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\" data-attr:data-theme=\"$theme\" data-init=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var12 string
+		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000})", p.streamURL()))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 40, Col: 100}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "\"><div class=\"shell\"><aside id=\"sidebar\" data-class:open=\"$nav\"><div class=\"dim pad\">loading…</div></aside><div class=\"backdrop\" data-show=\"$nav || $git\" data-on:click=\"$nav = false; $git = false\"></div><div class=\"mid\"><main id=\"main\"><div class=\"dim pad\">connecting…</div></main>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if p.View == "thread" {
+			templ_7745c5c3_Err = TermPanel(p.ThreadID).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "</div><aside id=\"gitpanel\" data-class:open=\"$git\"></aside></div><div id=\"toast\"></div><datalist id=\"project-paths\"></datalist><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst near = (m) => m.scrollHeight - m.scrollTop - m.clientHeight < 160;\n\t\t\t\t\tlet stick = true;\n\t\t\t\t\tdocument.addEventListener('scroll', (e) => {\n\t\t\t\t\t\tif (e.target && e.target.id === 'items') stick = near(e.target);\n\t\t\t\t\t}, true);\n\t\t\t\t\tnew MutationObserver(() => {\n\t\t\t\t\t\tconst m = document.getElementById('items');\n\t\t\t\t\t\tif (m && stick) m.scrollTop = m.scrollHeight;\n\t\t\t\t\t}).observe(document.body, { childList: true, subtree: true, characterData: true });\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst addFiles = (target, files) => {\n\t\t\t\t\t\tconst form = target instanceof Element && target.closest('form.composer');\n\t\t\t\t\t\tconst input = form && form.querySelector('input[type=file]');\n\t\t\t\t\t\tif (!input || !files.length) return false;\n\t\t\t\t\t\tconst merged = new DataTransfer();\n\t\t\t\t\t\tfor (const f of input.files) merged.items.add(f);\n\t\t\t\t\t\tfor (const f of files) merged.items.add(f);\n\t\t\t\t\t\tinput.files = merged.files;\n\t\t\t\t\t\tinput.dispatchEvent(new Event('change', { bubbles: true }));\n\t\t\t\t\t\treturn true;\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('paste', (e) => {\n\t\t\t\t\t\tif (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')\n\t\t\t\t\t\t\t&& e.clipboardData && addFiles(e.target, e.clipboardData.files)) e.preventDefault();\n\t\t\t\t\t});\n\t\t\t\t\t// The strip above the composer row: one removable item per\n\t\t\t\t\t// picked file, rebuilt from the input on every change\n\t\t\t\t\t// (picker, paste, and drop all end in one).\n\t\t\t\t\tconst removeFile = (input, index) => {\n\t\t\t\t\t\tconst kept = new DataTransfer();\n\t\t\t\t\t\t[...input.files].forEach((f, i) => { if (i !== index) kept.items.add(f); });\n\t\t\t\t\t\tinput.files = kept.files;\n\t\t\t\t\t\tinput.dispatchEvent(new Event('change', { bubbles: true }));\n\t\t\t\t\t};\n\t\t\t\t\tconst renderStrip = (input) => {\n\t\t\t\t\t\tconst box = input.closest('form.composer')?.querySelector('.attach-thumbs');\n\t\t\t\t\t\tif (!box) return;\n\t\t\t\t\t\tbox.replaceChildren(...[...input.files].map((f, i) => {\n\t\t\t\t\t\t\tconst item = document.createElement('div');\n\t\t\t\t\t\t\tif (f.type.startsWith('image/')) {\n\t\t\t\t\t\t\t\titem.className = 'attach-item';\n\t\t\t\t\t\t\t\tconst img = document.createElement('img');\n\t\t\t\t\t\t\t\timg.src = URL.createObjectURL(f);\n\t\t\t\t\t\t\t\timg.onload = () => URL.revokeObjectURL(img.src);\n\t\t\t\t\t\t\t\timg.alt = img.title = f.name;\n\t\t\t\t\t\t\t\titem.append(img);\n\t\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\t\titem.className = 'attach-item file';\n\t\t\t\t\t\t\t\titem.append(Object.assign(document.createElement('span'), { className: 'ellipsis', textContent: f.name }));\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tconst x = Object.assign(document.createElement('button'), {\n\t\t\t\t\t\t\t\ttype: 'button', className: 'attach-remove', title: 'Remove ' + f.name, textContent: '×',\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tx.addEventListener('click', () => removeFile(input, i));\n\t\t\t\t\t\t\titem.append(x);\n\t\t\t\t\t\t\treturn item;\n\t\t\t\t\t\t}));\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('change', (e) => {\n\t\t\t\t\t\tif (e.target instanceof HTMLInputElement && e.target.type === 'file') renderStrip(e.target);\n\t\t\t\t\t});\n\t\t\t\t\t// A morphed composer comes back with an empty strip while\n\t\t\t\t\t// the input still holds files; refill it.\n\t\t\t\t\tnew MutationObserver(() => {\n\t\t\t\t\t\tfor (const input of document.querySelectorAll('form.composer input[type=file]')) {\n\t\t\t\t\t\t\tconst box = input.closest('form.composer').querySelector('.attach-thumbs');\n\t\t\t\t\t\t\tif (box && !box.childElementCount && input.files.length) renderStrip(input);\n\t\t\t\t\t\t}\n\t\t\t\t\t}).observe(document.body, { childList: true, subtree: true });\n\t\t\t\t\tdocument.addEventListener('dragover', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (c && e.dataTransfer && e.dataTransfer.types.includes('Files')) {\n\t\t\t\t\t\t\te.preventDefault();\n\t\t\t\t\t\t\tc.classList.add('dropping');\n\t\t\t\t\t\t}\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('dragleave', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (c && !(e.relatedTarget instanceof Node && c.contains(e.relatedTarget))) c.classList.remove('dropping');\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('drop', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (!c) return;\n\t\t\t\t\t\tc.classList.remove('dropping');\n\t\t\t\t\t\tif (e.dataTransfer && addFiles(e.target, e.dataTransfer.files)) e.preventDefault();\n\t\t\t\t\t});\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tlet timer, controller;\n\t\t\t\t\tconst update = (input) => {\n\t\t\t\t\t\tclearTimeout(timer);\n\t\t\t\t\t\ttimer = setTimeout(async () => {\n\t\t\t\t\t\t\tcontroller?.abort();\n\t\t\t\t\t\t\tcontroller = new AbortController();\n\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\tconst response = await fetch('/api/project-paths?path=' + encodeURIComponent(input.value), { signal: controller.signal });\n\t\t\t\t\t\t\t\tif (!response.ok) return;\n\t\t\t\t\t\t\t\tconst paths = await response.json();\n\t\t\t\t\t\t\t\tconst list = document.getElementById('project-paths');\n\t\t\t\t\t\t\t\tlist.replaceChildren(...paths.map((path) => Object.assign(document.createElement('option'), { value: path })));\n\t\t\t\t\t\t\t} catch (error) {\n\t\t\t\t\t\t\t\tif (error.name !== 'AbortError') console.warn('project path completion failed', error);\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}, 100);\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('input', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('focusin', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t})();\n\t\t\t</script></body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
