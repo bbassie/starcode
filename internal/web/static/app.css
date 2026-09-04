@@ -408,10 +408,20 @@ details.item.tool > .block { margin: 4px 0 4px 1.2em; }
 /* ---- git ---- */
 
 .side-head { display: flex; align-items: center; gap: var(--gap); padding: 10px var(--pad); border-bottom: var(--border-w) solid var(--border); font-weight: 600; flex: none; }
+.panel-tabs { display: flex; gap: 2px; }
+.panel-tab { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-dim); background: transparent; border: 0; border-radius: var(--radius-sm); padding: 4px 6px; cursor: pointer; }
+.panel-tab:hover { color: var(--fg); background: var(--bg-3); }
+.panel-tab.active { color: var(--fg); background: var(--sel); }
+#git-files, #file-explorer { flex: none; max-height: 42%; overflow: auto; border-bottom: var(--border-w) solid var(--border); }
+#git-detail { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .files li a { display: flex; gap: 8px; align-items: center; padding: 6px var(--pad); min-height: 34px; }
 .files li a:hover { background: var(--bg-3); }
 .files li.current a { background: var(--sel); }
 .files .code { width: 2ch; flex: none; font-family: var(--font-mono); }
+.explorer-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 4px var(--pad); background: var(--bg-3); border-bottom: var(--border-w) solid var(--border); }
+.explorer-head .ellipsis { flex: 1; font-size: 0.85em; }
+.files.explorer .explorer-kind { display: inline-flex; color: var(--accent); }
+.files.explorer a > .ellipsis { flex: 1; }
 .diff-head { padding: 6px var(--pad); border-top: var(--border-w) solid var(--border); border-bottom: var(--border-w) solid var(--border); background: var(--bg-3); }
 .diff { padding: 4px 0; overflow: auto; font-size: 0.85em; flex: 1; }
 .diff span { display: block; padding: 0 var(--pad); white-space: pre; }

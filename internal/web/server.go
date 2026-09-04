@@ -45,6 +45,7 @@ func New(a *app.App, log *slog.Logger, token string) *Server {
 
 	s.mux.HandleFunc("POST /api/projects", s.addProject)
 	s.mux.HandleFunc("GET /api/project-paths", s.projectPaths)
+	s.mux.HandleFunc("GET /api/projects/{id}/files", s.projectFiles)
 	s.mux.HandleFunc("POST /api/projects/{id}/remove", s.removeProject)
 	s.mux.HandleFunc("POST /api/projects/{id}/threads", s.newThreadForProject)
 	s.mux.HandleFunc("POST /api/threads", s.newThread)

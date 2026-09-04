@@ -76,9 +76,9 @@ func Layout(title string, p Page) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var4 string
-		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, theme: %q, prompt: '', path: '', q: '', addproj: false, gitPath: '', gitEdit: false, file: '', _hb: 0}`, p.View == "thread", p.Theme))
+		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', _hb: 0}`, p.View == "thread", p.Theme))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 32, Col: 207}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 32, Col: 228}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
 		if templ_7745c5c3_Err != nil {

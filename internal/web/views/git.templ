@@ -1,6 +1,7 @@
 package views
 
 import (
+	pathpkg "path"
 	"strconv"
 	"starcode/internal/gitx"
 	"starcode/internal/store"
@@ -15,17 +16,37 @@ type GitData struct {
 	ThreadID string
 }
 
+type ProjectFile struct {
+	Name  string
+	Path  string
+	IsDir bool
+}
+
+type ExplorerData struct {
+	Project store.Project
+	Dir     string
+	Files   []ProjectFile
+}
+
 templ GitPanel(d GitData) {
 	<aside id="gitpanel" data-class:open="$git">
 		@GitHeader(d)
 		@GitFiles(d)
+		@FileExplorer(ExplorerData{Project: d.Project})
 		@GitDetail(d)
 	</aside>
 }
 
 templ GitHeader(d GitData) {
 	<div id="git-head" class="side-head">
-		<span>Changes</span>
+		if d.Project.ID != "" {
+			<div class="panel-tabs">
+				<button class="panel-tab" data-class:active="$panelTab === 'files'" data-on:click={ "$panelTab = 'files'; @get('/api/projects/" + d.Project.ID + "/files')" }>@Icon("folder", "ui-icon") files</button>
+				<button class="panel-tab" data-class:active="$panelTab === 'changes'" data-on:click="$panelTab = 'changes'">@Icon("git-compare-arrows", "ui-icon") changes</button>
+			</div>
+		} else {
+			<span>Project</span>
+		}
 		<span class="spacer"></span>
 		if d.Status.IsRepo {
 			<span class="dim">@Icon("git-branch", "ui-icon") { d.Status.Branch }</span>
@@ -34,14 +55,14 @@ templ GitHeader(d GitData) {
 			}
 		}
 		if d.Project.ID != "" {
-			<button class="btn icon ghost tiny" data-on:click={ "@get('/api/git/" + d.Project.ID + "/refresh')" } title="Refresh">@Icon("refresh-cw", "ui-icon")</button>
+			<button class="btn icon ghost tiny" data-show="$panelTab === 'changes'" data-on:click={ "@get('/api/git/" + d.Project.ID + "/refresh')" } title="Refresh">@Icon("refresh-cw", "ui-icon")</button>
 		}
 		<button class="btn icon ghost tiny" data-on:click="$git = false" title="Close" aria-label="Close changes panel">@Icon("x", "ui-icon")</button>
 	</div>
 }
 
 templ GitFiles(d GitData) {
-	<div id="git-files">
+	<div id="git-files" data-show="$panelTab === 'changes'">
 		if d.Project.ID == "" {
 			<p class="dim pad">open a thread to see its project's changes.</p>
 		} else if !d.Status.IsRepo {
@@ -56,6 +77,39 @@ templ GitFiles(d GitData) {
 							<span class={ "code", statusClass(f.Status) }>{ strings.TrimSpace(f.Status) }</span>
 							<span class="ellipsis">{ f.Path }</span>
 						</a>
+					</li>
+				}
+			</ul>
+		}
+	</div>
+}
+
+templ FileExplorer(d ExplorerData) {
+	<div id="file-explorer" data-show="$panelTab === 'files'">
+		<div class="explorer-head">
+			if d.Dir != "" {
+				<button class="btn icon ghost tiny" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(explorerParent(d.Dir)) + "')" } title="Parent directory" aria-label="Parent directory">@Icon("arrow-up", "ui-icon")</button>
+			}
+			<span class="mono ellipsis" title={ d.Dir }>{ explorerPath(d) }</span>
+		</div>
+		if len(d.Files) == 0 && d.Project.ID != "" {
+			<p class="dim pad">this directory is empty.</p>
+		} else if d.Project.ID != "" {
+			<ul class="files explorer">
+				for _, f := range d.Files {
+					<li data-class:current={ "$gitPath === " + strconv.Quote(f.Path) }>
+						if f.IsDir {
+							<a href="#" data-on:click={ "evt.preventDefault(); @get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')" }>
+								<span class="explorer-kind">@Icon("folder", "ui-icon")</span>
+								<span class="ellipsis">{ f.Name }</span>
+								@Icon("chevron-right", "ui-icon dim")
+							</a>
+						} else {
+							<a href="#" title="Open in editor" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')" }>
+								<span class="explorer-kind">@Icon("file", "ui-icon")</span>
+								<span class="ellipsis">{ f.Name }</span>
+							</a>
+						}
 					</li>
 				}
 			</ul>
@@ -120,4 +174,19 @@ func diffClass(line string) string {
 func urlQuery(s string) string {
 	r := strings.NewReplacer("%", "%25", "&", "%26", "#", "%23", "+", "%2B", " ", "%20", "'", "%27", "?", "%3F")
 	return r.Replace(s)
+}
+
+func explorerParent(dir string) string {
+	parent := pathpkg.Dir(dir)
+	if parent == "." {
+		return ""
+	}
+	return parent
+}
+
+func explorerPath(d ExplorerData) string {
+	if d.Dir == "" {
+		return d.Project.Name + "/"
+	}
+	return d.Project.Name + "/" + d.Dir
 }

@@ -65,6 +65,25 @@ func (s *Server) removeProject(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r)
 }
 
+func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
+	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	dir, entries, err := listProjectDir(p.Path, r.URL.Query().Get("path"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	files := make([]views.ProjectFile, len(entries))
+	for i, entry := range entries {
+		files[i] = views.ProjectFile{Name: entry.Name, Path: entry.Path, IsDir: entry.IsDir}
+	}
+	sse := datastar.NewSSE(w, r)
+	sse.PatchElementTempl(views.FileExplorer(views.ExplorerData{Project: p, Dir: dir, Files: files}))
+}
+
 func (s *Server) newThreadForProject(w http.ResponseWriter, r *http.Request) {
 	sig := s.readSignals(r)
 	s.createThread(w, r, r.PathValue("id"), sig.Agent, sig.Model, sig.Effort, sig.Mode, "")
