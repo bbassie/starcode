@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"starcode/internal/domain"
 	"starcode/internal/store"
+	"strings"
 	"time"
 )
 
@@ -11,6 +12,7 @@ type ThreadData struct {
 	Thread    store.Thread
 	Project   store.Project
 	Items     []store.Item
+	Queued    []store.QueuedPrompt
 	Approvals []store.Approval // pending
 	Rules     []string
 	Settings  SettingsData
@@ -78,6 +80,7 @@ func WorkState(items []store.Item) (running bool, steps int, dur time.Duration) 
 templ Thread(d ThreadData) {
 	<main id="main" class="thread">
 		@MainHead(d)
+		@MessageRail(d.Items)
 		<div id="items" class="items">
 			<div class="items-inner">
 				for _, b := range GroupItems(d.Items) {
@@ -94,6 +97,22 @@ templ Thread(d ThreadData) {
 		</div>
 		@Composer(d)
 	</main>
+}
+
+// MessageRail is a compact map of the prompts in this thread. Hovering a
+// marker previews the message; activating it jumps to the corresponding row.
+templ MessageRail(items []store.Item) {
+	<nav id="message-rail" class="message-rail" aria-label="Sent messages">
+		for _, it := range items {
+			if it.Kind == domain.KindUser {
+				{{ preview := promptPreview(it.Body) }}
+				<a class="message-marker" href={ templ.SafeURL("#it-" + it.ID) } aria-label={ "Jump to message: " + promptSummary(it.Body) }>
+					<span class="message-tick"></span>
+					<span class="message-preview">{ preview }</span>
+				</a>
+			}
+		}
+	</nav>
 }
 
 // MainHead is the breadcrumb row; patched on rename and status change.
@@ -152,7 +171,6 @@ templ WorkSummary(items []store.Item) {
 	{{ running, steps, dur := WorkState(items) }}
 	<summary id={ "wsum-" + items[0].ID } class="work-head">
 		if running {
-			<span class="spinner"></span>
 			<span>Working…</span>
 		} else {
 			<span>Worked for { dur.Round(time.Second).String() }</span>
@@ -161,6 +179,25 @@ templ WorkSummary(items []store.Item) {
 			<span class="dim">· { fmt.Sprintf("%d %s", steps, plural(steps, "step", "steps")) }</span>
 		}
 	</summary>
+}
+
+templ PromptQueue(d ThreadData) {
+	<div id="prompt-queue" class={ "prompt-queue", templ.KV("empty", len(d.Queued) == 0) }>
+		if len(d.Queued) > 0 {
+			<div class="queue-head">
+				<span>@Icon("list-end", "ui-icon") { fmt.Sprintf("%d %s queued", len(d.Queued), plural(len(d.Queued), "message", "messages")) }</span>
+			</div>
+			<div class="queue-list">
+				for i, q := range d.Queued {
+					<div class="queue-item">
+						<span class="queue-position">{ fmt.Sprintf("%d", i+1) }</span>
+						<span class="ellipsis" title={ promptSummary(q.Body) }>{ promptSummary(q.Body) }</span>
+						<button class="btn icon ghost" type="button" title="Remove queued message" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/queue/" + q.ID + "/remove')" }>@Icon("x", "ui-icon")</button>
+					</div>
+				}
+			</div>
+		}
+	</div>
 }
 
 func plural(n int, one, many string) string {
@@ -202,6 +239,7 @@ templ Composer(d ThreadData) {
 		data-signals={ signalsJSON(t.Agent, t.Model, t.Effort, t.PermissionMode, "") }
 		data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + t.ID + "/send')" }
 	>
+		@PromptQueue(d)
 		<textarea
 			class="prompt"
 			rows="3"
@@ -218,22 +256,63 @@ templ Composer(d ThreadData) {
 			<span class="spacer"></span>
 			if locked {
 				<button class="btn round warn" type="button" data-on:click={ "@post('/api/threads/" + t.ID + "/interrupt')" } title="Stop">@Icon("square", "ui-icon")</button>
-			} else {
-				<button class="btn round primary" type="submit" title="Send (Enter)">@Icon("arrow-up", "ui-icon")</button>
 			}
+			<button class="btn round primary" type="submit" title={ sendTitle(locked) }>@Icon("arrow-up", "ui-icon")</button>
 		</div>
 	</form>
 }
 
 func promptPlaceholder(d ThreadData) string {
 	if d.Thread.Status == domain.StatusAwaitingApproval {
-		return "Answer the approval above to continue…"
+		return "Answer the approval above, or queue a follow-up…"
 	}
 	if busy(d.Thread) {
-		return "Working… stop the turn to send something else."
+		return "Add a follow-up… (Enter queues it)"
 	}
 	if len(d.Items) == 0 {
 		return "Describe what " + d.Thread.Agent + " should do in " + d.Project.Name + "…"
 	}
 	return "Reply… (Enter to send, Shift+Enter for a newline)"
+}
+
+func sendTitle(queued bool) string {
+	if queued {
+		return "Queue message (Enter)"
+	}
+	return "Send (Enter)"
+}
+
+func promptSummary(body string) string {
+	text, atts := splitAttachments(body)
+	text = strings.TrimSpace(firstLine(text))
+	if text == "" {
+		if len(atts) == 1 {
+			return atts[0].Name
+		}
+		if len(atts) > 1 {
+			return fmt.Sprintf("%d attachments", len(atts))
+		}
+		return "Message"
+	}
+	r := []rune(text)
+	if len(r) > 120 {
+		return string(r[:117]) + "…"
+	}
+	return text
+}
+
+func promptPreview(body string) string {
+	text, atts := splitAttachments(body)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return promptSummary(body)
+	}
+	if len(atts) > 0 {
+		text += fmt.Sprintf("\n%d %s", len(atts), plural(len(atts), "attachment", "attachments"))
+	}
+	r := []rune(text)
+	if len(r) > 280 {
+		return string(r[:277]) + "…"
+	}
+	return text
 }

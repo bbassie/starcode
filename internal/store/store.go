@@ -73,6 +73,14 @@ type Approval struct {
 	CreatedAt   time.Time
 }
 
+type QueuedPrompt struct {
+	ID        string
+	ThreadID  string
+	Seq       int64
+	Body      string
+	CreatedAt time.Time
+}
+
 // Store wraps the database. Published is called after every successful
 // append with the committed events; it is where the bus hangs off.
 type Store struct {
@@ -183,7 +191,7 @@ func (s *Store) Replay(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	for _, t := range []string{"approvals", "items", "threads", "projects"} {
+	for _, t := range []string{"queued_prompts", "approvals", "items", "threads", "projects"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+t); err != nil {
 			return 0, err
 		}
@@ -265,6 +273,19 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		return touch()
 	case domain.TurnCompleted:
 		return touch()
+	case domain.PromptQueued:
+		_, err := tx.ExecContext(ctx, `INSERT INTO queued_prompts(id,thread_id,seq,body,created_at) VALUES(?,?,?,?,?)`,
+			p.ID, ev.ThreadID, ev.Seq, p.Body, ts)
+		if err != nil {
+			return err
+		}
+		return touch()
+	case domain.PromptDequeued:
+		_, err := tx.ExecContext(ctx, `DELETE FROM queued_prompts WHERE thread_id=? AND id=?`, ev.ThreadID, p.ID)
+		if err != nil {
+			return err
+		}
+		return touch()
 	case domain.ItemStarted:
 		meta := string(p.Meta)
 		if meta == "" {
@@ -342,6 +363,10 @@ func deref(p any) any {
 	case *domain.TurnStarted:
 		return *v
 	case *domain.TurnCompleted:
+		return *v
+	case *domain.PromptQueued:
+		return *v
+	case *domain.PromptDequeued:
 		return *v
 	case *domain.ItemStarted:
 		return *v
@@ -448,6 +473,27 @@ func (s *Store) Items(ctx context.Context, threadID string) ([]Item, error) {
 			return nil, err
 		}
 		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// QueuedPrompts returns follow-ups waiting behind the active turn, oldest
+// first. They are projected separately from items to preserve transcript order.
+func (s *Store) QueuedPrompts(ctx context.Context, threadID string) ([]QueuedPrompt, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,thread_id,seq,body,created_at FROM queued_prompts WHERE thread_id=? ORDER BY seq`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QueuedPrompt
+	for rows.Next() {
+		var q QueuedPrompt
+		var created string
+		if err := rows.Scan(&q.ID, &q.ThreadID, &q.Seq, &q.Body, &created); err != nil {
+			return nil, err
+		}
+		q.CreatedAt, _ = time.Parse(timeFmt, created)
+		out = append(out, q)
 	}
 	return out, rows.Err()
 }

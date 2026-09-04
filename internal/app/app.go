@@ -32,6 +32,7 @@ type App struct {
 
 	mu       sync.Mutex
 	sessions map[string]*live
+	promptMu sync.Mutex // serializes send-vs-turn-complete queue handoffs
 	// rules holds per-thread "allow for session" decisions: thread id ->
 	// rule key -> true. See ruleKey.
 	rules map[string]map[string]bool
@@ -57,17 +58,40 @@ func (a *App) Recover(ctx context.Context) error {
 		return err
 	}
 	for _, t := range threads {
+		queued, err := a.Store.QueuedPrompts(ctx, t.ID)
+		if err != nil {
+			return err
+		}
 		if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
 			var evs []any
 			aps, _ := a.Store.PendingApprovals(ctx, t.ID)
 			for _, ap := range aps {
 				evs = append(evs, domain.ApprovalResolved{ID: ap.ID, Decision: domain.DecisionDeny, Auto: true})
 			}
+			notice := "starcode restarted while this turn was running; send a new prompt to continue"
+			if len(queued) > 0 {
+				notice = "starcode restarted while this turn was running; continuing with the next queued prompt"
+			}
 			evs = append(evs,
-				domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: "starcode restarted while this turn was running; send a new prompt to continue"},
+				domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: notice},
 				domain.ThreadStatusChanged{Status: domain.StatusIdle})
 			if _, err := a.Store.Append(ctx, t.ID, evs...); err != nil {
 				return err
+			}
+		}
+		if len(queued) > 0 {
+			a.promptMu.Lock()
+			fresh, err := a.Store.Thread(ctx, t.ID)
+			if err == nil {
+				var l *live
+				l, err = a.session(ctx, fresh)
+				if err == nil {
+					err = a.startPromptLocked(ctx, l, fresh, queued[0].ID, queued[0].Body)
+				}
+			}
+			a.promptMu.Unlock()
+			if err != nil {
+				return fmt.Errorf("resume queued prompt: %w", err)
 			}
 		}
 	}
@@ -222,34 +246,78 @@ func (a *App) DeleteThread(ctx context.Context, id string) error {
 	return err
 }
 
-// SendPrompt records the user's message and starts a turn, launching or
-// resuming the agent session on demand.
+// SendPrompt starts a turn when the thread is idle. While a turn or approval
+// is active it persists the prompt in the per-thread FIFO instead, allowing
+// the composer to accept follow-ups without disturbing transcript order.
 func (a *App) SendPrompt(ctx context.Context, threadID, text string) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return errors.New("prompt is empty")
 	}
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
 	t, err := a.Store.Thread(ctx, threadID)
 	if err != nil {
 		return err
 	}
+	queued, err := a.Store.QueuedPrompts(ctx, threadID)
+	if err != nil {
+		return err
+	}
 	if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
-		return errors.New("thread is busy")
+		_, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: newID(), Body: text})
+		return err
 	}
 	l, err := a.session(ctx, t)
 	if err != nil {
 		return err
 	}
-	evs := []any{domain.ItemStarted{ID: newID(), Kind: domain.KindUser, Body: text, Status: domain.ItemDone}}
+	// A queue can survive an agent process closing unexpectedly. Preserve
+	// FIFO order: append this new follow-up, then restart the oldest one.
+	if len(queued) > 0 {
+		if _, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: newID(), Body: text}); err != nil {
+			return err
+		}
+		return a.startPromptLocked(ctx, l, t, queued[0].ID, queued[0].Body)
+	}
+	return a.startPromptLocked(ctx, l, t, "", text)
+}
+
+// CancelQueuedPrompt removes a follow-up which has not started yet.
+func (a *App) CancelQueuedPrompt(ctx context.Context, threadID, promptID string) error {
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	queued, err := a.Store.QueuedPrompts(ctx, threadID)
+	if err != nil {
+		return err
+	}
+	for _, q := range queued {
+		if q.ID == promptID {
+			_, err = a.Store.Append(ctx, threadID, domain.PromptDequeued{ID: promptID})
+			return err
+		}
+	}
+	return errors.New("queued prompt not found")
+}
+
+// startPromptLocked moves an optional queued prompt into the transcript and
+// sends it. promptMu must be held so an arriving HTTP send cannot overtake a
+// turn-completion handoff.
+func (a *App) startPromptLocked(ctx context.Context, l *live, t store.Thread, queuedID, text string) error {
+	var evs []any
+	if queuedID != "" {
+		evs = append(evs, domain.PromptDequeued{ID: queuedID})
+	}
+	evs = append(evs, domain.ItemStarted{ID: newID(), Kind: domain.KindUser, Body: text, Status: domain.ItemDone})
 	if t.Title == "new thread" {
 		evs = append(evs, domain.ThreadRenamed{Title: titleFrom(text)})
 	}
 	evs = append(evs, domain.ThreadStatusChanged{Status: domain.StatusRunning})
-	if _, err := a.Store.Append(ctx, threadID, evs...); err != nil {
+	if _, err := a.Store.Append(ctx, t.ID, evs...); err != nil {
 		return err
 	}
 	if err := l.sess.Send(ctx, text); err != nil {
-		a.Store.Append(ctx, threadID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
+		a.Store.Append(ctx, t.ID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
 		return err
 	}
 	return nil
@@ -514,11 +582,28 @@ func (a *App) pump(l *live) {
 			if tc.Error != "" {
 				body += "\n" + tc.Error
 			}
-			append_(
+			a.promptMu.Lock()
+			queued, queueErr := a.Store.QueuedPrompts(ctx, tid)
+			if queueErr != nil {
+				log.Error("read prompt queue", "err", queueErr)
+			}
+			completed := []any{
 				domain.ItemStarted{ID: newID(), Kind: domain.KindResult, Status: tc.Status, Body: body},
 				domain.TurnCompleted{TurnID: tc.TurnID, Status: tc.Status, DurationMS: tc.DurationMS, CostUSD: tc.CostUSD, InputTok: tc.InputTokens, OutputTok: tc.OutputTokens, Error: tc.Error},
-				domain.ThreadStatusChanged{Status: status, Detail: detail},
-			)
+			}
+			if len(queued) == 0 {
+				completed = append(completed, domain.ThreadStatusChanged{Status: status, Detail: detail})
+			}
+			append_(completed...)
+			if len(queued) > 0 {
+				t, err := a.Store.Thread(ctx, tid)
+				if err != nil {
+					log.Error("load thread for queued prompt", "err", err)
+				} else if err := a.startPromptLocked(ctx, l, t, queued[0].ID, queued[0].Body); err != nil {
+					log.Error("start queued prompt", "err", err)
+				}
+			}
+			a.promptMu.Unlock()
 			a.Bus.Publish(domain.GitChanged{})
 		case agent.KindNotice:
 			append_(domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: e.Notice.Text})

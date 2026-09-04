@@ -105,12 +105,17 @@ func (s *session) Send(ctx context.Context, text string) error {
 
 func (s *session) run(turnID, prompt string) {
 	start := time.Now()
-	defer func() {
+	markIdle := func() {
 		s.mu.Lock()
 		s.running = false
 		s.mu.Unlock()
-	}()
+	}
+	defer markIdle()
 	finish := func(status string) {
+		// A TurnCompleted event promises callers may start the next turn.
+		// Mark this one idle before publishing it so queued prompts can hand
+		// off immediately.
+		markIdle()
 		s.emit(agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{
 			TurnID: turnID, Status: status, DurationMS: time.Since(start).Milliseconds(),
 			CostUSD: 0.0042, InputTokens: 1234, OutputTokens: 321,

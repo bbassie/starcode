@@ -58,6 +58,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string) *Server {
 	s.mux.HandleFunc("POST /api/projects/{id}/threads", s.newThreadForProject)
 	s.mux.HandleFunc("POST /api/threads", s.newThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/send", s.send)
+	s.mux.HandleFunc("POST /api/threads/{id}/queue/{qid}/remove", s.removeQueuedPrompt)
 	s.mux.HandleFunc("POST /api/threads/{id}/interrupt", s.interrupt)
 	s.mux.HandleFunc("POST /api/threads/{id}/delete", s.deleteThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/settings", s.setThreadSettings)
@@ -238,6 +239,10 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 	if err != nil {
 		return views.ThreadData{}, err
 	}
+	queued, err := s.App.Store.QueuedPrompts(ctx, id)
+	if err != nil {
+		return views.ThreadData{}, err
+	}
 	aps, err := s.App.Store.PendingApprovals(ctx, id)
 	if err != nil {
 		return views.ThreadData{}, err
@@ -247,6 +252,6 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 	if p.Path != "" {
 		branch = gitx.Read(ctx, p.Path).Branch
 	}
-	return views.ThreadData{Thread: t, Project: p, Items: items, Approvals: aps, Rules: s.App.SessionRules(id), Branch: branch,
+	return views.ThreadData{Thread: t, Project: p, Items: items, Queued: queued, Approvals: aps, Rules: s.App.SessionRules(id), Branch: branch,
 		Settings: views.SettingsData{Agents: s.agentNames(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }

@@ -37,11 +37,12 @@ func TestAppendProjectsAndReplay(t *testing.T) {
 		domain.ItemCompleted{ID: "i2", Status: domain.ItemDone},
 		domain.ApprovalRequested{ID: "a1", ItemID: "i2", ToolName: "Bash", Input: []byte(`{"command":"ls"}`)},
 		domain.ThreadStatusChanged{Status: domain.StatusAwaitingApproval},
+		domain.PromptQueued{ID: "q1", Body: "do this next"},
 	); err != nil {
 		t.Fatal(err)
 	}
-	if published != 10 {
-		t.Fatalf("published %d events, want 10", published)
+	if published != 11 {
+		t.Fatalf("published %d events, want 11", published)
 	}
 
 	check := func() {
@@ -64,6 +65,10 @@ func TestAppendProjectsAndReplay(t *testing.T) {
 		if err != nil || len(aps) != 1 || aps[0].ToolName != "Bash" {
 			t.Fatalf("approvals = %+v, %v", aps, err)
 		}
+		queued, err := s.QueuedPrompts(ctx, "t1")
+		if err != nil || len(queued) != 1 || queued[0].ID != "q1" || queued[0].Body != "do this next" {
+			t.Fatalf("queued = %+v, %v", queued, err)
+		}
 	}
 	check()
 
@@ -71,12 +76,12 @@ func TestAppendProjectsAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 10 {
-		t.Fatalf("replayed %d, want 10", n)
+	if n != 11 {
+		t.Fatalf("replayed %d, want 11", n)
 	}
 	check()
 
-	if _, err := s.Append(ctx, "t1", domain.ApprovalResolved{ID: "a1", Decision: domain.DecisionAllow}, domain.ThreadDeleted{}); err != nil {
+	if _, err := s.Append(ctx, "t1", domain.PromptDequeued{ID: "q1"}, domain.ApprovalResolved{ID: "a1", Decision: domain.DecisionAllow}, domain.ThreadDeleted{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Thread(ctx, "t1"); err != ErrNotFound {
@@ -84,6 +89,9 @@ func TestAppendProjectsAndReplay(t *testing.T) {
 	}
 	if items, _ := s.Items(ctx, "t1"); len(items) != 0 {
 		t.Fatalf("items not cascaded: %d", len(items))
+	}
+	if queued, _ := s.QueuedPrompts(ctx, "t1"); len(queued) != 0 {
+		t.Fatalf("queued prompts not removed: %d", len(queued))
 	}
 }
 

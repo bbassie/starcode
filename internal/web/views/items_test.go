@@ -56,3 +56,17 @@ func TestPrettyJSONNull(t *testing.T) {
 		t.Fatalf("PrettyJSON(nullfield) = %q", got)
 	}
 }
+
+func TestPromptSummaryAndPreview(t *testing.T) {
+	body := "First line\nSecond line\n\n" + `[Attached image "shot.png" is saved at: /data/attachments/th1/shot.png]`
+	if got := promptSummary(body); got != "First line" {
+		t.Fatalf("summary = %q", got)
+	}
+	if got := promptPreview(body); got != "First line\nSecond line\n1 attachment" {
+		t.Fatalf("preview = %q", got)
+	}
+	attachmentOnly := `[Attached file "notes.txt" is saved at: /data/attachments/th1/notes.txt]`
+	if got := promptSummary(attachmentOnly); got != "notes.txt" {
+		t.Fatalf("attachment summary = %q", got)
+	}
+}

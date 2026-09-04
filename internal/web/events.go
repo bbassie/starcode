@@ -235,6 +235,26 @@ func (c *conn) renderWorkSummary(ctx context.Context, firstID string) error {
 	return nil
 }
 
+func (c *conn) renderPromptQueue(ctx context.Context) error {
+	t, err := c.s.App.Store.Thread(ctx, c.threadID)
+	if err != nil {
+		return err
+	}
+	queued, err := c.s.App.Store.QueuedPrompts(ctx, c.threadID)
+	if err != nil {
+		return err
+	}
+	return c.sse.PatchElementTempl(views.PromptQueue(views.ThreadData{Thread: t, Queued: queued}))
+}
+
+func (c *conn) renderMessageRail(ctx context.Context) error {
+	items, err := c.s.App.Store.Items(ctx, c.threadID)
+	if err != nil {
+		return err
+	}
+	return c.sse.PatchElementTempl(views.MessageRail(items))
+}
+
 func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 	mine := c.view == "thread" && ev.ThreadID == c.threadID
 	switch p := ev.Payload.(type) {
@@ -259,6 +279,10 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		if mine {
 			return c.sse.Redirect("/")
 		}
+	case domain.PromptQueued, domain.PromptDequeued:
+		if mine {
+			return c.renderPromptQueue(ctx)
+		}
 	case domain.ItemStarted:
 		if !mine {
 			return nil
@@ -282,7 +306,13 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 					return err
 				}
 			}
-			return c.sse.PatchElementTempl(views.Item(it), datastar.WithSelector("#items .items-inner"), datastar.WithModeAppend())
+			if err := c.sse.PatchElementTempl(views.Item(it), datastar.WithSelector("#items .items-inner"), datastar.WithModeAppend()); err != nil {
+				return err
+			}
+			if it.Kind == domain.KindUser {
+				return c.renderMessageRail(ctx)
+			}
+			return nil
 		}
 		if c.work == "" {
 			c.work = it.ID

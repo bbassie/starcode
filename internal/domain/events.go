@@ -107,6 +107,18 @@ type TurnStarted struct {
 	TurnID string `json:"turn_id"`
 }
 
+// PromptQueued holds a follow-up while another turn is still running. It is
+// kept outside the transcript until dispatched so the visible conversation
+// remains in chronological turn order.
+type PromptQueued struct {
+	ID   string `json:"id"`
+	Body string `json:"body"`
+}
+
+type PromptDequeued struct {
+	ID string `json:"id"`
+}
+
 // ItemStarted opens a new item in the transcript. Body may be empty and be
 // filled by ItemDelta events (assistant text, thinking, tool output).
 type ItemStarted struct {
@@ -188,6 +200,10 @@ func TypeOf(p any) string {
 		return "turn.started"
 	case TurnCompleted, *TurnCompleted:
 		return "turn.completed"
+	case PromptQueued, *PromptQueued:
+		return "prompt.queued"
+	case PromptDequeued, *PromptDequeued:
+		return "prompt.dequeued"
 	case ItemStarted, *ItemStarted:
 		return "item.started"
 	case ItemDelta, *ItemDelta:
@@ -228,6 +244,10 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &TurnStarted{}
 	case "turn.completed":
 		p = &TurnCompleted{}
+	case "prompt.queued":
+		p = &PromptQueued{}
+	case "prompt.dequeued":
+		p = &PromptDequeued{}
 	case "item.started":
 		p = &ItemStarted{}
 	case "item.delta":

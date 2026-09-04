@@ -230,6 +230,14 @@ func (s *Server) interrupt(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r)
 }
 
+func (s *Server) removeQueuedPrompt(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.CancelQueuedPrompt(r.Context(), r.PathValue("id"), r.PathValue("qid")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
 func (s *Server) setThreadSettings(w http.ResponseWriter, r *http.Request) {
 	sig := s.readSignals(r)
 	st := app.ThreadSettings{Agent: sig.Agent, Model: sig.Model, Effort: sig.Effort, PermissionMode: sig.Mode}
