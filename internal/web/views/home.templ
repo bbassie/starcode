@@ -16,10 +16,10 @@ type HomeData struct {
 templ Home(d HomeData) {
 	<main id="main" class="home">
 		<header id="mainhead" class="mainhead">
-			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">≡</button>
+			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
 			<nav class="crumbs"><span>All projects</span></nav>
 			<span class="spacer"></span>
-			<button class="btn ghost" data-on:click="$addproj = !$addproj; $nav = true">+ add project</button>
+			<button class="btn ghost" data-on:click="$addproj = !$addproj; $nav = true">@Icon("folder-plus", "ui-icon") add project</button>
 		</header>
 		<div id="items" class="items">
 			<div class="items-inner">
@@ -41,7 +41,7 @@ templ Home(d HomeData) {
 						></textarea>
 						<div class="composer-row">
 							<label class="chip" title="Project">
-								<span class="chip-icon">▣</span>
+								<span class="chip-icon">@Icon("folder", "ui-icon")</span>
 								<select data-bind:project>
 									for _, p := range d.Projects {
 										<option value={ p.ID }>{ p.Name }</option>
@@ -50,7 +50,7 @@ templ Home(d HomeData) {
 							</label>
 							@Chips(d.Settings, "", false, false)
 							<span class="spacer"></span>
-							<button class="btn round primary" type="submit" title="Start thread">↑</button>
+							<button class="btn round primary" type="submit" title="Start thread">@Icon("arrow-up", "ui-icon")</button>
 						</div>
 					</form>
 				} else {
@@ -65,7 +65,7 @@ templ Home(d HomeData) {
 							<span class="project-name">{ p.Name }</span>
 							<span class="dim tiny-text ellipsis">{ p.Path }</span>
 							<span class="spacer"></span>
-							<button class="btn ghost" data-on:click={ "@post('/api/projects/" + p.ID + "/threads')" }>+ new thread</button>
+							<button class="btn ghost" data-on:click={ "@post('/api/projects/" + p.ID + "/threads')" }>@Icon("plus", "ui-icon") new thread</button>
 						</header>
 						<ul class="threads">
 							{{ n := 0 }}

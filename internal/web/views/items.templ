@@ -17,24 +17,6 @@ func meta(it store.Item) toolMeta {
 	return m
 }
 
-func itemGlyph(status string) string {
-	switch status {
-	case domain.ItemRunning:
-		return "…"
-	case domain.ItemDone:
-		return "✓"
-	case domain.ItemFailed:
-		return "✗"
-	case domain.ItemDeclined:
-		return "⊘"
-	case "interrupted":
-		return "■"
-	case "error":
-		return "✗"
-	}
-	return "·"
-}
-
 templ Item(it store.Item) {
 	switch it.Kind {
 		case domain.KindUser:
@@ -54,7 +36,7 @@ templ Item(it store.Item) {
 			@Tool(it)
 		case domain.KindResult:
 			<div id={ "it-" + it.ID } class={ "item", "result", "st-" + it.Status }>
-				<span class="tag">{ itemGlyph(it.Status) } { it.Status }</span>
+				<span class="tag">@ItemIcon(it.Status) { it.Status }</span>
 				<pre class="wrap dim">{ it.Body }</pre>
 			</div>
 		case domain.KindError:
@@ -74,7 +56,7 @@ templ Tool(it store.Item) {
 	{{ m := meta(it) }}
 	<details id={ "it-" + it.ID } class={ "item", "tool", "st-" + it.Status } open?={ it.Status == domain.ItemRunning } data-preserve-attr="open">
 		<summary>
-			<span class={ "glyph", "st-" + it.Status }>{ itemGlyph(it.Status) }</span>
+			<span class={ "glyph", "st-" + it.Status }>@ItemIcon(it.Status)</span>
 			<span class="tag">{ it.ToolName }</span>
 			<span class="ellipsis mono">{ m.Summary }</span>
 		</summary>

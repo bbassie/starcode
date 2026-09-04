@@ -1,0 +1,47 @@
+package views
+
+import lucide "github.com/kaugesaar/lucide-go"
+
+// Lucide renders trusted inline SVG. Keeping this component small makes icon
+// sizing and coloring consistent while controls retain their accessible labels.
+func lucideSVG(name, class string) string {
+	return string(lucide.Icon(name, map[string]any{
+		"size":        16,
+		"strokeWidth": 2,
+		"class":       class,
+	}))
+}
+
+templ Icon(name string, class string) {
+	@templ.Raw(lucideSVG(name, class))
+}
+
+templ StatusIcon(status string) {
+	switch status {
+		case "running":
+			@Icon("loader-circle", "ui-icon spin-icon")
+		case "awaiting_approval":
+			@Icon("circle-help", "ui-icon")
+		case "error":
+			@Icon("circle-alert", "ui-icon")
+		default:
+			@Icon("circle", "ui-icon")
+	}
+}
+
+templ ItemIcon(status string) {
+	switch status {
+		case "running":
+			@Icon("loader-circle", "ui-icon spin-icon")
+		case "done":
+			@Icon("circle-check", "ui-icon")
+		case "failed", "error":
+			@Icon("circle-x", "ui-icon")
+		case "declined":
+			@Icon("circle-slash", "ui-icon")
+		case "interrupted":
+			@Icon("square", "ui-icon")
+		default:
+			@Icon("circle", "ui-icon")
+	}
+}

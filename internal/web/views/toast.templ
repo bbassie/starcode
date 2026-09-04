@@ -9,6 +9,6 @@ templ Toast(msg string) {
 	<div id="toast" class="toast" data-key={ fmt.Sprint(time.Now().UnixNano()) }>
 		<span class="tag err">error</span>
 		<span>{ msg }</span>
-		<button class="btn tiny" data-on:click="el.parentElement.remove()">×</button>
+		<button class="btn tiny" data-on:click="el.parentElement.remove()" aria-label="Dismiss">@Icon("x", "ui-icon")</button>
 	</div>
 }

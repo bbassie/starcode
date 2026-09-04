@@ -39,7 +39,7 @@ templ Chips(d SettingsData, onChange string, disabled bool, agentLocked bool) {
 		}
 		for name, c := range d.Caps {
 			<label class="chip" title="Model" data-show={ "$agent == '" + name + "'" }>
-				<span class="chip-icon">{ agentGlyph(name) }</span>
+				<span class="chip-icon">@Icon("bot", "ui-icon")</span>
 				<select data-bind:model disabled?={ disabled }
 					if onChange != "" {
 						data-on:change={ onChange }
@@ -68,7 +68,7 @@ templ Chips(d SettingsData, onChange string, disabled bool, agentLocked bool) {
 				</select>
 			</label>
 			<label class="chip" title="Permission mode" data-show={ "$agent == '" + name + "'" }>
-				<span class="chip-icon">⚿</span>
+				<span class="chip-icon">@Icon("shield-check", "ui-icon")</span>
 				<select data-bind:mode disabled?={ disabled }
 					if onChange != "" {
 						data-on:change={ onChange }

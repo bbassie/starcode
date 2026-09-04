@@ -17,28 +17,6 @@ type SidebarData struct {
 	Theme    string
 }
 
-func statusGlyph(s string) string {
-	switch s {
-	case domain.StatusRunning:
-		return "●"
-	case domain.StatusAwaitingApproval:
-		return "?"
-	case domain.StatusError:
-		return "!"
-	}
-	return "○"
-}
-
-func agentGlyph(a string) string {
-	switch a {
-	case "claude":
-		return "✳"
-	case "codex":
-		return "◇"
-	}
-	return "·"
-}
-
 // ago renders a compact relative age: 9m, 2d, 3w.
 func ago(t time.Time) string {
 	d := time.Since(t)
@@ -71,9 +49,9 @@ templ Sidebar(d SidebarData) {
 	}
 	<aside id="sidebar" data-class:open="$nav">
 		<div class="side-brand">
-			<a class="brand" href="/" title="Projects overview">starcode</a>
+			<a class="brand" href="/" title="Projects overview">@Icon("star", "brand-mark") starcode</a>
 			<span class="spacer"></span>
-			<button class="btn icon ghost" data-on:click="$nav = false" aria-label="Close navigation">×</button>
+			<button class="btn icon ghost" data-on:click="$nav = false" aria-label="Close navigation">@Icon("x", "ui-icon")</button>
 		</div>
 		<div class="side-search">
 			<input class="in" type="search" placeholder="Search threads" data-bind:q autocomplete="off"/>
@@ -81,7 +59,7 @@ templ Sidebar(d SidebarData) {
 		<div class="side-section">
 			<span>All projects</span>
 			<span class="spacer"></span>
-			<button class="btn icon ghost" data-on:click="$addproj = !$addproj" title="Add project folder" aria-label="Add project folder">+</button>
+			<button class="btn icon ghost" data-on:click="$addproj = !$addproj" title="Add project folder" aria-label="Add project folder">@Icon("folder-plus", "ui-icon")</button>
 		</div>
 		<form class="side-add" data-show="$addproj" data-on:submit="evt.preventDefault(); @post('/api/projects'); $addproj = false">
 			<input class="in project-path" type="text" placeholder="~/project or /absolute/path" data-bind:path list="project-paths" spellcheck="false"/>
@@ -109,8 +87,8 @@ templ Sidebar(d SidebarData) {
 					<summary class="project-head">
 						<span class="ellipsis" title={ p.Path }>{ p.Name }</span>
 						<span class="spacer"></span>
-						<button class="btn icon ghost tiny" data-on:click={ "evt.preventDefault(); @post('/api/projects/" + p.ID + "/threads')" } title="New thread">+</button>
-						<button class="btn icon ghost tiny dim" data-on:click={ "evt.preventDefault(); confirm('Remove project " + p.Name + " from starcode? Files are not touched.') && @post('/api/projects/" + p.ID + "/remove')" } title="Remove project">×</button>
+						<button class="btn icon ghost tiny" data-on:click={ "evt.preventDefault(); @post('/api/projects/" + p.ID + "/threads')" } title="New thread">@Icon("plus", "ui-icon")</button>
+						<button class="btn icon ghost tiny dim" data-on:click={ "evt.preventDefault(); confirm('Remove project " + p.Name + " from starcode? Files are not touched.') && @post('/api/projects/" + p.ID + "/remove')" } title="Remove project">@Icon("x", "ui-icon")</button>
 					</summary>
 					<ul class="threads">
 						for _, t := range d.Threads {
@@ -144,14 +122,14 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool)
 		data-show="$q == '' || el.dataset.k.includes($q.toLowerCase())"
 	>
 		<a href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$nav = false">
-			<span class={ "glyph", "st-" + t.Status }>{ statusGlyph(t.Status) }</span>
+			<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
 			<span class="thread-text">
 				if showProject {
 					<span class="dim tiny-text">{ p.Name }</span>
 				}
 				<span class="ellipsis">{ t.Title }</span>
 			</span>
-			<span class="dim tiny-text">{ agentGlyph(t.Agent) } { ago(t.UpdatedAt) }</span>
+			<span class="dim tiny-text">@Icon("bot", "ui-icon") { ago(t.UpdatedAt) }</span>
 		</a>
 	</li>
 }

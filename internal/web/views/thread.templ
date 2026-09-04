@@ -99,20 +99,20 @@ templ Thread(d ThreadData) {
 // MainHead is the breadcrumb row; patched on rename and status change.
 templ MainHead(d ThreadData) {
 	<header id="mainhead" class="mainhead">
-		<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">≡</button>
+		<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
 		<nav class="crumbs ellipsis">
 			<a href="/">{ d.Project.Name }</a>
 			<span class="dim">/</span>
 			<span class="ellipsis">{ d.Thread.Title }</span>
 		</nav>
-		<span class={ "status-pill", "st-" + d.Thread.Status } title={ d.Thread.StatusDetail }>{ statusGlyph(d.Thread.Status) } { statusLabel(d.Thread.Status) }</span>
-		<span class="dim tiny-text hide-sm ellipsis" title="Model reported by the agent">{ agentGlyph(d.Thread.Agent) } { modelShown(d.Thread) }</span>
+		<span class={ "status-pill", "st-" + d.Thread.Status } title={ d.Thread.StatusDetail }>@StatusIcon(d.Thread.Status) { statusLabel(d.Thread.Status) }</span>
+		<span class="dim tiny-text hide-sm ellipsis" title="Model reported by the agent">@Icon("bot", "ui-icon") { modelShown(d.Thread) }</span>
 		<span class="spacer"></span>
 		if d.Branch != "" {
-			<span class="dim tiny-text hide-sm">⎇ { d.Branch }</span>
+			<span class="dim tiny-text hide-sm">@Icon("git-branch", "ui-icon") { d.Branch }</span>
 		}
-		<button class="btn ghost" data-on:click="$git = !$git" title="Toggle changes panel">± <span class="hide-sm">changes</span></button>
-		<button class="btn ghost dim" data-on:click={ "confirm('Delete this thread?') && @post('/api/threads/" + d.Thread.ID + "/delete')" } title="Delete thread"><span class="hide-sm">delete</span><span class="show-sm">✕</span></button>
+		<button class="btn ghost" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
+		<button class="btn ghost dim" data-on:click={ "confirm('Delete this thread?') && @post('/api/threads/" + d.Thread.ID + "/delete')" } title="Delete thread"><span class="hide-sm">delete</span><span class="show-sm">@Icon("trash-2", "ui-icon")</span></button>
 	</header>
 }
 
@@ -193,9 +193,9 @@ templ Composer(d ThreadData) {
 			@Chips(d.Settings, "@post('/api/threads/"+t.ID+"/settings')", locked, len(d.Items) > 0)
 			<span class="spacer"></span>
 			if locked {
-				<button class="btn round warn" type="button" data-on:click={ "@post('/api/threads/" + t.ID + "/interrupt')" } title="Stop">■</button>
+				<button class="btn round warn" type="button" data-on:click={ "@post('/api/threads/" + t.ID + "/interrupt')" } title="Stop">@Icon("square", "ui-icon")</button>
 			} else {
-				<button class="btn round primary" type="submit" title="Send (Enter)">↑</button>
+				<button class="btn round primary" type="submit" title="Send (Enter)">@Icon("arrow-up", "ui-icon")</button>
 			}
 		</div>
 	</form>

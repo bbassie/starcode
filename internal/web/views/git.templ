@@ -20,13 +20,13 @@ templ GitPanel(d GitData) {
 			<span>Changes</span>
 			<span class="spacer"></span>
 			if d.Status.IsRepo {
-				<span class="dim">⎇ { d.Status.Branch }</span>
+				<span class="dim">@Icon("git-branch", "ui-icon") { d.Status.Branch }</span>
 				if d.Status.Summary != "" {
 					<span class="mono">{ d.Status.Summary }</span>
 				}
 			}
-			<button class="btn icon ghost tiny" data-on:click={ "@get('/api/git/" + d.Project.ID + "/refresh')" } title="Refresh">↻</button>
-			<button class="btn icon ghost tiny" data-on:click="$git = false" title="Close" aria-label="Close changes panel">×</button>
+			<button class="btn icon ghost tiny" data-on:click={ "@get('/api/git/" + d.Project.ID + "/refresh')" } title="Refresh">@Icon("refresh-cw", "ui-icon")</button>
+			<button class="btn icon ghost tiny" data-on:click="$git = false" title="Close" aria-label="Close changes panel">@Icon("x", "ui-icon")</button>
 		</div>
 		if d.Project.ID == "" {
 			<p class="dim pad">open a thread to see its project's changes.</p>
