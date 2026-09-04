@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 	"starcode/internal/gitx"
 	"starcode/internal/store"
 	"starcode/internal/term"
+	usagex "starcode/internal/usage"
 	"starcode/internal/web/views"
 )
 
@@ -35,12 +37,17 @@ type Server struct {
 	Token     string // empty disables auth
 	Term      *term.Manager
 	AttachDir string // where prompt attachments are saved, per thread
+	Usage     *usagex.Scanner
 	mux       *http.ServeMux
 	cache     capsCache
 }
 
 func New(a *app.App, log *slog.Logger, token, attachDir string) *Server {
-	s := &Server{App: a, Log: log, Token: token, Term: term.NewManager(log), AttachDir: attachDir, mux: http.NewServeMux()}
+	usageCacheDir := ""
+	if attachDir != "" {
+		usageCacheDir = filepath.Dir(attachDir)
+	}
+	s := &Server{App: a, Log: log, Token: token, Term: term.NewManager(log), AttachDir: attachDir, Usage: usagex.New(usageCacheDir), mux: http.NewServeMux()}
 	views.SetAssetVersion(staticHash())
 	static, _ := fs.Sub(staticFS, "static")
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", cacheStatic(http.FileServerFS(static))))

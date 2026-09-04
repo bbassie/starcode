@@ -43,7 +43,7 @@ func TestUsageReconstructsAgentAndModelHistory(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("entries = %#v", entries)
 	}
-	if got := entries[0]; got.Agent != "claude" || got.Model != "claude-sonnet-5" || got.CostUSD != 0.25 || got.InputTokens != 100 || got.OutputTokens != 20 {
+	if got := entries[0]; got.Agent != "claude" || got.Model != "claude-sonnet-5" || got.SessionID != "ext" || got.CostUSD != 0.25 || got.InputTokens != 100 || got.OutputTokens != 20 {
 		t.Errorf("first entry = %+v", got)
 	}
 	if got := entries[1]; got.Agent != "codex" || got.Model != "gpt-5.6" || got.CostUSD != 0 || got.InputTokens != 200 || got.OutputTokens != 40 {

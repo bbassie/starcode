@@ -86,6 +86,7 @@ type QueuedPrompt struct {
 // including threads that have since been deleted from the projections.
 type UsageEntry struct {
 	ThreadID     string
+	SessionID    string
 	Agent        string
 	Model        string
 	CostUSD      float64
@@ -476,7 +477,7 @@ func (s *Store) Usage(ctx context.Context, since time.Time) ([]UsageEntry, error
 	}
 	defer rows.Close()
 
-	type threadUsageState struct{ agent, model string }
+	type threadUsageState struct{ agent, model, sessionID string }
 	states := make(map[string]threadUsageState)
 	var out []UsageEntry
 	for rows.Next() {
@@ -493,8 +494,12 @@ func (s *Store) Usage(ctx context.Context, since time.Time) ([]UsageEntry, error
 		case domain.ThreadCreated:
 			state.agent, state.model = p.Agent, p.Model
 		case domain.ThreadSettingsChanged:
+			if state.agent != p.Agent {
+				state.sessionID = ""
+			}
 			state.agent, state.model = p.Agent, p.Model
 		case domain.AgentSessionBound:
+			state.sessionID = p.ExternalID
 			if p.Model != "" {
 				state.model = p.Model
 			}
@@ -505,7 +510,7 @@ func (s *Store) Usage(ctx context.Context, since time.Time) ([]UsageEntry, error
 				if model == "" {
 					model = "default"
 				}
-				out = append(out, UsageEntry{ThreadID: threadID, Agent: state.agent, Model: model, CostUSD: p.CostUSD, InputTokens: p.InputTok, OutputTokens: p.OutputTok, CreatedAt: ts})
+				out = append(out, UsageEntry{ThreadID: threadID, SessionID: state.sessionID, Agent: state.agent, Model: model, CostUSD: p.CostUSD, InputTokens: p.InputTok, OutputTokens: p.OutputTok, CreatedAt: ts})
 			}
 		}
 		states[threadID] = state

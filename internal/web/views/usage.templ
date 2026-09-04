@@ -8,20 +8,24 @@ import (
 )
 
 type UsagePoint struct {
-	Date         time.Time
-	CostUSD      float64
-	InputTokens  int64
-	OutputTokens int64
+	Date                time.Time
+	CostUSD             float64
+	InputTokens         int64
+	CachedInputTokens   int64
+	CacheCreationTokens int64
+	OutputTokens        int64
 }
 
 type UsageGroup struct {
-	Name         string
-	Agent        string
-	Turns        int
-	Threads      int
-	CostUSD      float64
-	InputTokens  int64
-	OutputTokens int64
+	Name                string
+	Agent               string
+	Turns               int
+	Threads             int
+	CostUSD             float64
+	InputTokens         int64
+	CachedInputTokens   int64
+	CacheCreationTokens int64
+	OutputTokens        int64
 }
 
 type UsageSeries struct {
@@ -38,8 +42,13 @@ type UsageData struct {
 	Turns        int
 	Threads      int
 	CostUSD      float64
-	InputTokens  int64
-	OutputTokens int64
+	InputTokens         int64
+	CachedInputTokens   int64
+	CacheCreationTokens int64
+	OutputTokens        int64
+	CacheSavingsUSD     float64
+	PricingStatus       string
+	UnpricedRecords     int
 	Daily        []UsagePoint
 	Series       []UsageSeries
 	Agents       []UsageGroup
@@ -52,16 +61,28 @@ func usageURL(days int, metric string) string {
 
 func usageValue(p UsagePoint, metric string) float64 {
 	if metric == "tokens" {
-		return float64(p.InputTokens + p.OutputTokens)
+		return float64(usagePointTokens(p))
 	}
 	return p.CostUSD
 }
 
 func usageGroupValue(g UsageGroup, metric string) float64 {
 	if metric == "tokens" {
-		return float64(g.InputTokens + g.OutputTokens)
+		return float64(usageGroupTokens(g))
 	}
 	return g.CostUSD
+}
+
+func usagePointTokens(p UsagePoint) int64 {
+	return p.InputTokens + p.CachedInputTokens + p.CacheCreationTokens + p.OutputTokens
+}
+
+func usageGroupTokens(g UsageGroup) int64 {
+	return g.InputTokens + g.CachedInputTokens + g.CacheCreationTokens + g.OutputTokens
+}
+
+func usageTotalTokens(d UsageData) int64 {
+	return d.InputTokens + d.CachedInputTokens + d.CacheCreationTokens + d.OutputTokens
 }
 
 func usageChartPath(points []UsagePoint, metric string, max float64) string {
@@ -139,7 +160,7 @@ func formatCost(n float64) string {
 func formatShare(g UsageGroup, total UsageData) string {
 	denom := total.CostUSD
 	if total.Metric == "tokens" {
-		denom = float64(total.InputTokens + total.OutputTokens)
+		denom = float64(usageTotalTokens(total))
 	}
 	if denom == 0 {
 		return "0.0%"
@@ -210,19 +231,19 @@ templ UsagePage(d UsageData) {
 					<div class="usage-overview">
 						<section class="usage-summary">
 							if d.Metric == "tokens" {
-								<strong>{ formatTokens(d.InputTokens + d.OutputTokens) }</strong>
+								<strong>{ formatTokens(usageTotalTokens(d)) }</strong>
 								<span class="dim">processed tokens</span>
 							} else {
 								<strong>{ formatCost(d.CostUSD) }</strong>
-								<span class="dim">reported cost</span>
+								<span class="dim">estimated cost</span>
 							}
-							<span class="dim usage-session-count">{ fmt.Sprintf("%d turns across %d threads", d.Turns, d.Threads) }</span>
+							<span class="dim usage-session-count">{ fmt.Sprintf("%d requests across %d sessions", d.Turns, d.Threads) }</span>
 							<ul class="usage-agents">
 								for _, group := range d.Agents {
 									<li>
 										@AgentMark(group.Agent)
-										<span>{ group.Name } <small class="dim">{ fmt.Sprintf("%d turns", group.Turns) }</small></span>
-										<strong>{ formatTokens(group.InputTokens + group.OutputTokens) }</strong>
+										<span>{ group.Name } <small class="dim">{ fmt.Sprintf("%d sessions", group.Threads) }</small></span>
+										<strong>{ formatTokens(usageGroupTokens(group)) }</strong>
 										<small class="dim">{ formatCost(group.CostUSD) }</small>
 									</li>
 								}
@@ -259,11 +280,11 @@ templ UsagePage(d UsageData) {
 					<section class="usage-totals">
 						<h2>Totals</h2>
 						<div>
-							<dl><dt>Processed tokens</dt><dd>{ formatTokens(d.InputTokens + d.OutputTokens) }</dd></dl>
-							<dl><dt>Input</dt><dd>{ formatTokens(d.InputTokens) }</dd></dl>
+							<dl><dt>Processed tokens</dt><dd>{ formatTokens(usageTotalTokens(d)) }</dd></dl>
+							<dl><dt>Cached input</dt><dd>{ formatTokens(d.CachedInputTokens) }</dd></dl>
+							<dl><dt>Uncached input</dt><dd>{ formatTokens(d.InputTokens) }</dd></dl>
 							<dl><dt>Output</dt><dd>{ formatTokens(d.OutputTokens) }</dd></dl>
-							<dl><dt>Reported cost</dt><dd>{ formatCost(d.CostUSD) }</dd></dl>
-							<dl><dt>Turns</dt><dd>{ fmt.Sprintf("%d", d.Turns) }</dd></dl>
+							<dl><dt>Cache savings</dt><dd>{ formatCost(d.CacheSavingsUSD) }</dd></dl>
 						</div>
 					</section>
 					<section class="usage-breakdown">
@@ -277,7 +298,7 @@ templ UsagePage(d UsageData) {
 											<td><span class="usage-model"><span>@AgentMark(group.Agent)</span>{ group.Name }</span></td>
 											<td>{ formatCost(group.CostUSD) }</td>
 											<td class="dim">{ formatShare(group, d) }</td>
-											<td class="dim">{ formatTokens(group.InputTokens + group.OutputTokens) }</td>
+											<td class="dim">{ formatTokens(usageGroupTokens(group)) }</td>
 										</tr>
 									}
 									if len(d.Models) == 0 {
@@ -286,7 +307,14 @@ templ UsagePage(d UsageData) {
 								</tbody>
 							</table>
 						</div>
-						<p class="dim usage-note">Costs are values reported by the agent. Codex currently reports token counts without a dollar cost.</p>
+						<p class="dim usage-note">
+							Usage is read from the local Claude Code and Codex transcripts. Costs use provider-reported values when available and public model rates otherwise.
+							if d.PricingStatus == "unavailable" {
+								Pricing is currently unavailable, so transcript-only records are excluded from cost.
+							} else if d.UnpricedRecords > 0 {
+								{ fmt.Sprintf(" %d records use an unknown model and are excluded from cost.", d.UnpricedRecords) }
+							}
+						</p>
 					</section>
 				</div>
 			</div>
