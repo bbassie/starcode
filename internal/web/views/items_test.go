@@ -47,6 +47,12 @@ func TestUsageChartAndFormatting(t *testing.T) {
 	if got := usageAreaPath(points, "tokens", 2_000); !strings.HasSuffix(got, "L 772 222 L 48 222 Z") {
 		t.Errorf("token area path = %q", got)
 	}
+	if x, width := usageChartHitBounds(0, 2); x != 48 || width != 362 {
+		t.Errorf("first chart hit bounds = %.1f, %.1f", x, width)
+	}
+	if x, width := usageChartHitBounds(1, 2); x != 410 || width != 362 {
+		t.Errorf("last chart hit bounds = %.1f, %.1f", x, width)
+	}
 	if got := formatTokens(1_250_000); got != "1.25M" {
 		t.Errorf("formatTokens = %q", got)
 	}

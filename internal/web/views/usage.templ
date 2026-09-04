@@ -85,20 +85,40 @@ func usageTotalTokens(d UsageData) int64 {
 	return d.InputTokens + d.CachedInputTokens + d.CacheCreationTokens + d.OutputTokens
 }
 
+func usageChartX(index, count int) float64 {
+	if count <= 1 {
+		return 48
+	}
+	return 48 + float64(index)*724/float64(count-1)
+}
+
+func usageChartY(p UsagePoint, metric string, max float64) float64 {
+	if max == 0 {
+		max = 1
+	}
+	return 222 - usageValue(p, metric)/max*184
+}
+
+func usageChartHitBounds(index, count int) (float64, float64) {
+	center := usageChartX(index, count)
+	left, right := 48.0, 772.0
+	if index > 0 {
+		left = (usageChartX(index-1, count) + center) / 2
+	}
+	if index < count-1 {
+		right = (center + usageChartX(index+1, count)) / 2
+	}
+	return left, right - left
+}
+
 func usageChartPath(points []UsagePoint, metric string, max float64) string {
 	if len(points) == 0 {
 		return ""
 	}
-	if max == 0 {
-		max = 1
-	}
 	var out strings.Builder
 	for i, p := range points {
-		x := 48.0
-		if len(points) > 1 {
-			x += float64(i) * 724 / float64(len(points)-1)
-		}
-		y := 222 - usageValue(p, metric)/max*184
+		x := usageChartX(i, len(points))
+		y := usageChartY(p, metric, max)
 		if i == 0 {
 			fmt.Fprintf(&out, "M %.1f %.1f", x, y)
 		} else {
@@ -195,6 +215,32 @@ func usageChartDate(t time.Time, days int) string {
 	return strings.ToUpper(t.Format("Jan 2"))
 }
 
+func usageBucketDate(t time.Time, days int) string {
+	if days == 1 {
+		return t.Format("Mon, Jan 2 at 15:04")
+	}
+	return t.Format("Mon, Jan 2")
+}
+
+func usageMetricValue(p UsagePoint, metric string) string {
+	if metric == "tokens" {
+		return formatTokens(usagePointTokens(p))
+	}
+	return formatCost(p.CostUSD)
+}
+
+func usageBucketAria(d UsageData, index int) string {
+	var out strings.Builder
+	out.WriteString(usageBucketDate(d.Daily[index].Date, d.Days))
+	for _, series := range d.Series {
+		if index >= len(series.Points) {
+			continue
+		}
+		fmt.Fprintf(&out, ", %s %s", series.Name, usageMetricValue(series.Points[index], d.Metric))
+	}
+	return out.String()
+}
+
 templ AgentMark(agent string) {
 	<span class={ "usage-agent-mark", "agent-" + agent }>
 		if agent == "claude" {
@@ -259,7 +305,7 @@ templ UsagePage(d UsageData) {
 								</div>
 							</header>
 							<div class="usage-chart">
-								<svg viewBox="0 0 800 250" role="img" aria-label={ "Daily " + d.Metric + " chart" } preserveAspectRatio="none">
+								<svg viewBox="0 0 800 250" role="group" aria-label={ "Interactive daily " + d.Metric + " chart" } preserveAspectRatio="none">
 									<line x1="48" y1="38" x2="772" y2="38" class="chart-grid"></line>
 									<line x1="48" y1="130" x2="772" y2="130" class="chart-grid"></line>
 									<line x1="48" y1="222" x2="772" y2="222" class="chart-grid"></line>
@@ -269,7 +315,48 @@ templ UsagePage(d UsageData) {
 									for _, series := range d.Series {
 										<path d={ usageChartPath(series.Points, d.Metric, chartMax) } class={ "chart-line", "agent-" + series.Agent }></path>
 									}
+									for i := range d.Daily {
+										{{ hitX, hitWidth := usageChartHitBounds(i, len(d.Daily)) }}
+										<g class="usage-chart-target">
+											<rect
+												x={ fmt.Sprintf("%.1f", hitX) }
+												y="28"
+												width={ fmt.Sprintf("%.1f", hitWidth) }
+												height="204"
+												class="usage-chart-hit"
+												tabindex="0"
+												data-usage-index={ fmt.Sprintf("%d", i) }
+												data-usage-x={ fmt.Sprintf("%.1f", usageChartX(i, len(d.Daily))) }
+												aria-label={ usageBucketAria(d, i) }
+											></rect>
+											for _, series := range d.Series {
+												if i < len(series.Points) {
+													<circle
+														cx={ fmt.Sprintf("%.1f", usageChartX(i, len(d.Daily))) }
+														cy={ fmt.Sprintf("%.1f", usageChartY(series.Points[i], d.Metric, chartMax)) }
+														r="3.5"
+														class={ "chart-point", "agent-" + series.Agent }
+													></circle>
+												}
+											}
+										</g>
+									}
 								</svg>
+								<span class="usage-chart-cursor" aria-hidden="true" hidden></span>
+								for i, point := range d.Daily {
+									<div class="usage-chart-tip" data-usage-tip={ fmt.Sprintf("%d", i) } role="tooltip" hidden>
+										<strong>{ usageBucketDate(point.Date, d.Days) }</strong>
+										for _, series := range d.Series {
+											if i < len(series.Points) {
+												<span class="usage-tip-row">
+													<i class={ "agent-" + series.Agent }></i>
+													<span>{ series.Name }</span>
+													<b>{ usageMetricValue(series.Points[i], d.Metric) }</b>
+												</span>
+											}
+										}
+									</div>
+								}
 								<span class="chart-max">{ usageChartMax(d.Series, d.Metric) }</span>
 								<span class="chart-zero">0</span>
 								<span class="chart-start">{ usageChartDate(d.Start, d.Days) }</span>

@@ -189,6 +189,83 @@ templ Layout(title string, p Page) {
 					});
 				})();
 			</script>
+			if p.View == "usage" {
+				// The usage view is replaced by the live stream, so chart events are
+				// delegated from the document instead of bound to one render.
+				<script>
+					(() => {
+						const chartHit = (target) => target instanceof Element && target.closest('.usage-chart-hit');
+						const hide = (chart) => {
+							if (!chart) return;
+							const cursor = chart.querySelector('.usage-chart-cursor');
+							if (cursor) cursor.hidden = true;
+							for (const tip of chart.querySelectorAll('.usage-chart-tip')) tip.hidden = true;
+						};
+						const hideAll = () => {
+							for (const chart of document.querySelectorAll('.usage-chart')) hide(chart);
+						};
+						const show = (hit) => {
+							const chart = hit.closest('.usage-chart');
+							if (!chart || !chart.clientWidth) return;
+							const index = hit.dataset.usageIndex;
+							const svgX = Number(hit.dataset.usageX);
+							const left = svgX / 800 * chart.clientWidth;
+							const cursor = chart.querySelector('.usage-chart-cursor');
+							if (cursor) {
+								cursor.style.left = left + 'px';
+								cursor.hidden = false;
+							}
+							for (const item of chart.querySelectorAll('.usage-chart-tip')) item.hidden = true;
+							const tip = [...chart.querySelectorAll('.usage-chart-tip')]
+								.find((item) => item.dataset.usageTip === index);
+							if (!tip) return;
+							tip.hidden = false;
+							const half = tip.offsetWidth / 2 + 7;
+							tip.style.left = Math.max(half, Math.min(chart.clientWidth - half, left)) + 'px';
+						};
+						document.addEventListener('pointerover', (event) => {
+							const hit = chartHit(event.target);
+							if (hit) show(hit);
+						});
+						document.addEventListener('pointerout', (event) => {
+							const hit = chartHit(event.target);
+							if (!hit) return;
+							const target = hit.closest('.usage-chart-target');
+							if (!(event.relatedTarget instanceof Node && target.contains(event.relatedTarget))) {
+								hide(hit.closest('.usage-chart'));
+							}
+						});
+						document.addEventListener('focusin', (event) => {
+							const hit = chartHit(event.target);
+							if (hit) show(hit);
+						});
+						document.addEventListener('focusout', (event) => {
+							const hit = chartHit(event.target);
+							if (hit && !(event.relatedTarget instanceof Node && hit.closest('.usage-chart-target').contains(event.relatedTarget))) {
+								hide(hit.closest('.usage-chart'));
+							}
+						});
+						document.addEventListener('click', (event) => {
+							const hit = chartHit(event.target);
+							if (hit) show(hit);
+							else hideAll();
+						});
+						document.addEventListener('keydown', (event) => {
+							const hit = chartHit(event.target);
+							if (hit && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+								const hits = [...hit.closest('.usage-chart').querySelectorAll('.usage-chart-hit')];
+								const direction = event.key === 'ArrowLeft' ? -1 : 1;
+								const next = hits[Math.max(0, Math.min(hits.length - 1, hits.indexOf(hit) + direction))];
+								next?.focus();
+								event.preventDefault();
+							} else if (event.key === 'Escape') {
+								hideAll();
+								hit?.blur();
+							}
+						});
+					})();
+				</script>
+			}
 		</body>
 	</html>
 }
