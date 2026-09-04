@@ -419,6 +419,10 @@ details.item.tool > .block { margin: 4px 0 4px 1.2em; }
 .diff .del { background: var(--del-bg); color: var(--err); }
 .diff .hunk { color: var(--accent); }
 .diff .dim { color: var(--fg-dim); }
+.git-detail-actions { display: flex; justify-content: flex-end; padding: 6px var(--pad); border-bottom: var(--border-w) solid var(--border); }
+.git-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.file-editor { flex: 1; min-height: 240px; resize: none; border: 0; outline: none; background: var(--bg); padding: var(--pad); font: 0.85em/1.5 var(--font-mono); tab-size: 2; }
+.git-editor-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px var(--pad); border-top: var(--border-w) solid var(--border); }
 
 /* ---- toast ---- */
 

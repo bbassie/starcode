@@ -1,6 +1,7 @@
 package views
 
 import (
+	"strconv"
 	"starcode/internal/gitx"
 	"starcode/internal/store"
 	"strings"
@@ -16,18 +17,31 @@ type GitData struct {
 
 templ GitPanel(d GitData) {
 	<aside id="gitpanel" data-class:open="$git">
-		<div class="side-head">
-			<span>Changes</span>
-			<span class="spacer"></span>
-			if d.Status.IsRepo {
-				<span class="dim">@Icon("git-branch", "ui-icon") { d.Status.Branch }</span>
-				if d.Status.Summary != "" {
-					<span class="mono">{ d.Status.Summary }</span>
-				}
+		@GitHeader(d)
+		@GitFiles(d)
+		@GitDetail(d)
+	</aside>
+}
+
+templ GitHeader(d GitData) {
+	<div id="git-head" class="side-head">
+		<span>Changes</span>
+		<span class="spacer"></span>
+		if d.Status.IsRepo {
+			<span class="dim">@Icon("git-branch", "ui-icon") { d.Status.Branch }</span>
+			if d.Status.Summary != "" {
+				<span class="mono">{ d.Status.Summary }</span>
 			}
+		}
+		if d.Project.ID != "" {
 			<button class="btn icon ghost tiny" data-on:click={ "@get('/api/git/" + d.Project.ID + "/refresh')" } title="Refresh">@Icon("refresh-cw", "ui-icon")</button>
-			<button class="btn icon ghost tiny" data-on:click="$git = false" title="Close" aria-label="Close changes panel">@Icon("x", "ui-icon")</button>
-		</div>
+		}
+		<button class="btn icon ghost tiny" data-on:click="$git = false" title="Close" aria-label="Close changes panel">@Icon("x", "ui-icon")</button>
+	</div>
+}
+
+templ GitFiles(d GitData) {
+	<div id="git-files">
 		if d.Project.ID == "" {
 			<p class="dim pad">open a thread to see its project's changes.</p>
 		} else if !d.Status.IsRepo {
@@ -37,8 +51,8 @@ templ GitPanel(d GitData) {
 		} else {
 			<ul class="files">
 				for _, f := range d.Status.Files {
-					<li class={ templ.KV("current", f.Path == d.Selected) }>
-						<a href="#" data-on:click={ "evt.preventDefault(); @get('/api/git/" + d.Project.ID + "/diff?path=" + urlQuery(f.Path) + "')" }>
+					<li data-class:current={ "$gitPath === " + strconv.Quote(f.Path) }>
+						<a href="#" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/diff?path=" + urlQuery(f.Path) + "')" }>
 							<span class={ "code", statusClass(f.Status) }>{ strings.TrimSpace(f.Status) }</span>
 							<span class="ellipsis">{ f.Path }</span>
 						</a>
@@ -46,16 +60,35 @@ templ GitPanel(d GitData) {
 				}
 			</ul>
 		}
-		if d.Diff != "" {
+	</div>
+}
+
+templ GitDetail(d GitData) {
+	<div id="git-detail">
+		if d.Selected != "" {
 			<div class="diff-head mono ellipsis">{ d.Selected }</div>
-			<pre class="diff">
-				for _, line := range strings.Split(strings.TrimRight(d.Diff, "\n"), "\n") {
-					<span class={ diffClass(line) }>{ line }</span>
-					{ "\n" }
-				}
-			</pre>
+			<div class="git-detail-actions">
+				<button class="btn tiny" data-show="!$gitEdit" data-on:click={ "@get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
+			</div>
+			<form class="git-editor" data-show="$gitEdit" data-on:submit={ "evt.preventDefault(); @post('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>
+				<textarea class="file-editor" data-bind:file spellcheck="false"></textarea>
+				<div class="git-editor-actions">
+					<button class="btn primary" type="submit">@Icon("save", "ui-icon") save</button>
+					<button class="btn" type="button" data-on:click="$gitEdit = false; $file = ''">cancel</button>
+				</div>
+			</form>
+			if d.Diff != "" {
+				<pre class="diff" data-show="!$gitEdit">
+					for _, line := range strings.Split(strings.TrimRight(d.Diff, "\n"), "\n") {
+						<span class={ diffClass(line) }>{ line }</span>
+						{ "\n" }
+					}
+				</pre>
+			} else {
+				<p class="dim pad" data-show="!$gitEdit">no diff to show.</p>
+			}
 		}
-	</aside>
+	</div>
 }
 
 func statusClass(s string) string {

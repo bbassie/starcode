@@ -29,7 +29,7 @@ templ Layout(title string, p Page) {
 			<script type="module" src="/static/datastar.js"></script>
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, theme: %q, prompt: '', path: '', q: '', addproj: false, _hb: 0}`, p.View == "thread", p.Theme) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, theme: %q, prompt: '', path: '', q: '', addproj: false, gitPath: '', gitEdit: false, file: '', _hb: 0}`, p.View == "thread", p.Theme) }
 			data-attr:data-theme="$theme"
 			data-init={ fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000})", p.streamURL()) }
 		>

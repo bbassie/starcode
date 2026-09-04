@@ -56,6 +56,8 @@ func New(a *app.App, log *slog.Logger, token string) *Server {
 	s.mux.HandleFunc("POST /api/theme", s.setTheme)
 	s.mux.HandleFunc("GET /api/git/{id}/refresh", s.gitRefresh)
 	s.mux.HandleFunc("GET /api/git/{id}/diff", s.gitDiff)
+	s.mux.HandleFunc("GET /api/git/{id}/file", s.gitFile)
+	s.mux.HandleFunc("POST /api/git/{id}/file", s.saveGitFile)
 	s.warm()
 	return s
 }

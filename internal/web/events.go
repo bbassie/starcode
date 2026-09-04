@@ -111,7 +111,7 @@ func (c *conn) renderAll(ctx context.Context) error {
 		if err := c.sse.PatchElementTempl(views.Thread(d)); err != nil {
 			return err
 		}
-		return c.renderGit(ctx)
+		return c.renderGitPanel(ctx)
 	default:
 		ps, err := c.s.App.Store.Projects(ctx)
 		if err != nil {
@@ -152,6 +152,25 @@ func (c *conn) renderHead(ctx context.Context) error {
 }
 
 func (c *conn) renderGit(ctx context.Context) error {
+	c.gitDirty = false
+	c.lastGit = time.Now()
+	if c.projectID == "" {
+		return nil
+	}
+	p, err := c.s.App.Store.Project(ctx, c.projectID)
+	if err != nil {
+		return nil
+	}
+	d := views.GitData{Project: p, Status: gitx.Read(ctx, p.Path), ThreadID: c.threadID}
+	if err := c.sse.PatchElementTempl(views.GitHeader(d)); err != nil {
+		return err
+	}
+	return c.sse.PatchElementTempl(views.GitFiles(d))
+}
+
+// renderGitPanel mounts the panel on the first thread-page render. Later
+// refreshes use renderGit so the selected diff or editor is not replaced.
+func (c *conn) renderGitPanel(ctx context.Context) error {
 	c.gitDirty = false
 	c.lastGit = time.Now()
 	if c.projectID == "" {

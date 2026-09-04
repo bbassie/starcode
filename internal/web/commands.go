@@ -7,6 +7,7 @@ import (
 	"github.com/starfederation/datastar-go/datastar"
 
 	"starcode/internal/app"
+	"starcode/internal/domain"
 	"starcode/internal/gitx"
 	"starcode/internal/web/views"
 )
@@ -25,6 +26,7 @@ type signals struct {
 	Theme   string `json:"theme"`
 	Effort  string `json:"effort"`
 	Mode    string `json:"mode"`
+	File    string `json:"file"`
 }
 
 func (s *Server) readSignals(r *http.Request) signals {
@@ -171,7 +173,8 @@ func (s *Server) gitRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sse := datastar.NewSSE(w, r)
-	sse.PatchElementTempl(views.GitPanel(views.GitData{Project: p, Status: gitx.Read(r.Context(), p.Path)}))
+	sse.PatchElementTempl(views.GitHeader(views.GitData{Project: p, Status: gitx.Read(r.Context(), p.Path)}))
+	sse.PatchElementTempl(views.GitFiles(views.GitData{Project: p, Status: gitx.Read(r.Context(), p.Path)}))
 }
 
 func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
@@ -186,10 +189,44 @@ func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sse := datastar.NewSSE(w, r)
-	sse.PatchElementTempl(views.GitPanel(views.GitData{
+	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "file": ""})
+	sse.PatchElementTempl(views.GitDetail(views.GitData{
 		Project:  p,
-		Status:   gitx.Read(r.Context(), p.Path),
 		Selected: path,
 		Diff:     gitx.Diff(r.Context(), p.Path, path),
 	}))
+}
+
+func (s *Server) gitFile(w http.ResponseWriter, r *http.Request) {
+	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	path := r.URL.Query().Get("path")
+	content, err := readProjectFile(p.Path, path)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	sse := datastar.NewSSE(w, r)
+	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": true, "file": content})
+	sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Diff: gitx.Diff(r.Context(), p.Path, path)}))
+}
+
+func (s *Server) saveGitFile(w http.ResponseWriter, r *http.Request) {
+	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if err := writeProjectFile(p.Path, path, s.readSignals(r).File); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.App.Bus.Publish(domain.GitChanged{})
+	sse := datastar.NewSSE(w, r)
+	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "file": ""})
+	sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Diff: gitx.Diff(r.Context(), p.Path, path)}))
 }
