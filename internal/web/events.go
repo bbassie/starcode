@@ -112,6 +112,11 @@ func (c *conn) renderAll(ctx context.Context) error {
 			return err
 		}
 		return c.renderGitPanel(ctx)
+	case "settings":
+		if err := c.sse.PatchElementTempl(views.SettingsPage(views.SettingsPageData{Theme: c.theme, Themes: Themes})); err != nil {
+			return err
+		}
+		return c.sse.PatchElementTempl(views.GitPanel(views.GitData{}))
 	default:
 		ps, err := c.s.App.Store.Projects(ctx)
 		if err != nil {
@@ -131,7 +136,7 @@ func (c *conn) renderAll(ctx context.Context) error {
 }
 
 func (c *conn) renderSidebar(ctx context.Context) error {
-	d, err := c.s.sidebarData(ctx, c.threadID, c.theme)
+	d, err := c.s.sidebarData(ctx, c.threadID, c.view == "settings")
 	if err != nil {
 		return err
 	}

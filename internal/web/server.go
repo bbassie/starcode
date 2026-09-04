@@ -25,7 +25,7 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-var Themes = []string{"dark", "amber", "green", "light"}
+var Themes = []string{"dark", "ocean", "amber", "green", "light"}
 
 const tokenCookie = "starcode_token"
 
@@ -46,6 +46,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string) *Server {
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", cacheStatic(http.FileServerFS(static))))
 
 	s.mux.HandleFunc("GET /{$}", s.home)
+	s.mux.HandleFunc("GET /settings", s.settings)
 	s.mux.HandleFunc("GET /threads/{id}", s.thread)
 	s.mux.HandleFunc("GET /events", s.events)
 
@@ -202,6 +203,10 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	views.Layout("home", views.Page{View: "home", Theme: s.theme(r)}).Render(r.Context(), w)
 }
 
+func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
+	views.Layout("settings", views.Page{View: "settings", Theme: s.theme(r)}).Render(r.Context(), w)
+}
+
 func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	t, err := s.App.Store.Thread(r.Context(), id)
@@ -214,7 +219,7 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 
 // ---- helpers shared by events and commands ----
 
-func (s *Server) sidebarData(ctx context.Context, current string, theme string) (views.SidebarData, error) {
+func (s *Server) sidebarData(ctx context.Context, current string, settings bool) (views.SidebarData, error) {
 	ps, err := s.App.Store.Projects(ctx)
 	if err != nil {
 		return views.SidebarData{}, err
@@ -223,7 +228,7 @@ func (s *Server) sidebarData(ctx context.Context, current string, theme string) 
 	if err != nil {
 		return views.SidebarData{}, err
 	}
-	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), Themes: Themes, Theme: theme}, nil
+	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), Settings: settings}, nil
 }
 
 func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, error) {

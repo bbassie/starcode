@@ -141,3 +141,73 @@ func signalsJSON(agentName, model, effort, mode string, extra string) string {
 	}
 	return s + "}"
 }
+
+type SettingsPageData struct {
+	Theme  string
+	Themes []string
+}
+
+func themeName(theme string) string {
+	switch theme {
+	case "ocean":
+		return "Ocean"
+	case "amber":
+		return "Dusk"
+	case "green":
+		return "Forest"
+	case "light":
+		return "Light"
+	default:
+		return "Dark"
+	}
+}
+
+templ SettingsPage(d SettingsPageData) {
+	<main id="main" class="settings-page">
+		<header id="mainhead" class="mainhead">
+			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
+			<nav class="crumbs"><span>Settings</span></nav>
+		</header>
+		<div class="settings-scroll">
+			<div class="settings-shell">
+				<nav class="settings-menu" aria-label="Settings sections">
+					<div class="settings-menu-title">Settings</div>
+					<a class="current" href="#appearance">@Icon("palette", "ui-icon") Appearance</a>
+				</nav>
+				<div class="settings-content">
+					<section id="appearance" class="settings-section">
+						<header>
+							<h1>Appearance</h1>
+							<p class="dim">Choose how Starcode looks on this browser.</p>
+						</header>
+						<div class="settings-card">
+							<div class="setting-row">
+								<div>
+									<label for="theme-select">Theme</label>
+									<p class="dim">Changes apply immediately and are saved for your next visit.</p>
+								</div>
+								<select id="theme-select" class="in theme-select" data-bind:theme data-on:change="@post('/api/theme')">
+									for _, theme := range d.Themes {
+										<option value={ theme } selected?={ theme == d.Theme }>{ themeName(theme) }</option>
+									}
+								</select>
+							</div>
+							<div class="appearance-preview" aria-hidden="true">
+								<div class="appearance-preview-side">
+									<span class="preview-dot"></span>
+									<span></span><span></span><span></span>
+								</div>
+								<div class="appearance-preview-main">
+									<div class="preview-line long"></div>
+									<div class="preview-line"></div>
+									<div class="preview-message"></div>
+									<div class="preview-input"><span></span><i></i></div>
+								</div>
+							</div>
+						</div>
+					</section>
+				</div>
+			</div>
+		</div>
+	</main>
+}

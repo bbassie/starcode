@@ -13,8 +13,7 @@ type SidebarData struct {
 	Threads  []store.Thread // all threads, newest first
 	Current  string         // current thread id
 	Agents   []string
-	Themes   []string
-	Theme    string
+	Settings bool
 }
 
 // ago renders a compact relative age: 9m, 2d, 3w.
@@ -104,13 +103,10 @@ templ Sidebar(d SidebarData) {
 			}
 		</nav>
 		<div class="side-foot">
-			<label class="dim">theme
-				<select class="in" data-bind:theme data-on:change="@post('/api/theme')">
-					for _, th := range d.Themes {
-						<option value={ th } selected?={ th == d.Theme }>{ th }</option>
-					}
-				</select>
-			</label>
+			<a class={ "side-settings", templ.KV("current", d.Settings) } href="/settings" data-on:click="$nav = false">
+				@Icon("settings", "ui-icon")
+				<span>Settings</span>
+			</a>
 		</div>
 	</aside>
 }
