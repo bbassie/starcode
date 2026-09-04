@@ -1,0 +1,10 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/starcode ."
+  bin = "./tmp/starcode"
+  args_bin = ["-fake", "-debug"]
+  include_ext = ["go", "css", "js", "sql"]
+  exclude_regex = ["_test\\.go", "_templ\\.go$"]
+  exclude_dir = ["tmp"]

@@ -1,0 +1,100 @@
+package views
+
+import (
+	"fmt"
+	"starcode/internal/store"
+)
+
+type HomeData struct {
+	Projects []store.Project
+	Threads  []store.Thread
+	Settings SettingsData
+}
+
+// Home is the projects overview: a composer that starts a thread with its
+// first prompt, then every project with its recent threads.
+templ Home(d HomeData) {
+	<main id="main" class="home">
+		<header id="mainhead" class="mainhead">
+			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">≡</button>
+			<nav class="crumbs"><span>All projects</span></nav>
+			<span class="spacer"></span>
+			<button class="btn ghost" data-on:click="$addproj = !$addproj; $nav = true">+ add project</button>
+		</header>
+		<div id="items" class="items">
+			<div class="items-inner">
+				if len(d.Projects) > 0 {
+					<h1 class="h">What should we work on?</h1>
+					<form
+						class="composer start"
+						data-signals={ signalsJSON(FirstOr(d.Settings.Agents, "claude"), "", "", "", fmt.Sprintf("project: %q", d.Projects[0].ID)) }
+						data-on:submit="evt.preventDefault(); @post('/api/threads')"
+					>
+						<textarea
+							class="prompt"
+							rows="3"
+							placeholder="Describe the task. Enter starts a new thread with this prompt; leave it empty to just open one."
+							data-bind:prompt
+							data-on:keydown="evt.key === 'Enter' && !evt.shiftKey && (evt.preventDefault(), @post('/api/threads'))"
+							autocomplete="off"
+							spellcheck="false"
+						></textarea>
+						<div class="composer-row">
+							<label class="chip" title="Project">
+								<span class="chip-icon">▣</span>
+								<select data-bind:project>
+									for _, p := range d.Projects {
+										<option value={ p.ID }>{ p.Name }</option>
+									}
+								</select>
+							</label>
+							@Chips(d.Settings, "", false, false)
+							<span class="spacer"></span>
+							<button class="btn round primary" type="submit" title="Start thread">↑</button>
+						</div>
+					</form>
+				} else {
+					<div class="empty">
+						<h1 class="h">Welcome to starcode</h1>
+						<p class="dim">Add a project folder to get started: use the + in the sidebar and paste an absolute path.</p>
+					</div>
+				}
+				for _, p := range d.Projects {
+					<section class="project-card">
+						<header>
+							<span class="project-name">{ p.Name }</span>
+							<span class="dim tiny-text ellipsis">{ p.Path }</span>
+							<span class="spacer"></span>
+							<button class="btn ghost" data-on:click={ "@post('/api/projects/" + p.ID + "/threads')" }>+ new thread</button>
+						</header>
+						<ul class="threads">
+							{{ n := 0 }}
+							for _, t := range d.Threads {
+								if t.ProjectID == p.ID && n < 8 {
+									{{ n++ }}
+									@ThreadRow(t, p, false, false)
+								}
+							}
+						</ul>
+						if n == 0 {
+							<p class="dim">No threads yet.</p>
+						}
+					</section>
+				}
+			</div>
+		</div>
+	</main>
+}
+
+// FirstOr picks the default agent for new threads: claude when available.
+func FirstOr(xs []string, def string) string {
+	for _, x := range xs {
+		if x == "claude" {
+			return x
+		}
+	}
+	if len(xs) > 0 {
+		return xs[0]
+	}
+	return def
+}

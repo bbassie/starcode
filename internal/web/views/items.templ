@@ -1,0 +1,149 @@
+package views
+
+import (
+	"encoding/json"
+	"starcode/internal/domain"
+	"starcode/internal/store"
+)
+
+type toolMeta struct {
+	Input   json.RawMessage `json:"input"`
+	Summary string          `json:"summary"`
+}
+
+func meta(it store.Item) toolMeta {
+	var m toolMeta
+	json.Unmarshal(it.Meta, &m)
+	return m
+}
+
+func itemGlyph(status string) string {
+	switch status {
+	case domain.ItemRunning:
+		return "…"
+	case domain.ItemDone:
+		return "✓"
+	case domain.ItemFailed:
+		return "✗"
+	case domain.ItemDeclined:
+		return "⊘"
+	case "interrupted":
+		return "■"
+	case "error":
+		return "✗"
+	}
+	return "·"
+}
+
+templ Item(it store.Item) {
+	switch it.Kind {
+		case domain.KindUser:
+			<div id={ "it-" + it.ID } class="item user">
+				<pre class="wrap bubble">{ it.Body }</pre>
+			</div>
+		case domain.KindAssistant:
+			<div id={ "it-" + it.ID } class={ "item", "assistant", "md", templ.KV("streaming", it.Status == domain.ItemRunning) }>
+				@templ.Raw(Markdown(it.Body))
+			</div>
+		case domain.KindThinking:
+			<details id={ "it-" + it.ID } class="item thinking" data-preserve-attr="open">
+				<summary><span class="tag">thinking</span> <span class="dim ellipsis">{ firstLine(it.Body) }</span></summary>
+				<pre class="wrap dim">{ it.Body }</pre>
+			</details>
+		case domain.KindTool:
+			@Tool(it)
+		case domain.KindResult:
+			<div id={ "it-" + it.ID } class={ "item", "result", "st-" + it.Status }>
+				<span class="tag">{ itemGlyph(it.Status) } { it.Status }</span>
+				<pre class="wrap dim">{ it.Body }</pre>
+			</div>
+		case domain.KindError:
+			<div id={ "it-" + it.ID } class="item error">
+				<span class="tag err">error</span>
+				<pre class="wrap">{ it.Body }</pre>
+			</div>
+		default:
+			<div id={ "it-" + it.ID } class="item system">
+				<span class="tag dim">system</span>
+				<pre class="wrap dim">{ it.Body }</pre>
+			</div>
+	}
+}
+
+templ Tool(it store.Item) {
+	{{ m := meta(it) }}
+	<details id={ "it-" + it.ID } class={ "item", "tool", "st-" + it.Status } open?={ it.Status == domain.ItemRunning } data-preserve-attr="open">
+		<summary>
+			<span class={ "glyph", "st-" + it.Status }>{ itemGlyph(it.Status) }</span>
+			<span class="tag">{ it.ToolName }</span>
+			<span class="ellipsis mono">{ m.Summary }</span>
+		</summary>
+		if len(m.Input) > 0 {
+			<pre class="block input">{ PrettyJSON(m.Input) }</pre>
+		}
+		if it.Output != "" {
+			<pre class="block output">{ clip(it.Output, 20000) }</pre>
+		}
+	</details>
+}
+
+templ Approval(a store.Approval) {
+	<div id={ "ap-" + a.ID } class="item approval">
+		<div class="approval-head">
+			<span class="tag warn">approval</span>
+			<span class="mono">{ a.ToolName }</span>
+			<span class="dim ellipsis">{ a.Description }</span>
+		</div>
+		if len(a.Input) > 0 {
+			<pre class="block input">{ clip(PrettyJSON(a.Input), 4000) }</pre>
+		}
+		<div class="approval-actions">
+			<button class="btn primary" data-on:click={ approveURL(a, domain.DecisionAllow) }>allow</button>
+			<button class="btn" data-on:click={ approveURL(a, domain.DecisionAllowSession) }>allow for session</button>
+			<button class="btn warn" data-on:click={ approveURL(a, domain.DecisionDeny) }>deny</button>
+		</div>
+	</div>
+}
+
+templ ApprovalResolved(a store.Approval) {
+	<div id={ "ap-" + a.ID } class={ "item", "approval", "resolved", "d-" + a.Decision }>
+		<span class="tag dim">approval</span>
+		<span class="mono">{ a.ToolName }</span>
+		<span class="dim">{ decisionLabel(a.Decision) }</span>
+	</div>
+}
+
+func approveURL(a store.Approval, decision string) string {
+	return "@post('/api/threads/" + a.ThreadID + "/approvals/" + a.ID + "/" + decision + "')"
+}
+
+func decisionLabel(d string) string {
+	switch d {
+	case domain.DecisionAllow:
+		return "allowed"
+	case domain.DecisionAllowSession:
+		return "allowed for session"
+	case domain.DecisionDeny:
+		return "denied"
+	}
+	return d
+}
+
+func firstLine(s string) string {
+	for i, r := range s {
+		if r == '\n' {
+			return s[:i]
+		}
+		if i > 120 {
+			return s[:i] + "…"
+		}
+	}
+	return s
+}
+
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "\n… (truncated)"
+}

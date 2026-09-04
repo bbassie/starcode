@@ -1,0 +1,199 @@
+// Package agent defines the interface between starcode and a coding agent
+// process (Claude Code, Codex, or a fake). Adapters translate their native
+// protocol into the normalized Event stream below; the app layer turns those
+// into domain events and never sees protocol details.
+package agent
+
+import (
+	"context"
+	"encoding/json"
+)
+
+// Config describes how to start or resume one thread's session.
+type Config struct {
+	// Cwd is the project directory the agent works in.
+	Cwd string
+	// Model is an adapter-specific model name; empty means the agent's default.
+	Model string
+	// ResumeID is the agent-side session id from a previous run (empty for a
+	// new session). Adapters must emit SessionInfo with the id they end up
+	// using so it can be stored.
+	ResumeID string
+	// PermissionMode is an adapter-specific mode ("default", "acceptEdits",
+	// "plan", "bypassPermissions" for Claude; approval policy for Codex).
+	// The ids come from Capabilities.PermissionModes; empty means default.
+	PermissionMode string
+	// Effort is a reasoning effort id from Capabilities; empty means default.
+	Effort string
+}
+
+// Agent creates sessions. One Agent value serves every thread that uses it.
+type Agent interface {
+	// Name is the stable identifier stored on threads ("claude", "codex").
+	Name() string
+	// Start launches (or resumes) a session. It must not block on the agent
+	// producing output; readiness surfaces as events.
+	Start(ctx context.Context, cfg Config) (Session, error)
+}
+
+// Session is one live conversation with an agent process.
+//
+// Send starts a turn. Interrupt cancels the running turn. Resolve answers a
+// pending ApprovalRequested. Events delivers normalized events in order and
+// is closed when the session ends (after a final Closed event). Close tears
+// the session down; it is safe to call more than once.
+type Session interface {
+	Send(ctx context.Context, text string) error
+	Interrupt(ctx context.Context) error
+	Resolve(ctx context.Context, approvalID string, decision Decision) error
+	Events() <-chan Event
+	Close() error
+}
+
+type Decision string
+
+const (
+	Allow Decision = "allow"
+	Deny  Decision = "deny"
+)
+
+// Event is a tagged union; exactly one field besides Kind is set.
+type Event struct {
+	Kind EventKind
+
+	SessionInfo   *SessionInfo
+	TurnStarted   *TurnStarted
+	TextDelta     *TextDelta
+	ThinkingDelta *ThinkingDelta
+	ToolStarted   *ToolStarted
+	ToolOutput    *ToolOutput
+	ToolCompleted *ToolCompleted
+	Approval      *ApprovalRequested
+	TurnCompleted *TurnCompleted
+	Notice        *Notice
+	Closed        *Closed
+}
+
+type EventKind string
+
+const (
+	KindSessionInfo   EventKind = "session_info"
+	KindTurnStarted   EventKind = "turn_started"
+	KindTextDelta     EventKind = "text_delta"
+	KindThinkingDelta EventKind = "thinking_delta"
+	KindToolStarted   EventKind = "tool_started"
+	KindToolOutput    EventKind = "tool_output"
+	KindToolCompleted EventKind = "tool_completed"
+	KindApproval      EventKind = "approval"
+	KindTurnCompleted EventKind = "turn_completed"
+	KindNotice        EventKind = "notice"
+	KindClosed        EventKind = "closed"
+)
+
+// SessionInfo carries the agent-side session id and, when known, the model
+// actually in use.
+type SessionInfo struct {
+	ExternalID string
+	Model      string
+}
+
+type TurnStarted struct {
+	TurnID string
+}
+
+// TextDelta is streamed assistant prose. MessageID groups deltas of one
+// message; adapters that only get whole messages send one delta.
+type TextDelta struct {
+	MessageID string
+	Text      string
+}
+
+type ThinkingDelta struct {
+	MessageID string
+	Text      string
+}
+
+// ToolStarted announces a tool call. Input may be incomplete for adapters
+// that stream it; a later ToolCompleted or a second ToolStarted with the same
+// ID and full Input finalizes it.
+type ToolStarted struct {
+	ID    string
+	Name  string
+	Input json.RawMessage
+	// Summary is a one-line human description (command, file path). Optional.
+	Summary string
+}
+
+type ToolOutput struct {
+	ID   string
+	Text string
+}
+
+type ToolCompleted struct {
+	ID      string
+	Status  string // "done" | "failed" | "declined"
+	Output  string // full output when the adapter has it; empty if streamed
+	IsError bool
+}
+
+// ApprovalRequested asks the human whether the agent may proceed.
+type ApprovalRequested struct {
+	ID          string
+	ToolID      string // the ToolStarted this belongs to, if any
+	ToolName    string
+	Description string
+	Input       json.RawMessage
+}
+
+type TurnCompleted struct {
+	TurnID       string
+	Status       string // "done" | "interrupted" | "error"
+	DurationMS   int64
+	CostUSD      float64
+	InputTokens  int64
+	OutputTokens int64
+	Error        string
+}
+
+// Notice is a non-fatal message to show in the transcript (rate limits,
+// warnings from the agent).
+type Notice struct {
+	Text string
+}
+
+// Closed is the last event; Err is nil on a clean exit.
+type Closed struct {
+	Err error
+}
+
+// Model is one entry an agent offers in the model picker.
+type Model struct {
+	ID          string
+	DisplayName string
+	Description string
+	Default     bool
+	// Efforts lists the reasoning effort levels this model accepts, when the
+	// agent knows them per model. Empty means "use the agent-wide list".
+	Efforts []string
+}
+
+// Choice is one selectable value of a thread setting.
+type Choice struct {
+	ID    string
+	Label string
+}
+
+// Capabilities describes what a thread on this agent can be configured
+// with. Everything here is what the signed-in account can use right now.
+type Capabilities struct {
+	Models []Model
+	// Efforts is the agent-wide reasoning effort list; empty ID means default.
+	Efforts []Choice
+	// PermissionModes are agent-specific ids passed back as Config.PermissionMode.
+	PermissionModes []Choice
+}
+
+// Describer is implemented by agents that can report their Capabilities.
+type Describer interface {
+	Capabilities(ctx context.Context) (Capabilities, error)
+}

@@ -1,0 +1,30 @@
+package views
+
+// Login is a plain form, no Datastar: it has to work before any cookie is
+// set and the browser handles the redirect itself.
+templ Login(next string, failed bool, theme string) {
+	<!DOCTYPE html>
+	<html lang="en" data-theme={ theme }>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="color-scheme" content="dark light"/>
+			<title>login · starcode</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+		</head>
+		<body class="login-page">
+			<form class="login" method="post" action="/login">
+				<h1 class="h">starcode</h1>
+				<p class="dim">this instance is protected. paste the token it was started with.</p>
+				<input type="hidden" name="next" value={ next }/>
+				<label class="dim">token
+					<input class="in" type="password" name="token" autocomplete="current-password" autofocus required/>
+				</label>
+				if failed {
+					<p class="err">wrong token.</p>
+				}
+				<button class="btn primary" type="submit">enter</button>
+			</form>
+		</body>
+	</html>
+}

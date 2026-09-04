@@ -1,0 +1,91 @@
+package views
+
+import "fmt"
+
+// Page identifies what the SSE stream should render.
+type Page struct {
+	View     string // "home" | "thread"
+	ThreadID string
+	Theme    string
+}
+
+func (p Page) streamURL() string {
+	if p.View == "thread" {
+		return fmt.Sprintf("/events?view=thread&id=%s", p.ThreadID)
+	}
+	return "/events?view=home"
+}
+
+templ Layout(title string, p Page) {
+	<!DOCTYPE html>
+	<html lang="en" data-theme={ p.Theme }>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="color-scheme" content="dark light"/>
+			<title>{ title } · starcode</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script type="module" src="/static/datastar.js"></script>
+		</head>
+		<body
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, theme: %q, prompt: '', path: '', q: '', addproj: false, _hb: 0}`, p.View == "thread", p.Theme) }
+			data-attr:data-theme="$theme"
+			data-init={ fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000})", p.streamURL()) }
+		>
+			<div class="shell">
+				<aside id="sidebar" data-class:open="$nav">
+					<div class="dim pad">loading…</div>
+				</aside>
+				<div class="backdrop" data-show="$nav || $git" data-on:click="$nav = false; $git = false"></div>
+				<main id="main">
+					<div class="dim pad">connecting…</div>
+				</main>
+				<aside id="gitpanel" data-class:open="$git"></aside>
+			</div>
+			<div id="toast"></div>
+			<datalist id="project-paths"></datalist>
+			// Keep the transcript pinned to the bottom while it streams, but
+			// only if the reader has not scrolled up to look at something.
+			<script>
+				(() => {
+					const near = (m) => m.scrollHeight - m.scrollTop - m.clientHeight < 160;
+					let stick = true;
+					document.addEventListener('scroll', (e) => {
+						if (e.target && e.target.id === 'items') stick = near(e.target);
+					}, true);
+					new MutationObserver(() => {
+						const m = document.getElementById('items');
+						if (m && stick) m.scrollTop = m.scrollHeight;
+					}).observe(document.body, { childList: true, subtree: true, characterData: true });
+				})();
+			</script>
+			<script>
+				(() => {
+					let timer, controller;
+					const update = (input) => {
+						clearTimeout(timer);
+						timer = setTimeout(async () => {
+							controller?.abort();
+							controller = new AbortController();
+							try {
+								const response = await fetch('/api/project-paths?path=' + encodeURIComponent(input.value), { signal: controller.signal });
+								if (!response.ok) return;
+								const paths = await response.json();
+								const list = document.getElementById('project-paths');
+								list.replaceChildren(...paths.map((path) => Object.assign(document.createElement('option'), { value: path })));
+							} catch (error) {
+								if (error.name !== 'AbortError') console.warn('project path completion failed', error);
+							}
+						}, 100);
+					};
+					document.addEventListener('input', (event) => {
+						if (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);
+					});
+					document.addEventListener('focusin', (event) => {
+						if (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);
+					});
+				})();
+			</script>
+		</body>
+	</html>
+}

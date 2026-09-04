@@ -1,0 +1,1 @@
+ALTER TABLE threads ADD COLUMN resolved_model TEXT NOT NULL DEFAULT '';

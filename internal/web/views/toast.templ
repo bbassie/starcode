@@ -1,0 +1,14 @@
+package views
+
+import "fmt"
+import "time"
+
+// Toast shows a transient error. The key attribute changes per render so
+// the CSS fade animation restarts even when the message repeats.
+templ Toast(msg string) {
+	<div id="toast" class="toast" data-key={ fmt.Sprint(time.Now().UnixNano()) }>
+		<span class="tag err">error</span>
+		<span>{ msg }</span>
+		<button class="btn tiny" data-on:click="el.parentElement.remove()">×</button>
+	</div>
+}

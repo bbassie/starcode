@@ -1,0 +1,143 @@
+package views
+
+import (
+	"fmt"
+	"starcode/internal/agent"
+	"strings"
+)
+
+// SettingsData feeds the agent/model/effort/mode chips. Caps is keyed by
+// agent name; chips for every agent are rendered and the ones for the
+// selected agent are shown, so switching agents needs no round trip.
+type SettingsData struct {
+	Agents   []string
+	Caps     map[string]agent.Capabilities
+	CapsErrs map[string]error
+	// Current values. They are rendered as the selected options so a morph
+	// of the composer keeps the selects in sync, and a model outside the
+	// catalog still shows up.
+	Agent, Model, Effort, Mode string
+}
+
+// Chips renders the setting selects as a row of pill dropdowns. onChange is
+// a Datastar action run when any of them changes (empty for none). The
+// surrounding form owns the signals: agent, model, effort, mode.
+templ Chips(d SettingsData, onChange string, disabled bool, agentLocked bool) {
+	<div class="chips">
+		if !agentLocked {
+			<label class="chip" title="Agent">
+				<select data-bind:agent disabled?={ disabled }
+					if onChange != "" {
+						data-on:change={ onChange }
+					}
+				>
+					for _, a := range d.Agents {
+						<option value={ a } selected?={ a == d.Agent }>{ a }</option>
+					}
+				</select>
+			</label>
+		}
+		for name, c := range d.Caps {
+			<label class="chip" title="Model" data-show={ "$agent == '" + name + "'" }>
+				<span class="chip-icon">{ agentGlyph(name) }</span>
+				<select data-bind:model disabled?={ disabled }
+					if onChange != "" {
+						data-on:change={ onChange }
+					}
+				>
+					<option value="" selected?={ d.Model == "" }>{ defaultModelLabel(c) }</option>
+					for _, m := range c.Models {
+						if m.ID != "" && m.ID != "default" {
+							<option value={ m.ID } title={ m.Description } selected?={ m.ID == d.Model }>{ m.DisplayName }</option>
+						}
+					}
+					if d.Model != "" && !hasModel(c, d.Model) {
+						<option value={ d.Model } selected>{ d.Model }</option>
+					}
+				</select>
+			</label>
+			<label class="chip" title="Reasoning effort" data-show={ "$agent == '" + name + "'" }>
+				<select data-bind:effort disabled?={ disabled }
+					if onChange != "" {
+						data-on:change={ onChange }
+					}
+				>
+					for _, e := range c.Efforts {
+						<option value={ e.ID } selected?={ e.ID == d.Effort }>{ effortLabel(e) }</option>
+					}
+				</select>
+			</label>
+			<label class="chip" title="Permission mode" data-show={ "$agent == '" + name + "'" }>
+				<span class="chip-icon">⚿</span>
+				<select data-bind:mode disabled?={ disabled }
+					if onChange != "" {
+						data-on:change={ onChange }
+					}
+				>
+					for _, m := range c.PermissionModes {
+						<option value={ m.ID } title={ m.Label } selected?={ m.ID == d.Mode }>{ modeLabel(m) }</option>
+					}
+				</select>
+			</label>
+		}
+		for name, err := range d.CapsErrs {
+			<span class="chip err" data-show={ "$agent == '" + name + "'" } title={ err.Error() }>catalog unavailable</span>
+		}
+	</div>
+}
+
+func hasModel(c agent.Capabilities, id string) bool {
+	for _, m := range c.Models {
+		if m.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultModelLabel(c agent.Capabilities) string {
+	for _, m := range c.Models {
+		if m.Default {
+			if m.ID == "default" || m.ID == "" {
+				return "Default (" + firstSentence(m.Description) + ")"
+			}
+			return "Default (" + m.DisplayName + ")"
+		}
+	}
+	return "Default model"
+}
+
+func effortLabel(e agent.Choice) string {
+	if e.ID == "" {
+		return "Reasoning: default"
+	}
+	return "Reasoning: " + e.Label
+}
+
+// modeLabel keeps the chip short; the full explanation is in the title.
+func modeLabel(m agent.Choice) string {
+	if m.ID == "" {
+		return "Mode: default"
+	}
+	return "Mode: " + m.ID
+}
+
+// firstSentence shortens "Opus 5 with 1M context · Best for…" to "Opus 5 1M".
+func firstSentence(s string) string {
+	for i, r := range s {
+		if r == '·' || r == '.' {
+			s = s[:i]
+			break
+		}
+	}
+	return strings.TrimSpace(strings.NewReplacer(" with ", " ", " context", "").Replace(s))
+}
+
+// signalsJSON builds the data-signals object for a settings form.
+func signalsJSON(agentName, model, effort, mode string, extra string) string {
+	s := fmt.Sprintf("{agent: %q, model: %q, effort: %q, mode: %q", agentName, model, effort, mode)
+	if extra != "" {
+		s += ", " + extra
+	}
+	return s + "}"
+}
