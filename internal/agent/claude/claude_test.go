@@ -27,6 +27,7 @@ const (
 	lineRateThrottled = `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1788525000,"rateLimitType":"five_hour"},"session_id":"s1"}`
 	lineCtlAck        = `{"type":"control_response","response":{"subtype":"success","request_id":"int-1","response":{"still_queued":[]}}}`
 	lineUnknown       = `{"type":"brand_new_thing","payload":{"a":1}}`
+	lineAITitle       = `{"type":"ai-title","aiTitle":" Terminal UI addition ","sessionId":"s1"}`
 
 	lineMsgStart  = `{"type":"stream_event","event":{"type":"message_start","message":{"model":"claude-haiku-4-5-20251001","id":"msg_011CeiAxjHc8XT31ZgLc3G27","type":"message","role":"assistant","content":[],"usage":{"input_tokens":10,"output_tokens":4}}},"session_id":"s1","parent_tool_use_id":null}`
 	lineMsgDelta  = `{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":46}},"session_id":"s1"}`
@@ -108,6 +109,13 @@ func TestParseInitEmitsSessionInfo(t *testing.T) {
 	}
 	if got, want := ev.SessionInfo.Model, "claude-haiku-4-5-20251001"; got != want {
 		t.Errorf("Model = %q, want %q", got, want)
+	}
+}
+
+func TestParseAITitle(t *testing.T) {
+	ev := one(t, feed(newState(nil), lineAITitle), agent.KindThreadTitle)
+	if ev.ThreadTitle == nil || ev.ThreadTitle.Title != "Terminal UI addition" {
+		t.Fatalf("thread title = %+v", ev.ThreadTitle)
 	}
 }
 
@@ -520,6 +528,31 @@ func TestChildEnvDropsNestedLaunchGuard(t *testing.T) {
 	}
 	if len(kept) != 2 {
 		t.Errorf("unrelated variables were dropped, kept %v", kept)
+	}
+}
+
+func TestPersistedTitle(t *testing.T) {
+	config := t.TempDir()
+	sessionID := "35450ae3-148d-4cc0-9493-76ae6036b29d"
+	dir := filepath.Join(config, "projects", "-tmp-work")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := strings.Join([]string{
+		`{"type":"user","sessionId":"` + sessionID + `"}`,
+		`{"type":"ai-title","aiTitle":" First title ","sessionId":"` + sessionID + `"}`,
+		`{"type":"ai-title","aiTitle":"Updated title","sessionId":"` + sessionID + `"}`,
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := persistedTitle(config, sessionID); got != "Updated title" {
+		t.Fatalf("persistedTitle = %q", got)
+	}
+	for _, invalid := range []string{"", "../escape", "session*"} {
+		if got := persistedTitle(config, invalid); got != "" {
+			t.Fatalf("persistedTitle(%q) = %q", invalid, got)
+		}
 	}
 }
 

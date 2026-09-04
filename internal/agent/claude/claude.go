@@ -23,6 +23,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -226,6 +227,7 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 	s := &session{
 		log:    a.log.With("agent", "claude"),
 		cmd:    cmd,
+		config: claudeConfigDir(),
 		cancel: cancel,
 		stdin:  stdin,
 		stdout: stdout,
@@ -261,10 +263,64 @@ func childEnv() []string {
 	return out
 }
 
+func claudeConfigDir() string {
+	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
+		return filepath.Clean(dir)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude")
+}
+
+// persistedTitle reads Claude Code's locally generated session name. The
+// public stream-json schema does not expose this record, but the CLI persists
+// it as {"type":"ai-title","aiTitle":"...","sessionId":"..."} in the
+// project transcript used by its own /resume picker. This is deliberately
+// best-effort: a missing or changed internal format leaves Starcode's prompt
+// title in place.
+func persistedTitle(configDir, sessionID string) string {
+	if configDir == "" || sessionID == "" || filepath.Base(sessionID) != sessionID || strings.ContainsAny(sessionID, "*?[") {
+		return ""
+	}
+	paths, err := filepath.Glob(filepath.Join(configDir, "projects", "*", sessionID+".jsonl"))
+	if err != nil {
+		return ""
+	}
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+		var title string
+		for scanner.Scan() {
+			var line struct {
+				Type      string `json:"type"`
+				AITitle   string `json:"aiTitle"`
+				SessionID string `json:"sessionId"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &line) == nil && line.Type == "ai-title" && line.SessionID == sessionID {
+				if name := strings.TrimSpace(line.AITitle); name != "" {
+					title = name
+				}
+			}
+		}
+		f.Close()
+		if title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
 // session is one live CLI process.
 type session struct {
 	log    *slog.Logger
 	cmd    *exec.Cmd
+	config string
 	cancel context.CancelFunc
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
@@ -276,6 +332,10 @@ type session struct {
 	// mu guards st, which both the reader and the caller mutate.
 	mu sync.Mutex
 	st *state
+	// title is the last native ai-title surfaced to the app. Claude's public
+	// stream does not currently include it, so readLoop supplements the
+	// stream from the CLI's session transcript after a turn completes.
+	title string
 
 	// emu orders sends on events against closing it.
 	emu      sync.Mutex
@@ -456,14 +516,41 @@ func (s *session) readLoop() {
 			}
 		}
 		for _, ev := range events {
+			if ev.Kind == agent.KindThreadTitle && ev.ThreadTitle != nil {
+				s.title = strings.TrimSpace(ev.ThreadTitle.Title)
+			}
+			if ev.Kind == agent.KindTurnCompleted {
+				s.mu.Lock()
+				sessionID := s.st.sessionID
+				s.mu.Unlock()
+				if err := s.emitPersistedTitle(sessionID); err != nil {
+					return
+				}
+			}
 			if err := s.emit(context.Background(), ev); err != nil {
 				return
+			}
+			// Resumed sessions already have a title on disk at init time. New
+			// sessions get another lookup just before their first completion.
+			if ev.Kind == agent.KindSessionInfo && ev.SessionInfo != nil {
+				if err := s.emitPersistedTitle(ev.SessionInfo.ExternalID); err != nil {
+					return
+				}
 			}
 		}
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
 		s.log.Warn("stdout read failed", "err", err)
 	}
+}
+
+func (s *session) emitPersistedTitle(sessionID string) error {
+	title := persistedTitle(s.config, sessionID)
+	if title == "" || title == s.title {
+		return nil
+	}
+	s.title = title
+	return s.emit(context.Background(), agent.Event{Kind: agent.KindThreadTitle, ThreadTitle: &agent.ThreadTitle{Title: title}})
 }
 
 // stderrTail returns the captured tail of the child's stderr. Used by tests.
@@ -535,6 +622,9 @@ func encodeLine(v any) []byte {
 // concurrent use; session guards it.
 type state struct {
 	log *slog.Logger
+	// sessionID is learned from system/init and identifies Claude's local
+	// persisted transcript.
+	sessionID string
 
 	// turnID is the id Send generated for the turn in flight.
 	turnID string
@@ -617,6 +707,7 @@ type outLine struct {
 	// system/init
 	SessionID string `json:"session_id"`
 	Model     string `json:"model"`
+	AITitle   string `json:"aiTitle"`
 
 	// stream_event
 	Event json.RawMessage `json:"event"`
@@ -725,6 +816,11 @@ func parseLine(line []byte, st *state) []agent.Event {
 		return parseRateLimit(&out, st)
 	case "result":
 		return parseResult(&out, st)
+	case "ai-title":
+		if title := strings.TrimSpace(out.AITitle); title != "" {
+			return []agent.Event{{Kind: agent.KindThreadTitle, ThreadTitle: &agent.ThreadTitle{Title: title}}}
+		}
+		return nil
 	case "control_response":
 		st.log.Debug("control response", "line", clip(string(line), 200))
 		return nil
@@ -737,6 +833,7 @@ func parseLine(line []byte, st *state) []agent.Event {
 func parseSystem(out *outLine, st *state) []agent.Event {
 	switch out.Subtype {
 	case "init":
+		st.sessionID = out.SessionID
 		return []agent.Event{{
 			Kind:        agent.KindSessionInfo,
 			SessionInfo: &agent.SessionInfo{ExternalID: out.SessionID, Model: out.Model},
