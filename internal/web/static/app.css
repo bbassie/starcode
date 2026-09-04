@@ -572,11 +572,23 @@ details.item.tool > .block { margin: 4px 0 4px 1.2em; }
 .usage-agent-mark.agent-codex { color: var(--fg); }
 .usage-agent-mark.agent-fake { color: var(--accent); }
 .usage-chart-wrap h2, .usage-totals h2, .usage-breakdown h2 { margin-bottom: 12px; }
+.usage-chart-head { min-height: 28px; display: flex; align-items: flex-start; gap: 16px; }
+.usage-chart-head h2 { margin-right: auto; }
+.usage-chart-legend { display: flex; align-items: center; justify-content: flex-end; gap: 14px; flex-wrap: wrap; color: var(--fg-dim); font-size: 0.78em; }
+.usage-chart-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.usage-chart-legend i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.usage-chart-legend i.agent-claude { background: #d9774f; }
+.usage-chart-legend i.agent-codex { background: var(--fg); }
+.usage-chart-legend i.agent-fake { background: var(--accent); }
 .usage-chart { position: relative; height: 260px; }
 .usage-chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .chart-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.chart-area { fill: color-mix(in srgb, var(--accent) 16%, transparent); stroke: none; }
+.chart-area { fill: color-mix(in srgb, var(--accent) 9%, transparent); stroke: none; }
+.chart-area.agent-claude { fill: color-mix(in srgb, #d9774f 11%, transparent); }
+.chart-area.agent-codex { fill: color-mix(in srgb, var(--fg) 7%, transparent); }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.chart-line.agent-claude { stroke: #d9774f; }
+.chart-line.agent-codex { stroke: var(--fg); }
 .chart-max, .chart-zero { position: absolute; left: 0; color: var(--fg-dim); font-size: 0.75em; transform: translateY(-50%); }
 .chart-max { top: 15.2%; }
 .chart-zero { top: 88.8%; }

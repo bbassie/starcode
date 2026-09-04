@@ -52,6 +52,7 @@ func (s *Server) usageData(ctx context.Context, days int, metric string) (views.
 	}
 	agents := make(map[string]*usageAccumulator)
 	models := make(map[string]*usageAccumulator)
+	series := make(map[string][]views.UsagePoint)
 	threads := make(map[string]bool)
 	for _, entry := range entries {
 		bucket := time.Date(entry.CreatedAt.UTC().Year(), entry.CreatedAt.UTC().Month(), entry.CreatedAt.UTC().Day(), 0, 0, 0, 0, time.UTC)
@@ -77,6 +78,15 @@ func (s *Server) usageData(ctx context.Context, days int, metric string) (views.
 		if agent == "" {
 			agent = "unknown"
 		}
+		if series[agent] == nil {
+			series[agent] = make([]views.UsagePoint, len(d.Daily))
+			for i := range d.Daily {
+				series[agent][i].Date = d.Daily[i].Date
+			}
+		}
+		series[agent][index].CostUSD += entry.CostUSD
+		series[agent][index].InputTokens += entry.InputTokens
+		series[agent][index].OutputTokens += entry.OutputTokens
 		addUsage(agents, agent, agentName(agent), agent, entry.ThreadID, entry.CostUSD, entry.InputTokens, entry.OutputTokens)
 		model := entry.Model
 		if model == "" {
@@ -86,6 +96,9 @@ func (s *Server) usageData(ctx context.Context, days int, metric string) (views.
 	}
 	d.Threads = len(threads)
 	d.Agents = finishUsageGroups(agents, metric)
+	for _, agent := range d.Agents {
+		d.Series = append(d.Series, views.UsageSeries{Name: agent.Name, Agent: agent.Agent, Points: series[agent.Agent]})
+	}
 	d.Models = finishUsageGroups(models, metric)
 	return d, nil
 }

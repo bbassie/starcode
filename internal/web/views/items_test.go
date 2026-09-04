@@ -41,10 +41,10 @@ func TestUsageChartAndFormatting(t *testing.T) {
 		{Date: time.Now(), CostUSD: 1, InputTokens: 1_000},
 		{Date: time.Now(), CostUSD: 2, InputTokens: 2_000},
 	}
-	if got := usageChartPath(points, "cost"); !strings.HasPrefix(got, "M 48.0 130.0") || !strings.Contains(got, "L 772.0 38.0") {
+	if got := usageChartPath(points, "cost", 2); !strings.HasPrefix(got, "M 48.0 130.0") || !strings.Contains(got, "L 772.0 38.0") {
 		t.Errorf("cost chart path = %q", got)
 	}
-	if got := usageAreaPath(points, "tokens"); !strings.HasSuffix(got, "L 772 222 L 48 222 Z") {
+	if got := usageAreaPath(points, "tokens", 2_000); !strings.HasSuffix(got, "L 772 222 L 48 222 Z") {
 		t.Errorf("token area path = %q", got)
 	}
 	if got := formatTokens(1_250_000); got != "1.25M" {

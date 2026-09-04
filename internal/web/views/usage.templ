@@ -24,6 +24,12 @@ type UsageGroup struct {
 	OutputTokens int64
 }
 
+type UsageSeries struct {
+	Name   string
+	Agent  string
+	Points []UsagePoint
+}
+
 type UsageData struct {
 	Days         int
 	Metric       string
@@ -35,6 +41,7 @@ type UsageData struct {
 	InputTokens  int64
 	OutputTokens int64
 	Daily        []UsagePoint
+	Series       []UsageSeries
 	Agents       []UsageGroup
 	Models       []UsageGroup
 }
@@ -57,13 +64,9 @@ func usageGroupValue(g UsageGroup, metric string) float64 {
 	return g.CostUSD
 }
 
-func usageChartPath(points []UsagePoint, metric string) string {
+func usageChartPath(points []UsagePoint, metric string, max float64) string {
 	if len(points) == 0 {
 		return ""
-	}
-	max := 0.0
-	for _, p := range points {
-		max = math.Max(max, usageValue(p, metric))
 	}
 	if max == 0 {
 		max = 1
@@ -84,19 +87,26 @@ func usageChartPath(points []UsagePoint, metric string) string {
 	return out.String()
 }
 
-func usageAreaPath(points []UsagePoint, metric string) string {
-	line := usageChartPath(points, metric)
+func usageAreaPath(points []UsagePoint, metric string, max float64) string {
+	line := usageChartPath(points, metric, max)
 	if line == "" {
 		return ""
 	}
 	return line + " L 772 222 L 48 222 Z"
 }
 
-func usageChartMax(points []UsagePoint, metric string) string {
+func usageChartPeak(series []UsageSeries, metric string) float64 {
 	max := 0.0
-	for _, p := range points {
-		max = math.Max(max, usageValue(p, metric))
+	for _, item := range series {
+		for _, p := range item.Points {
+			max = math.Max(max, usageValue(p, metric))
+		}
 	}
+	return max
+}
+
+func usageChartMax(series []UsageSeries, metric string) string {
+	max := usageChartPeak(series, metric)
 	if metric == "tokens" {
 		return formatTokens(int64(max))
 	}
@@ -175,6 +185,7 @@ templ AgentMark(agent string) {
 }
 
 templ UsagePage(d UsageData) {
+	{{ chartMax := usageChartPeak(d.Series, d.Metric) }}
 	<main id="main" class="settings-page usage-page">
 		<header id="mainhead" class="mainhead">
 			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
@@ -218,16 +229,27 @@ templ UsagePage(d UsageData) {
 							</ul>
 						</section>
 						<section class="usage-chart-wrap">
-							<h2>Daily { d.Metric }</h2>
+							<header class="usage-chart-head">
+								<h2>Daily { d.Metric }</h2>
+								<div class="usage-chart-legend">
+									for _, series := range d.Series {
+										<span><i class={ "agent-" + series.Agent }></i>{ series.Name }</span>
+									}
+								</div>
+							</header>
 							<div class="usage-chart">
 								<svg viewBox="0 0 800 250" role="img" aria-label={ "Daily " + d.Metric + " chart" } preserveAspectRatio="none">
 									<line x1="48" y1="38" x2="772" y2="38" class="chart-grid"></line>
 									<line x1="48" y1="130" x2="772" y2="130" class="chart-grid"></line>
 									<line x1="48" y1="222" x2="772" y2="222" class="chart-grid"></line>
-									<path d={ usageAreaPath(d.Daily, d.Metric) } class="chart-area"></path>
-									<path d={ usageChartPath(d.Daily, d.Metric) } class="chart-line"></path>
+									for _, series := range d.Series {
+										<path d={ usageAreaPath(series.Points, d.Metric, chartMax) } class={ "chart-area", "agent-" + series.Agent }></path>
+									}
+									for _, series := range d.Series {
+										<path d={ usageChartPath(series.Points, d.Metric, chartMax) } class={ "chart-line", "agent-" + series.Agent }></path>
+									}
 								</svg>
-								<span class="chart-max">{ usageChartMax(d.Daily, d.Metric) }</span>
+								<span class="chart-max">{ usageChartMax(d.Series, d.Metric) }</span>
 								<span class="chart-zero">0</span>
 								<span class="chart-start">{ usageChartDate(d.Start, d.Days) }</span>
 								<span class="chart-end">{ usageChartDate(d.End, d.Days) }</span>
