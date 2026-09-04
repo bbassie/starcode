@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"starcode/internal/domain"
 )
@@ -16,6 +17,41 @@ func open(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+func TestUsageReconstructsAgentAndModelHistory(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if _, err := s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/usage", Name: "usage"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "t1",
+		domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "usage", Agent: "claude", Model: "sonnet"},
+		domain.AgentSessionBound{ExternalID: "ext", Model: "claude-sonnet-5"},
+		domain.TurnCompleted{TurnID: "one", Status: "done", CostUSD: 0.25, InputTok: 100, OutputTok: 20},
+		domain.ThreadSettingsChanged{Agent: "codex", Model: "gpt-5.6"},
+		domain.TurnCompleted{TurnID: "two", Status: "done", InputTok: 200, OutputTok: 40},
+		domain.ThreadDeleted{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := s.Usage(ctx, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if got := entries[0]; got.Agent != "claude" || got.Model != "claude-sonnet-5" || got.CostUSD != 0.25 || got.InputTokens != 100 || got.OutputTokens != 20 {
+		t.Errorf("first entry = %+v", got)
+	}
+	if got := entries[1]; got.Agent != "codex" || got.Model != "gpt-5.6" || got.CostUSD != 0 || got.InputTokens != 200 || got.OutputTokens != 40 {
+		t.Errorf("second entry = %+v", got)
+	}
+	if future, err := s.Usage(ctx, time.Now().Add(time.Hour)); err != nil || len(future) != 0 {
+		t.Errorf("future usage = %#v, %v", future, err)
+	}
 }
 
 func TestAppendProjectsAndReplay(t *testing.T) {

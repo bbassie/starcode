@@ -4,9 +4,11 @@ import "fmt"
 
 // Page identifies what the SSE stream should render.
 type Page struct {
-	View     string // "home" | "thread" | "settings"
-	ThreadID string
-	Theme    string
+	View        string // "home" | "thread" | "settings" | "usage"
+	ThreadID    string
+	Theme       string
+	UsageDays   int
+	UsageMetric string
 }
 
 func (p Page) streamURL() string {
@@ -15,6 +17,9 @@ func (p Page) streamURL() string {
 	}
 	if p.View == "settings" {
 		return "/events?view=settings"
+	}
+	if p.View == "usage" {
+		return fmt.Sprintf("/events?view=usage&days=%d&metric=%s", p.UsageDays, p.UsageMetric)
 	}
 	return "/events?view=home"
 }

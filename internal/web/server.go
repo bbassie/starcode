@@ -47,6 +47,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string) *Server {
 
 	s.mux.HandleFunc("GET /{$}", s.home)
 	s.mux.HandleFunc("GET /settings", s.settings)
+	s.mux.HandleFunc("GET /settings/usage", s.usage)
 	s.mux.HandleFunc("GET /threads/{id}", s.thread)
 	s.mux.HandleFunc("GET /events", s.events)
 
@@ -205,6 +206,11 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	views.Layout("settings", views.Page{View: "settings", Theme: s.theme(r)}).Render(r.Context(), w)
+}
+
+func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
+	days, metric := usageParams(r)
+	views.Layout("usage", views.Page{View: "usage", Theme: s.theme(r), UsageDays: days, UsageMetric: metric}).Render(r.Context(), w)
 }
 
 func (s *Server) thread(w http.ResponseWriter, r *http.Request) {

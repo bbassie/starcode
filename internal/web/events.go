@@ -20,13 +20,14 @@ import (
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	view := r.URL.Query().Get("view")
 	threadID := r.URL.Query().Get("id")
+	usageDays, usageMetric := usageParams(r)
 	theme := s.theme(r)
 	ctx := r.Context()
 
 	// Subscribe before the initial render so nothing slips between them.
 	ch := s.App.Bus.Subscribe(ctx)
 	sse := datastar.NewSSE(w, r)
-	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, dirty: map[string]bool{}}
+	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, usageDays: usageDays, usageMetric: usageMetric, dirty: map[string]bool{}}
 
 	if err := c.renderAll(ctx); err != nil {
 		s.Log.Warn("initial render", "err", err)
@@ -72,11 +73,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 type conn struct {
-	s        *Server
-	sse      *datastar.ServerSentEventGenerator
-	view     string
-	threadID string
-	theme    string
+	s           *Server
+	sse         *datastar.ServerSentEventGenerator
+	view        string
+	threadID    string
+	theme       string
+	usageDays   int
+	usageMetric string
 	// dirty items get re-rendered on the next flush tick so a burst of
 	// deltas costs one morph instead of one per token.
 	dirty     map[string]bool
@@ -117,6 +120,15 @@ func (c *conn) renderAll(ctx context.Context) error {
 			return err
 		}
 		return c.sse.PatchElementTempl(views.GitPanel(views.GitData{}))
+	case "usage":
+		d, err := c.s.usageData(ctx, c.usageDays, c.usageMetric)
+		if err != nil {
+			return err
+		}
+		if err := c.sse.PatchElementTempl(views.UsagePage(d)); err != nil {
+			return err
+		}
+		return c.sse.PatchElementTempl(views.GitPanel(views.GitData{}))
 	default:
 		ps, err := c.s.App.Store.Projects(ctx)
 		if err != nil {
@@ -136,7 +148,7 @@ func (c *conn) renderAll(ctx context.Context) error {
 }
 
 func (c *conn) renderSidebar(ctx context.Context) error {
-	d, err := c.s.sidebarData(ctx, c.threadID, c.view == "settings")
+	d, err := c.s.sidebarData(ctx, c.threadID, c.view == "settings" || c.view == "usage")
 	if err != nil {
 		return err
 	}
@@ -355,6 +367,9 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 			return c.sse.PatchElementTempl(views.ApprovalResolved(a))
 		}
 	case domain.TurnCompleted:
+		if c.view == "usage" {
+			return c.renderAll(ctx)
+		}
 		c.gitDirty = true
 	}
 	return nil

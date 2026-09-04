@@ -81,6 +81,19 @@ type QueuedPrompt struct {
 	CreatedAt time.Time
 }
 
+// UsageEntry is one completed agent turn reconstructed from the event log.
+// Agent and Model reflect the settings that were active when the turn ended,
+// including threads that have since been deleted from the projections.
+type UsageEntry struct {
+	ThreadID     string
+	Agent        string
+	Model        string
+	CostUSD      float64
+	InputTokens  int64
+	OutputTokens int64
+	CreatedAt    time.Time
+}
+
 // Store wraps the database. Published is called after every successful
 // append with the committed events; it is where the bus hangs off.
 type Store struct {
@@ -448,6 +461,54 @@ func (s *Store) Threads(ctx context.Context) ([]Thread, error) {
 			return nil, err
 		}
 		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// Usage returns completed turns at or after since. It reads the event log
+// rather than a projection so existing databases immediately have history.
+func (s *Store) Usage(ctx context.Context, since time.Time) ([]UsageEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT thread_id,type,payload,created_at FROM events
+		WHERE thread_id IS NOT NULL AND type IN ('thread.created','thread.settings','thread.agent','thread.session_bound','turn.completed')
+		ORDER BY seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type threadUsageState struct{ agent, model string }
+	states := make(map[string]threadUsageState)
+	var out []UsageEntry
+	for rows.Next() {
+		var threadID, typ, raw, created string
+		if err := rows.Scan(&threadID, &typ, &raw, &created); err != nil {
+			return nil, err
+		}
+		payload, err := domain.Decode(typ, []byte(raw))
+		if err != nil {
+			return nil, err
+		}
+		state := states[threadID]
+		switch p := deref(payload).(type) {
+		case domain.ThreadCreated:
+			state.agent, state.model = p.Agent, p.Model
+		case domain.ThreadSettingsChanged:
+			state.agent, state.model = p.Agent, p.Model
+		case domain.AgentSessionBound:
+			if p.Model != "" {
+				state.model = p.Model
+			}
+		case domain.TurnCompleted:
+			ts, _ := time.Parse(timeFmt, created)
+			if since.IsZero() || !ts.Before(since) {
+				model := state.model
+				if model == "" {
+					model = "default"
+				}
+				out = append(out, UsageEntry{ThreadID: threadID, Agent: state.agent, Model: model, CostUSD: p.CostUSD, InputTokens: p.InputTok, OutputTokens: p.OutputTok, CreatedAt: ts})
+			}
+		}
+		states[threadID] = state
 	}
 	return out, rows.Err()
 }

@@ -170,10 +170,7 @@ templ SettingsPage(d SettingsPageData) {
 		</header>
 		<div class="settings-scroll">
 			<div class="settings-shell">
-				<nav class="settings-menu" aria-label="Settings sections">
-					<div class="settings-menu-title">Settings</div>
-					<a class="current" href="#appearance">@Icon("palette", "ui-icon") Appearance</a>
-				</nav>
+				@SettingsNav("appearance")
 				<div class="settings-content">
 					<section id="appearance" class="settings-section">
 						<header>
@@ -210,4 +207,12 @@ templ SettingsPage(d SettingsPageData) {
 			</div>
 		</div>
 	</main>
+}
+
+templ SettingsNav(current string) {
+	<nav class="settings-menu" aria-label="Settings sections">
+		<div class="settings-menu-title">Settings</div>
+		<a class={ templ.KV("current", current == "appearance") } href="/settings">@Icon("palette", "ui-icon") Appearance</a>
+		<a class={ templ.KV("current", current == "usage") } href="/settings/usage">@Icon("chart-no-axes-combined", "ui-icon") Usage</a>
+	</nav>
 }

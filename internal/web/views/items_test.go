@@ -3,7 +3,9 @@ package views
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestSplitAttachments(t *testing.T) {
@@ -31,6 +33,25 @@ func TestSplitAttachments(t *testing.T) {
 		if text, atts := splitAttachments(plain); text != plain || len(atts) != 0 {
 			t.Fatalf("splitAttachments(%q) = %q, %v", plain, text, atts)
 		}
+	}
+}
+
+func TestUsageChartAndFormatting(t *testing.T) {
+	points := []UsagePoint{
+		{Date: time.Now(), CostUSD: 1, InputTokens: 1_000},
+		{Date: time.Now(), CostUSD: 2, InputTokens: 2_000},
+	}
+	if got := usageChartPath(points, "cost"); !strings.HasPrefix(got, "M 48.0 130.0") || !strings.Contains(got, "L 772.0 38.0") {
+		t.Errorf("cost chart path = %q", got)
+	}
+	if got := usageAreaPath(points, "tokens"); !strings.HasSuffix(got, "L 772 222 L 48 222 Z") {
+		t.Errorf("token area path = %q", got)
+	}
+	if got := formatTokens(1_250_000); got != "1.25M" {
+		t.Errorf("formatTokens = %q", got)
+	}
+	if got := formatCost(0.0042); got != "$0.0042" {
+		t.Errorf("formatCost = %q", got)
 	}
 }
 
