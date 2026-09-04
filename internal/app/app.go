@@ -304,18 +304,23 @@ func (a *App) CancelQueuedPrompt(ctx context.Context, threadID, promptID string)
 // sends it. promptMu must be held so an arriving HTTP send cannot overtake a
 // turn-completion handoff.
 func (a *App) startPromptLocked(ctx context.Context, l *live, t store.Thread, queuedID, text string) error {
+	// Serialize the initial fallback with native title notifications. If a
+	// native title won the race, prompt text must not overwrite it.
+	l.mu.Lock()
 	var evs []any
 	if queuedID != "" {
 		evs = append(evs, domain.PromptDequeued{ID: queuedID})
 	}
 	evs = append(evs, domain.ItemStarted{ID: newID(), Kind: domain.KindUser, Body: text, Status: domain.ItemDone})
-	if t.Title == "new thread" {
+	if t.Title == "new thread" && !l.nativeTitle {
 		evs = append(evs, domain.ThreadRenamed{Title: titleFrom(text)})
 	}
 	evs = append(evs, domain.ThreadStatusChanged{Status: domain.StatusRunning})
 	if _, err := a.Store.Append(ctx, t.ID, evs...); err != nil {
+		l.mu.Unlock()
 		return err
 	}
+	l.mu.Unlock()
 	if err := l.sess.Send(ctx, text); err != nil {
 		a.Store.Append(ctx, t.ID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
 		return err
@@ -414,6 +419,7 @@ type live struct {
 	// turn-scoped bookkeeping
 	interrupted bool
 	turnID      string
+	nativeTitle bool
 	seenMsgs    map[string]string // agent message id -> item id
 	seenTools   map[string]bool
 	toolOutput  map[string]bool // tool id -> streamed output seen
@@ -485,6 +491,15 @@ func (a *App) pump(l *live) {
 			t, err := a.Store.Thread(ctx, tid)
 			if err == nil && (t.ExternalSessionID != e.SessionInfo.ExternalID || (e.SessionInfo.Model != "" && t.ResolvedModel != e.SessionInfo.Model)) {
 				append_(domain.AgentSessionBound{ExternalID: e.SessionInfo.ExternalID, Model: e.SessionInfo.Model})
+			}
+		case agent.KindThreadTitle:
+			title := strings.TrimSpace(e.ThreadTitle.Title)
+			l.mu.Lock()
+			l.nativeTitle = title != ""
+			l.mu.Unlock()
+			t, err := a.Store.Thread(ctx, tid)
+			if title != "" && err == nil && title != t.Title {
+				append_(domain.ThreadRenamed{Title: title})
 			}
 		case agent.KindTurnStarted:
 			l.mu.Lock()

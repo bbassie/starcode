@@ -108,6 +108,7 @@ func TestSendPromptQueuesAndDispatchesInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	sess.events <- agent.Event{Kind: agent.KindThreadTitle, ThreadTitle: &agent.ThreadTitle{Title: "Agent generated title"}}
 	sess.events <- agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{TurnID: "turn-1", Status: "done", DurationMS: 10}}
 	if got := receivePrompt(t, sess.sent); got != "second" {
 		t.Fatalf("queued send = %q", got)
@@ -130,6 +131,10 @@ func TestSendPromptQueuesAndDispatchesInOrder(t *testing.T) {
 	}
 	if len(items) != 3 || items[0].Kind != domain.KindUser || items[0].Body != "first" || items[1].Kind != domain.KindResult || items[2].Kind != domain.KindUser || items[2].Body != "second" {
 		t.Fatalf("transcript order = %+v", items)
+	}
+	thread, err := st.Thread(ctx, threadID)
+	if err != nil || thread.Title != "Agent generated title" {
+		t.Fatalf("thread title = %q, %v", thread.Title, err)
 	}
 }
 

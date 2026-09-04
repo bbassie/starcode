@@ -124,8 +124,9 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 	}
 	var res struct {
 		Thread struct {
-			ID    string `json:"id"`
-			Model string `json:"model"`
+			ID    string  `json:"id"`
+			Model string  `json:"model"`
+			Name  *string `json:"name"`
 		} `json:"thread"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
@@ -146,6 +147,11 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 		Kind:        agent.KindSessionInfo,
 		SessionInfo: &agent.SessionInfo{ExternalID: res.Thread.ID, Model: model},
 	})
+	if res.Thread.Name != nil {
+		if title := strings.TrimSpace(*res.Thread.Name); title != "" {
+			s.emit(agent.Event{Kind: agent.KindThreadTitle, ThreadTitle: &agent.ThreadTitle{Title: title}})
+		}
+	}
 	return s, nil
 }
 

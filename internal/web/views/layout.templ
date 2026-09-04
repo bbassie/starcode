@@ -23,7 +23,7 @@ templ Layout(title string, p Page) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 			<meta name="color-scheme" content="dark light"/>
-			<title>{ title } · starcode</title>
+			@PageTitle(title)
 			<link rel="icon" href={ asset("/static/favicon.svg") } type="image/svg+xml"/>
 			<link rel="stylesheet" href={ asset("/static/app.css") }/>
 			<script type="module" src={ asset("/static/datastar.js") }></script>
@@ -183,4 +183,8 @@ templ Layout(title string, p Page) {
 			</script>
 		</body>
 	</html>
+}
+
+templ PageTitle(title string) {
+	<title id="page-title">{ title } · starcode</title>
 }

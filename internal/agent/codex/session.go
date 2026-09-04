@@ -282,8 +282,18 @@ func (s *session) handleNotification(method string, params json.RawMessage) {
 
 	case "thread/started", "thread/status/changed",
 		"thread/settings/updated", "serverRequest/resolved", "turn/diff/updated",
-		"turn/plan/updated", "thread/closed", "thread/name/updated":
+		"turn/plan/updated", "thread/closed":
 		s.log.Debug("codex: notification ignored", "method", method)
+
+	case "thread/name/updated":
+		var p struct {
+			ThreadName *string `json:"threadName"`
+		}
+		if err := json.Unmarshal(params, &p); err == nil && p.ThreadName != nil {
+			if title := strings.TrimSpace(*p.ThreadName); title != "" {
+				s.emit(agent.Event{Kind: agent.KindThreadTitle, ThreadTitle: &agent.ThreadTitle{Title: title}})
+			}
+		}
 
 	case "turn/started":
 		var p struct {

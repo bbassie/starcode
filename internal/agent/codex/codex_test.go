@@ -254,7 +254,7 @@ func TestStartHandshakeAndThreadStart(t *testing.T) {
 	if _, ok := p["threadId"]; ok {
 		t.Fatalf("thread/start should not carry a threadId: %v", p)
 	}
-	f.reply(m.ID, `{"thread":{"id":"thr_9","model":"gpt-5.1-codex"}}`)
+	f.reply(m.ID, `{"thread":{"id":"thr_9","model":"gpt-5.1-codex","name":"Generated thread name"}}`)
 
 	r := <-res
 	if r.err != nil {
@@ -266,6 +266,10 @@ func TestStartHandshakeAndThreadStart(t *testing.T) {
 	}
 	if ev.SessionInfo.ExternalID != "thr_9" || ev.SessionInfo.Model != "gpt-5.1-codex" {
 		t.Fatalf("session info = %+v", ev.SessionInfo)
+	}
+	ev = expectKind(t, r.sess.Events(), agent.KindThreadTitle)
+	if ev.ThreadTitle.Title != "Generated thread name" {
+		t.Fatalf("thread title = %+v", ev.ThreadTitle)
 	}
 	if a.Name() != "codex" {
 		t.Fatalf("Name = %q", a.Name())
@@ -760,6 +764,20 @@ func TestMiscItemMappings(t *testing.T) {
 	f.send(`{"method":"thread/status/changed","params":{"threadId":"thr_1","status":"running"}}`)
 	f.send(`{"method":"turn/completed","params":{"threadId":"thr_1","turn":{"id":"turn_1","status":"completed"}}}`)
 	expectKind(t, events, agent.KindTurnCompleted)
+}
+
+func TestThreadNameUpdated(t *testing.T) {
+	_, f, s := harness(t)
+	f.send(`{"method":"thread/name/updated","params":{"threadId":"thr_1","threadName":" Fix flaky queue tests "}}`)
+	ev := expectKind(t, s.Events(), agent.KindThreadTitle)
+	if ev.ThreadTitle == nil || ev.ThreadTitle.Title != "Fix flaky queue tests" {
+		t.Fatalf("thread title = %+v", ev.ThreadTitle)
+	}
+
+	// A cleared server-side name should leave Starcode's fallback intact.
+	f.send(`{"method":"thread/name/updated","params":{"threadId":"thr_1","threadName":null}}`)
+	f.send(`{"method":"warning","params":{"threadId":"thr_1","message":"next"}}`)
+	expectKind(t, s.Events(), agent.KindNotice)
 }
 
 func TestItemEventsAnnounceAnUnseenTurn(t *testing.T) {

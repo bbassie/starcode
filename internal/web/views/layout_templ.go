@@ -58,29 +58,24 @@ func Layout(title string, p Page) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\"><meta name=\"color-scheme\" content=\"dark light\"><title>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\"><meta name=\"color-scheme\" content=\"dark light\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var3 string
-		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(title)
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 26, Col: 17}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
+		templ_7745c5c3_Err = PageTitle(title).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, " · starcode</title><link rel=\"icon\" href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<link rel=\"icon\" href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var4 templ.SafeURL
-		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/favicon.svg"))
+		var templ_7745c5c3_Var3 templ.SafeURL
+		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/favicon.svg"))
 		if templ_7745c5c3_Err != nil {
 			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 27, Col: 55}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -88,12 +83,12 @@ func Layout(title string, p Page) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var5 templ.SafeURL
-		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/app.css"))
+		var templ_7745c5c3_Var4 templ.SafeURL
+		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/app.css"))
 		if templ_7745c5c3_Err != nil {
 			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 28, Col: 57}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -101,12 +96,12 @@ func Layout(title string, p Page) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var6 string
-		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/datastar.js"))
+		var templ_7745c5c3_Var5 string
+		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/datastar.js"))
 		if templ_7745c5c3_Err != nil {
 			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 29, Col: 59}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var6)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -119,12 +114,12 @@ func Layout(title string, p Page) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var7 templ.SafeURL
-			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/xterm.css"))
+			var templ_7745c5c3_Var6 templ.SafeURL
+			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/xterm.css"))
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 31, Col: 60}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -132,12 +127,12 @@ func Layout(title string, p Page) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var8 string
-			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm.js"))
+			var templ_7745c5c3_Var7 string
+			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm.js"))
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 32, Col: 49}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -145,12 +140,12 @@ func Layout(title string, p Page) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var9 string
-			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm-addon-fit.js"))
+			var templ_7745c5c3_Var8 string
+			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm-addon-fit.js"))
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 33, Col: 59}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -158,12 +153,12 @@ func Layout(title string, p Page) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var10 string
-			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/term.js"))
+			var templ_7745c5c3_Var9 string
+			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/term.js"))
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 34, Col: 48}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -176,12 +171,12 @@ func Layout(title string, p Page) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var11 string
-		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], _hb: 0}`, p.View == "thread", p.Theme))
+		var templ_7745c5c3_Var10 string
+		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], _hb: 0}`, p.View == "thread", p.Theme))
 		if templ_7745c5c3_Err != nil {
 			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 38, Col: 265}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -189,12 +184,12 @@ func Layout(title string, p Page) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var12 string
-		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000})", p.streamURL()))
+		var templ_7745c5c3_Var11 string
+		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000})", p.streamURL()))
 		if templ_7745c5c3_Err != nil {
 			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 40, Col: 100}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -209,6 +204,48 @@ func Layout(title string, p Page) templ.Component {
 			}
 		}
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "</div><aside id=\"gitpanel\" data-class:open=\"$git\"></aside></div><div id=\"toast\"></div><datalist id=\"project-paths\"></datalist><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst near = (m) => m.scrollHeight - m.scrollTop - m.clientHeight < 160;\n\t\t\t\t\tlet stick = true;\n\t\t\t\t\tdocument.addEventListener('scroll', (e) => {\n\t\t\t\t\t\tif (e.target && e.target.id === 'items') stick = near(e.target);\n\t\t\t\t\t}, true);\n\t\t\t\t\tnew MutationObserver(() => {\n\t\t\t\t\t\tconst m = document.getElementById('items');\n\t\t\t\t\t\tif (m && stick) m.scrollTop = m.scrollHeight;\n\t\t\t\t\t}).observe(document.body, { childList: true, subtree: true, characterData: true });\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst addFiles = (target, files) => {\n\t\t\t\t\t\tconst form = target instanceof Element && target.closest('form.composer');\n\t\t\t\t\t\tconst input = form && form.querySelector('input[type=file]');\n\t\t\t\t\t\tif (!input || !files.length) return false;\n\t\t\t\t\t\tconst merged = new DataTransfer();\n\t\t\t\t\t\tfor (const f of input.files) merged.items.add(f);\n\t\t\t\t\t\tfor (const f of files) merged.items.add(f);\n\t\t\t\t\t\tinput.files = merged.files;\n\t\t\t\t\t\tinput.dispatchEvent(new Event('change', { bubbles: true }));\n\t\t\t\t\t\treturn true;\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('paste', (e) => {\n\t\t\t\t\t\tif (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')\n\t\t\t\t\t\t\t&& e.clipboardData && addFiles(e.target, e.clipboardData.files)) e.preventDefault();\n\t\t\t\t\t});\n\t\t\t\t\t// The strip above the composer row: one removable item per\n\t\t\t\t\t// picked file, rebuilt from the input on every change\n\t\t\t\t\t// (picker, paste, and drop all end in one).\n\t\t\t\t\tconst removeFile = (input, index) => {\n\t\t\t\t\t\tconst kept = new DataTransfer();\n\t\t\t\t\t\t[...input.files].forEach((f, i) => { if (i !== index) kept.items.add(f); });\n\t\t\t\t\t\tinput.files = kept.files;\n\t\t\t\t\t\tinput.dispatchEvent(new Event('change', { bubbles: true }));\n\t\t\t\t\t};\n\t\t\t\t\tconst renderStrip = (input) => {\n\t\t\t\t\t\tconst box = input.closest('form.composer')?.querySelector('.attach-thumbs');\n\t\t\t\t\t\tif (!box) return;\n\t\t\t\t\t\tbox.replaceChildren(...[...input.files].map((f, i) => {\n\t\t\t\t\t\t\tconst item = document.createElement('div');\n\t\t\t\t\t\t\tif (f.type.startsWith('image/')) {\n\t\t\t\t\t\t\t\titem.className = 'attach-item';\n\t\t\t\t\t\t\t\tconst img = document.createElement('img');\n\t\t\t\t\t\t\t\timg.src = URL.createObjectURL(f);\n\t\t\t\t\t\t\t\timg.onload = () => URL.revokeObjectURL(img.src);\n\t\t\t\t\t\t\t\timg.alt = img.title = f.name;\n\t\t\t\t\t\t\t\titem.append(img);\n\t\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\t\titem.className = 'attach-item file';\n\t\t\t\t\t\t\t\titem.append(Object.assign(document.createElement('span'), { className: 'ellipsis', textContent: f.name }));\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tconst x = Object.assign(document.createElement('button'), {\n\t\t\t\t\t\t\t\ttype: 'button', className: 'attach-remove', title: 'Remove ' + f.name, textContent: '×',\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tx.addEventListener('click', () => removeFile(input, i));\n\t\t\t\t\t\t\titem.append(x);\n\t\t\t\t\t\t\treturn item;\n\t\t\t\t\t\t}));\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('change', (e) => {\n\t\t\t\t\t\tif (e.target instanceof HTMLInputElement && e.target.type === 'file') renderStrip(e.target);\n\t\t\t\t\t});\n\t\t\t\t\t// A morphed composer comes back with an empty strip while\n\t\t\t\t\t// the input still holds files; refill it.\n\t\t\t\t\tnew MutationObserver(() => {\n\t\t\t\t\t\tfor (const input of document.querySelectorAll('form.composer input[type=file]')) {\n\t\t\t\t\t\t\tconst box = input.closest('form.composer').querySelector('.attach-thumbs');\n\t\t\t\t\t\t\tif (box && !box.childElementCount && input.files.length) renderStrip(input);\n\t\t\t\t\t\t}\n\t\t\t\t\t}).observe(document.body, { childList: true, subtree: true });\n\t\t\t\t\tdocument.addEventListener('dragover', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (c && e.dataTransfer && e.dataTransfer.types.includes('Files')) {\n\t\t\t\t\t\t\te.preventDefault();\n\t\t\t\t\t\t\tc.classList.add('dropping');\n\t\t\t\t\t\t}\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('dragleave', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (c && !(e.relatedTarget instanceof Node && c.contains(e.relatedTarget))) c.classList.remove('dropping');\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('drop', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (!c) return;\n\t\t\t\t\t\tc.classList.remove('dropping');\n\t\t\t\t\t\tif (e.dataTransfer && addFiles(e.target, e.dataTransfer.files)) e.preventDefault();\n\t\t\t\t\t});\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tlet timer, controller;\n\t\t\t\t\tconst update = (input) => {\n\t\t\t\t\t\tclearTimeout(timer);\n\t\t\t\t\t\ttimer = setTimeout(async () => {\n\t\t\t\t\t\t\tcontroller?.abort();\n\t\t\t\t\t\t\tcontroller = new AbortController();\n\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\tconst response = await fetch('/api/project-paths?path=' + encodeURIComponent(input.value), { signal: controller.signal });\n\t\t\t\t\t\t\t\tif (!response.ok) return;\n\t\t\t\t\t\t\t\tconst paths = await response.json();\n\t\t\t\t\t\t\t\tconst list = document.getElementById('project-paths');\n\t\t\t\t\t\t\t\tlist.replaceChildren(...paths.map((path) => Object.assign(document.createElement('option'), { value: path })));\n\t\t\t\t\t\t\t} catch (error) {\n\t\t\t\t\t\t\t\tif (error.name !== 'AbortError') console.warn('project path completion failed', error);\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}, 100);\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('input', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('focusin', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t})();\n\t\t\t</script></body></html>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		return nil
+	})
+}
+
+func PageTitle(title string) templ.Component {
+	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
+		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
+		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
+			return templ_7745c5c3_CtxErr
+		}
+		templ_7745c5c3_Buffer, templ_7745c5c3_IsBuffer := templruntime.GetBuffer(templ_7745c5c3_W)
+		if !templ_7745c5c3_IsBuffer {
+			defer func() {
+				templ_7745c5c3_BufErr := templruntime.ReleaseBuffer(templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err == nil {
+					templ_7745c5c3_Err = templ_7745c5c3_BufErr
+				}
+			}()
+		}
+		ctx = templ.InitializeContext(ctx)
+		templ_7745c5c3_Var12 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var12 == nil {
+			templ_7745c5c3_Var12 = templ.NopComponent
+		}
+		ctx = templ.ClearChildren(ctx)
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<title id=\"page-title\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var13 string
+		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(title)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 189, Col: 31}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, " · starcode</title>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

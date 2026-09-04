@@ -300,7 +300,7 @@ select.in, .chip select {
   z-index: 4;
   top: 62px;
   bottom: 132px;
-  left: max(10px, calc((100% - var(--content-w)) / 2 - 42px));
+  left: 10px;
   width: 34px;
   display: flex;
   flex-direction: column;

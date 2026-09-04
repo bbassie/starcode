@@ -148,7 +148,10 @@ func (c *conn) renderHead(ctx context.Context) error {
 	if err := c.sse.PatchElementTempl(views.MainHead(d)); err != nil {
 		return err
 	}
-	return c.sse.PatchElementTempl(views.Composer(d))
+	if err := c.sse.PatchElementTempl(views.Composer(d)); err != nil {
+		return err
+	}
+	return c.sse.PatchElementTempl(views.PageTitle(d.Thread.Title))
 }
 
 func (c *conn) renderGit(ctx context.Context) error {
