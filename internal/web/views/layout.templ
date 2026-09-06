@@ -1,6 +1,7 @@
 package views
 
 import (
+	"encoding/json"
 	"fmt"
 	"starcode/internal/store"
 )
@@ -14,6 +15,15 @@ type Page struct {
 	UsageMetric string
 	ProviderSel string
 	ProviderTab string
+	// Draft is the saved composer text for this page (thread or home),
+	// the initial value of the prompt signal.
+	Draft string
+}
+
+// draftJSON is the draft as a JS string literal for the signals object.
+func draftJSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 // streamURL carries the asset version the page was served with, so a
@@ -86,7 +96,7 @@ templ Layout(title string, p Page, parts Parts) {
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: false, updir: '', pr: 0, _hb: 0}`, p.View == "thread", p.Theme) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: false, updir: '', pr: 0, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft)) }
 			data-attr:data-theme="$theme"
 			data-class:nav-collapsed="$navhide"
 			data-class:panel-wide="$wide"
@@ -252,34 +262,6 @@ templ Layout(title string, p Page, parts Parts) {
 					const box = document.querySelector('form.rename input');
 					if (box) { box.focus(); box.select(); }
 				});
-				// Drafts: what is typed in a composer is kept in localStorage
-				// under the thread id (or "home"), so leaving the page and
-				// coming back finds it again. draftSync runs from the
-				// textarea's effect: the first run restores a saved draft into
-				// an empty box (dispatching input so the signal follows), later
-				// runs save the value or drop the key once it is empty, which
-				// is what a send does.
-				// Which drafts have had their first run is kept here and not on
-				// the element: a morph strips attributes the server did not
-				// send, which would make every re-render look like a first run.
-				window.draftKey = (id) => 'starcode.draft.' + id;
-				window.draftPut = (id, text) => { try { text ? localStorage.setItem(draftKey(id), text) : localStorage.removeItem(draftKey(id)); } catch (e) {} };
-				const draftReady = new Set();
-				window.draftSync = (el, value) => {
-					const id = el.dataset.draft;
-					if (!id) return;
-					if (!draftReady.has(id)) {
-						draftReady.add(id);
-						let saved = '';
-						try { saved = localStorage.getItem(draftKey(id)) || ''; } catch (e) {}
-						if (value === '' && saved !== '') {
-							el.value = saved;
-							el.dispatchEvent(new Event('input', { bubbles: true }));
-						}
-						return;
-					}
-					draftPut(id, value);
-				};
 				window.autoGrow = (el) => queueMicrotask(() => {
 					el.style.height = 'auto';
 					el.style.height = el.scrollHeight + 'px';
@@ -393,46 +375,19 @@ templ Layout(title string, p Page, parts Parts) {
 					};
 				})();
 			</script>
-			// Unread marks. A thread row whose activity time ([data-ago]) is
-			// newer than when this browser last had the thread open gets the
-			// unread class, unless a turn is still running on it; the count
-			// goes in front of the tab title. What was seen is kept in
-			// localStorage per thread: the current thread is seen as of its
-			// latest activity, a thread never opened here counts as seen
-			// when first listed, so only activity after that marks it.
+			// Tab title count: the server marks rows unread (see
+			// views.ThreadRow, from the seen table); this only counts them.
 			<script>
 				(() => {
-					const key = 'seen';
-					let seen = {};
-					try { seen = JSON.parse(localStorage.getItem(key) || '{}'); } catch {}
-					let saving = false;
 					const apply = () => {
-						let changed = false;
-						let unread = 0;
-						const current = new Set([...document.querySelectorAll('#sidebar .thread-row.current')].map((r) => r.dataset.id));
-						for (const r of document.querySelectorAll('.thread-row[data-id]')) {
-							const id = r.dataset.id;
-							const at = r.querySelector('[data-ago]')?.dataset.ago || '';
-							if (current.has(id) || !(id in seen)) {
-								if (seen[id] !== at) { seen[id] = at; changed = true; }
-								r.classList.remove('unread');
-								continue;
-							}
-							const active = r.classList.contains('st-running') || r.classList.contains('st-awaiting_approval');
-							const is = !active && at > seen[id];
-							r.classList.toggle('unread', is);
-							if (is && r.closest('#sidebar')) unread++;
-						}
-						if (changed) localStorage.setItem(key, JSON.stringify(seen));
+						const unread = document.querySelectorAll('#sidebar .thread-row.unread').length;
 						const t = document.getElementById('page-title');
-						if (t) {
-							const base = t.textContent.replace(/^\(\d+\) /, '');
-							const want = (unread ? `(${unread}) ` : '') + base;
-							if (t.textContent !== want) t.textContent = want;
-						}
+						if (!t) return;
+						const base = t.textContent.replace(/^\(\d+\) /, '');
+						const want = (unread ? `(${unread}) ` : '') + base;
+						if (t.textContent !== want) t.textContent = want;
 					};
-					new MutationObserver(apply).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-ago'] });
-					window.addEventListener('storage', (e) => { if (e.key === key) { try { seen = JSON.parse(e.newValue || '{}'); } catch {} apply(); } });
+					new MutationObserver(apply).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
 					apply();
 				})();
 			</script>

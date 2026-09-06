@@ -3,12 +3,14 @@ package views
 import (
 	"fmt"
 	"starcode/internal/store"
+	"time"
 )
 
 type HomeData struct {
 	Projects []store.Project
 	Threads  []store.Thread
 	Looks    map[string]AgentLook
+	Seen     map[string]time.Time
 	Settings SettingsData
 }
 
@@ -36,9 +38,9 @@ templ Home(d HomeData) {
 							rows="1"
 							placeholder="Describe the task. Sending starts a new thread with it; send nothing to just open one."
 							data-bind:prompt
-							data-draft="home"
 							data-on:keydown="sendKey(evt) && (evt.preventDefault(), @post('/api/threads'))"
-							data-effect="autoGrow(el); draftSync(el, $prompt)"
+							data-on:input__debounce.600ms={ draftPost("home") }
+							data-effect="$prompt; autoGrow(el)"
 							autocomplete="off"
 							spellcheck="false"
 						></textarea>
@@ -70,7 +72,7 @@ templ Home(d HomeData) {
 							for _, t := range d.Threads {
 								if t.ProjectID == p.ID && listed(t) && n < 8 {
 									{{ n++ }}
-									@ThreadRow(t, p, false, false, d.Looks[t.Agent])
+									@ThreadRow(t, p, false, false, d.Looks[t.Agent], unread(t, "", d.Seen))
 								}
 							}
 						</ul>
@@ -84,11 +86,15 @@ templ Home(d HomeData) {
 	</main>
 }
 
-// FirstOr picks the default agent for new threads: claude when available.
+// FirstOr picks the default agent for new threads: the fake one when it
+// is registered (that is a UI development run, and a real agent costs
+// money), else claude, else the first.
 func FirstOr(xs []string, def string) string {
-	for _, x := range xs {
-		if x == "claude" {
-			return x
+	for _, want := range []string{"fake", "claude"} {
+		for _, x := range xs {
+			if x == want {
+				return x
+			}
 		}
 	}
 	if len(xs) > 0 {

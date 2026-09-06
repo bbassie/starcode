@@ -2,6 +2,7 @@
 //
 //	starcode [-addr 127.0.0.1:4000] [-data ~/.starcode] [-token secret] [-fake]
 //	starcode replay   # rebuild projections from the event log
+//	starcode compact  # fold streamed deltas into one row per item
 package main
 
 import (
@@ -94,6 +95,14 @@ func run() (string, error) {
 		fmt.Printf("replayed %d events\n", n)
 		return "", nil
 	}
+	if sub == "compact" {
+		n, err := st.Compact(context.Background(), "")
+		if err != nil {
+			return "", err
+		}
+		fmt.Printf("removed %d delta rows\n", n)
+		return "", nil
+	}
 	if sub != "" {
 		return "", fmt.Errorf("unknown command %q", sub)
 	}
@@ -131,6 +140,15 @@ func run() (string, error) {
 		return "", err
 	}
 	defer a.Shutdown()
+	// Threads that ended before compaction existed still carry a row per
+	// token; fold them once, off the startup path.
+	go func() {
+		if n, err := st.Compact(context.Background(), ""); err != nil {
+			log.Warn("compact", "err", err)
+		} else if n > 0 {
+			log.Info("compacted event log", "rows", n)
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

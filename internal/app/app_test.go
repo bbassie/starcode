@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -178,5 +179,85 @@ func TestSendPromptUnarchives(t *testing.T) {
 	receivePrompt(t, sess.sent)
 	if th, _ := st.Thread(ctx, threadID); th.Archived || th.Status != domain.StatusRunning {
 		t.Fatalf("after send: %+v", th)
+	}
+}
+
+func TestSessionRuleSurvivesRestartAndRevoke(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "rules.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	sess := newQueueSession()
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendPrompt(ctx, threadID, "run tests"); err != nil {
+		t.Fatal(err)
+	}
+	receivePrompt(t, sess.sent)
+	sess.events <- agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{ID: "ap1", ToolID: "t1", ToolName: "Bash", Input: json.RawMessage(`{"command":"go test ./..."}`)}}
+	waitFor(t, func() bool { aps, _ := st.PendingApprovals(ctx, threadID); return len(aps) == 1 })
+	if err := a.ResolveApproval(ctx, threadID, "ap1", domain.DecisionAllowSession); err != nil {
+		t.Fatal(err)
+	}
+	if rules := a.SessionRules(ctx, threadID); len(rules) != 1 || rules[0] != "Bash:go" {
+		t.Fatalf("rules = %v", rules)
+	}
+	a.Shutdown()
+	st.Close()
+
+	// A new process on the same database still has the rule, and it
+	// answers the next matching request on its own.
+	st, err = store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sess = newQueueSession()
+	a = New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rules := a.SessionRules(ctx, threadID); len(rules) != 1 {
+		t.Fatalf("rules after restart = %v", rules)
+	}
+	if err := a.SendPrompt(ctx, threadID, "again"); err != nil {
+		t.Fatal(err)
+	}
+	receivePrompt(t, sess.sent)
+	sess.events <- agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{ID: "ap2", ToolID: "t2", ToolName: "Bash", Input: json.RawMessage(`{"command":"go vet"}`)}}
+	waitFor(t, func() bool { ap, err := st.Approval(ctx, threadID, "ap2"); return err == nil && ap.Decision == domain.DecisionAllowSession })
+	if th, _ := st.Thread(ctx, threadID); th.Status != domain.StatusRunning {
+		t.Fatalf("auto-allowed request changed status to %q", th.Status)
+	}
+	if err := a.RevokeRule(ctx, threadID, "Bash:go"); err != nil {
+		t.Fatal(err)
+	}
+	if rules := a.SessionRules(ctx, threadID); len(rules) != 0 {
+		t.Fatalf("rules after revoke = %v", rules)
+	}
+	if err := a.RevokeRule(ctx, threadID, "Bash:go"); err == nil {
+		t.Fatal("revoking twice should fail")
+	}
+	sess.events <- agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{ID: "ap3", ToolID: "t3", ToolName: "Bash", Input: json.RawMessage(`{"command":"go build"}`)}}
+	waitFor(t, func() bool { th, _ := st.Thread(ctx, threadID); return th.Status == domain.StatusAwaitingApproval })
+}
+
+func waitFor(t *testing.T, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met in time")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }

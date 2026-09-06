@@ -5,6 +5,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -169,6 +170,27 @@ type ApprovalResolved struct {
 	Auto     bool   `json:"auto,omitempty"` // resolved by a session rule
 }
 
+// RuleRevoked drops an "allow for session" rule (see RuleKey) from a
+// thread, so the next matching request asks again.
+type RuleRevoked struct {
+	Key string `json:"key"`
+}
+
+// RuleKey reduces an approval to what a session rule remembers: Bash
+// commands by their first word, everything else by tool name.
+func RuleKey(tool string, input json.RawMessage) string {
+	if tool == "Bash" {
+		var in struct {
+			Command string `json:"command"`
+		}
+		json.Unmarshal(input, &in)
+		if f := strings.Fields(in.Command); len(f) > 0 {
+			return "Bash:" + f[0]
+		}
+	}
+	return tool
+}
+
 type TurnCompleted struct {
 	TurnID     string  `json:"turn_id"`
 	Status     string  `json:"status"` // "done" | "interrupted" | "error"
@@ -187,6 +209,12 @@ type GitChanged struct {
 // ProvidersChanged is bus-only: an agent CLI's version, sign-in state or
 // available update changed, so sidebars and the providers page refresh.
 type ProvidersChanged struct{}
+
+// SeenChanged is bus-only: a thread was marked seen and its row should
+// lose the unread mark on every other page.
+type SeenChanged struct {
+	ThreadID string `json:"thread_id"`
+}
 
 // BinaryUpdated is bus-only: the starcode executable on disk is newer than
 // the running one, so every open page shows the restart banner.
@@ -233,12 +261,16 @@ func TypeOf(p any) string {
 		return "approval.requested"
 	case ApprovalResolved, *ApprovalResolved:
 		return "approval.resolved"
+	case RuleRevoked, *RuleRevoked:
+		return "rule.revoked"
 	case GitChanged, *GitChanged:
 		return "git.changed"
 	case ProvidersChanged, *ProvidersChanged:
 		return "providers.changed"
 	case BinaryUpdated, *BinaryUpdated:
 		return "binary.updated"
+	case SeenChanged, *SeenChanged:
+		return "seen.changed"
 	}
 	panic(fmt.Sprintf("domain: unknown event payload %T", p))
 }
@@ -285,6 +317,8 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &ApprovalRequested{}
 	case "approval.resolved":
 		p = &ApprovalResolved{}
+	case "rule.revoked":
+		p = &RuleRevoked{}
 	case "git.changed":
 		p = &GitChanged{}
 	default:

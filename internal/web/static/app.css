@@ -154,7 +154,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .settingsnav-list a { display: flex; align-items: center; gap: 9px; min-height: var(--tap); padding: 7px 9px; border-radius: var(--radius-sm); color: var(--fg-dim); }
 .settingsnav-list a:hover { color: var(--fg); background: var(--bg-3); }
 .settingsnav-list a.current { color: var(--fg); background: var(--sel); }
-.mid { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* .mid is a container so the thread header can drop its button labels
+   when the side panel is widened, the same way it does on a phone. */
+.mid { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container: mid / inline-size; }
+@container mid (max-width: 760px) {
+  .hide-sm { display: none; }
+  .show-sm { display: inline; }
+  .mainhead { gap: 4px; padding: 6px 8px; }
+  .mainhead .btn { padding: 0 8px; }
+}
 #main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .backdrop { display: none; }
 
@@ -256,6 +264,7 @@ select.in {
 
 .mainhead {
   flex: none;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -483,6 +492,11 @@ details.item.tool > .block { margin: 4px 0 4px 1.2em; }
 .jump-wrap { position: relative; height: 0; display: flex; justify-content: center; z-index: 5; }
 .jump { position: absolute; bottom: 12px; display: none; background: var(--bg-3); box-shadow: var(--shadow); }
 body.scrolled-up .jump { display: inline-flex; }
+.rules { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px 6px; border-bottom: var(--border-w) solid var(--border); }
+.rules > .dim { display: inline-flex; align-items: center; gap: 4px; margin-right: 2px; }
+.rule-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; border-radius: 999px; border: var(--border-w) solid var(--border); background: var(--bg-3); font-size: 0.85em; }
+.rule-x { display: inline-grid; place-items: center; width: 20px; height: 20px; border: 0; border-radius: 50%; background: transparent; color: var(--fg-dim); cursor: pointer; padding: 0; }
+.rule-x:hover { color: var(--err); background: var(--bg-4); }
 .prompt-queue.empty { display: none; }
 .prompt-queue { border-bottom: var(--border-w) solid var(--border); padding: 8px 10px 6px; }
 .queue-head { display: flex; align-items: center; color: var(--fg-dim); font-size: 0.82em; padding: 0 4px 4px; }

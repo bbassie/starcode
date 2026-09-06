@@ -20,6 +20,21 @@ type SidebarData struct {
 	// Looks maps agent instance names to their driver and tag colour
 	// (Settings > Providers) for the mark on thread rows.
 	Looks map[string]AgentLook
+	// Seen is when each thread was last on a screen; a thread with newer
+	// activity is marked unread. Shared by every browser.
+	Seen map[string]time.Time
+}
+
+// unread is whether t has activity since it was last looked at. A
+// running thread is not marked: its row already shows movement. A thread
+// never opened counts as unread, which is what a thread started from
+// another device should look like.
+func unread(t store.Thread, current string, seen map[string]time.Time) bool {
+	if t.ID == current || active(t) {
+		return false
+	}
+	at, ok := seen[t.ID]
+	return !ok || t.UpdatedAt.After(at)
 }
 
 // AgentLook is what a row needs to draw an instance's mark.
@@ -98,7 +113,7 @@ templ Sidebar(d SidebarData) {
 				<ul class="threads">
 					for _, t := range d.Threads {
 						if active(t) {
-							@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true, d.Looks[t.Agent])
+							@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true, d.Looks[t.Agent], unread(t, d.Current, d.Seen))
 						}
 					}
 				</ul>
@@ -114,7 +129,7 @@ templ Sidebar(d SidebarData) {
 					<ul class="threads">
 						for _, t := range d.Threads {
 							if t.ProjectID == p.ID && !active(t) && listed(t) {
-								@ThreadRow(t, p, t.ID == d.Current, false, d.Looks[t.Agent])
+								@ThreadRow(t, p, t.ID == d.Current, false, d.Looks[t.Agent], unread(t, d.Current, d.Seen))
 							}
 						}
 					</ul>
@@ -142,7 +157,7 @@ templ Sidebar(d SidebarData) {
 					<ul class="threads">
 						for _, t := range d.Threads {
 							if t.Archived && !active(t) {
-								@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true, d.Looks[t.Agent])
+								@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true, d.Looks[t.Agent], unread(t, d.Current, d.Seen))
 							}
 						}
 					</ul>
@@ -161,9 +176,9 @@ templ Sidebar(d SidebarData) {
 	</aside>
 }
 
-templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool, look AgentLook) {
+templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool, look AgentLook, isUnread bool) {
 	<li
-		class={ "thread-row", "st-" + t.Status, templ.KV("current", current) }
+		class={ "thread-row", "st-" + t.Status, templ.KV("current", current), templ.KV("unread", isUnread) }
 		data-id={ t.ID }
 		data-k={ searchKey(t, p) }
 		data-show="$q == '' || el.dataset.k.includes($q.toLowerCase())"

@@ -122,6 +122,8 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/threads/{id}/archive", s.archiveThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/unarchive", s.unarchiveThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/rename", s.renameThread)
+	s.mux.HandleFunc("POST /api/threads/{id}/rules/revoke", s.revokeRule)
+	s.mux.HandleFunc("POST /api/drafts/{key}", s.saveDraft)
 	s.mux.HandleFunc("POST /api/threads/{id}/settings", s.setThreadSettings)
 	s.mux.HandleFunc("POST /api/threads/{id}/approvals/{aid}/{decision}", s.approve)
 	s.mux.HandleFunc("POST /api/theme", s.setTheme)
@@ -290,7 +292,17 @@ func (s *Server) agentNames() []string { return s.App.AgentNames() }
 // ---- pages ----
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "home", views.Page{View: "home", Theme: s.theme(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "home", views.Page{View: "home", Theme: s.theme(r), Draft: s.draft(r, "home")}).Render(r.Context(), w)
+}
+
+// draft is the saved composer text for key, for the page's initial
+// prompt signal.
+func (s *Server) draft(r *http.Request, key string) string {
+	d, err := s.App.Store.Draft(r.Context(), key)
+	if err != nil {
+		s.Log.Warn("read draft", "key", key, "err", err)
+	}
+	return d
 }
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +376,8 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.page(r.Context(), views.TabTitle(t), views.Page{View: "thread", ThreadID: id, Theme: s.theme(r)}).Render(r.Context(), w)
+	s.App.MarkSeen(r.Context(), id)
+	s.page(r.Context(), views.TabTitle(t), views.Page{View: "thread", ThreadID: id, Theme: s.theme(r), Draft: s.draft(r, id)}).Render(r.Context(), w)
 }
 
 // ---- helpers shared by events and commands ----
@@ -378,7 +391,11 @@ func (s *Server) sidebarData(ctx context.Context, current string, settings bool)
 	if err != nil {
 		return views.SidebarData{}, err
 	}
-	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), Settings: settings, Updates: s.updateCount(), Looks: s.agentLooks()}, nil
+	seen, err := s.App.Store.Seen(ctx)
+	if err != nil {
+		return views.SidebarData{}, err
+	}
+	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), Settings: settings, Updates: s.updateCount(), Looks: s.agentLooks(), Seen: seen}, nil
 }
 
 func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, error) {
@@ -407,6 +424,6 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 	if p.Path != "" {
 		branch = gitx.Read(ctx, p.Path).Branch
 	}
-	return views.ThreadData{Thread: t, Project: p, Items: items, Queued: queued, Approvals: aps, Rules: s.App.SessionRules(id), Branch: branch,
+	return views.ThreadData{Thread: t, Project: p, Items: items, Queued: queued, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch,
 		Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }

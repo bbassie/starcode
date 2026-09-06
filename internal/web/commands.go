@@ -176,6 +176,7 @@ func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID,
 			s.fail(w, r, err)
 			return
 		}
+		s.App.SaveDraft(r.Context(), "home", "")
 	}
 	sse := datastar.NewSSE(w, r)
 	sse.Redirect("/threads/" + id)
@@ -271,6 +272,32 @@ func (s *Server) deleteThread(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) archiveThread(w http.ResponseWriter, r *http.Request) {
 	if err := s.App.ArchiveThread(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// Out of sight is out of the process table too: the shells would sit
+	// there until a restart otherwise. Unarchiving starts fresh ones.
+	s.Term.KillPrefix(termPrefix(r.PathValue("id")))
+	s.ok(w, r)
+}
+
+func (s *Server) revokeRule(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.RevokeRule(r.Context(), r.PathValue("id"), r.URL.Query().Get("key")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
+// saveDraft keeps what a composer holds, keyed by thread id or "home".
+// Only the prompt signal is posted (the composer filters the rest out).
+func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var sig struct {
+		Prompt string `json:"prompt"`
+	}
+	datastar.ReadSignals(r, &sig)
+	if err := s.App.SaveDraft(r.Context(), r.PathValue("key"), sig.Prompt); err != nil {
 		s.fail(w, r, err)
 		return
 	}

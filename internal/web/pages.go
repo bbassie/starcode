@@ -58,7 +58,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 			return pt, err
 		}
 		caps, capsErrs := s.capabilities(ctx)
-		pt.Main = views.Home(views.HomeData{Projects: ps, Threads: ts, Looks: s.agentLooks(), Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: views.FirstOr(s.agentNames(), "claude")}})
+		pt.Main = views.Home(views.HomeData{Projects: ps, Threads: ts, Looks: s.agentLooks(), Seen: side.Seen, Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: views.FirstOr(s.agentNames(), "claude")}})
 	}
 	return pt, nil
 }

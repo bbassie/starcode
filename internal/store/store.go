@@ -207,7 +207,7 @@ func (s *Store) Replay(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	for _, t := range []string{"queued_prompts", "approvals", "items", "threads", "projects"} {
+	for _, t := range []string{"session_rules", "queued_prompts", "approvals", "items", "threads", "projects"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+t); err != nil {
 			return 0, err
 		}
@@ -248,6 +248,7 @@ func (s *Store) Replay(ctx context.Context) (int, error) {
 
 type execer interface {
 	ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, q string, args ...any) *sql.Row
 }
 
 func apply(ctx context.Context, tx execer, ev domain.Event) error {
@@ -355,6 +356,18 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		return err
 	case domain.ApprovalResolved:
 		_, err := tx.ExecContext(ctx, `UPDATE approvals SET decision=? WHERE thread_id=? AND id=?`, p.Decision, ev.ThreadID, p.ID)
+		if err != nil || p.Decision != domain.DecisionAllowSession || p.Auto {
+			return err
+		}
+		// A fresh "allow for session" answer becomes a rule of the thread.
+		var tool, input string
+		if err := tx.QueryRowContext(ctx, `SELECT tool_name, input FROM approvals WHERE thread_id=? AND id=?`, ev.ThreadID, p.ID).Scan(&tool, &input); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO session_rules(thread_id, key, created_at) VALUES(?,?,?)`, ev.ThreadID, domain.RuleKey(tool, json.RawMessage(input)), ts)
+		return err
+	case domain.RuleRevoked:
+		_, err := tx.ExecContext(ctx, `DELETE FROM session_rules WHERE thread_id=? AND key=?`, ev.ThreadID, p.Key)
 		return err
 	case domain.GitChanged:
 		return nil
@@ -403,6 +416,8 @@ func deref(p any) any {
 	case *domain.ApprovalRequested:
 		return *v
 	case *domain.ApprovalResolved:
+		return *v
+	case *domain.RuleRevoked:
 		return *v
 	case *domain.GitChanged:
 		return *v
@@ -751,4 +766,181 @@ func snippet(body, q string, width int) string {
 		out += "…"
 	}
 	return out
+}
+
+// SessionRules lists a thread's "allow for session" rule keys, sorted.
+func (s *Store) SessionRules(ctx context.Context, threadID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key FROM session_rules WHERE thread_id=? ORDER BY key`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// ---- scratch state: drafts and seen marks ----
+//
+// These are not events. A draft changes on every pause in typing and a
+// seen mark on every look; neither is history worth replaying, and both
+// belong to the reader rather than the thread.
+
+// SaveDraft keeps the composer text under key (a thread id, or "home");
+// an empty body removes it.
+func (s *Store) SaveDraft(ctx context.Context, key, body string) error {
+	if body == "" {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM drafts WHERE key=?`, key)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO drafts(key, body, updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body, updated_at=excluded.updated_at`,
+		key, body, time.Now().UTC().Format(timeFmt))
+	return err
+}
+
+// Draft returns the saved text for key, or "".
+func (s *Store) Draft(ctx context.Context, key string) (string, error) {
+	var body string
+	err := s.db.QueryRowContext(ctx, `SELECT body FROM drafts WHERE key=?`, key).Scan(&body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return body, err
+}
+
+// MarkSeen records that threadID was on screen at t. Never moves back.
+// changed reports whether the mark took an unread row (an idle thread
+// with activity since the last look) to read, so the caller knows when
+// other pages need a redraw; during a turn nothing is marked unread, so
+// nothing changes.
+func (s *Store) MarkSeen(ctx context.Context, threadID string, t time.Time) (changed bool, err error) {
+	ts := t.UTC().Format(timeFmt)
+	var status, updated string
+	var prev sql.NullString
+	err = s.db.QueryRowContext(ctx, `SELECT t.status, t.updated_at, s.seen_at FROM threads t LEFT JOIN seen s ON s.thread_id=t.id WHERE t.id=?`, threadID).Scan(&status, &updated, &prev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO seen(thread_id, seen_at) VALUES(?,?) ON CONFLICT(thread_id) DO UPDATE SET seen_at=max(seen_at, excluded.seen_at)`, threadID, ts)
+	idle := status != domain.StatusRunning && status != domain.StatusAwaitingApproval
+	return err == nil && idle && (!prev.Valid || prev.String < updated) && ts >= updated, err
+}
+
+// Seen maps thread ids to when they were last on screen. A thread with
+// no entry was never opened.
+func (s *Store) Seen(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT thread_id, seen_at FROM seen`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var id, ts string
+		if err := rows.Scan(&id, &ts); err != nil {
+			return nil, err
+		}
+		out[id], _ = time.Parse(timeFmt, ts)
+	}
+	return out, rows.Err()
+}
+
+// ---- compaction ----
+
+// Compact folds each item's streamed deltas into one event per field.
+// Streaming writes a row per token; once a turn is over only the sum
+// matters, and replay reads the same projection from one row as from a
+// thousand. threadID "" compacts every thread. Returns the rows removed.
+func (s *Store) Compact(ctx context.Context, threadID string) (int, error) {
+	q := `SELECT seq, payload FROM events WHERE type='item.delta'`
+	var args []any
+	if threadID != "" {
+		q += ` AND thread_id=?`
+		args = append(args, threadID)
+	}
+	rows, err := s.db.QueryContext(ctx, q+` ORDER BY seq`, args...)
+	if err != nil {
+		return 0, err
+	}
+	type group struct {
+		first  int64
+		delta  domain.ItemDelta
+		text   strings.Builder
+		others []int64
+	}
+	var order []string
+	groups := map[string]*group{}
+	for rows.Next() {
+		var seq int64
+		var raw string
+		if err := rows.Scan(&seq, &raw); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		var d domain.ItemDelta
+		if err := json.Unmarshal([]byte(raw), &d); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		k := d.ID + "\x00" + d.Field
+		g := groups[k]
+		if g == nil {
+			g = &group{first: seq, delta: d}
+			groups[k] = g
+			order = append(order, k)
+		} else {
+			g.others = append(g.others, seq)
+		}
+		g.text.WriteString(d.Text)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, k := range order {
+		g := groups[k]
+		if len(g.others) == 0 {
+			continue
+		}
+		g.delta.Text = g.text.String()
+		raw, err := json.Marshal(g.delta)
+		if err != nil {
+			return removed, err
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return removed, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE events SET payload=? WHERE seq=?`, string(raw), g.first); err != nil {
+			tx.Rollback()
+			return removed, err
+		}
+		for i := 0; i < len(g.others); i += 500 {
+			end := min(i+500, len(g.others))
+			ph := strings.TrimSuffix(strings.Repeat("?,", end-i), ",")
+			seqs := make([]any, 0, end-i)
+			for _, sq := range g.others[i:end] {
+				seqs = append(seqs, sq)
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM events WHERE seq IN (`+ph+`)`, seqs...); err != nil {
+				tx.Rollback()
+				return removed, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return removed, err
+		}
+		removed += len(g.others)
+	}
+	return removed, nil
 }

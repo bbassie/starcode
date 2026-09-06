@@ -42,7 +42,7 @@ The first visit from a device shows a certificate warning. The login page links 
 
 The point is not secrecy on a VPN you already trust. Browsers only give a secure context the clipboard (paste in the terminal, the copy buttons), notifications and service workers, so over plain HTTP those do not work. Behind a reverse proxy that does TLS already, run with `-tls off`; with a real certificate, pass `-tls-cert` and `-tls-key`.
 
-`./starcode replay` rebuilds the projection tables from the event log.
+`./starcode replay` rebuilds the projection tables from the event log. `./starcode compact` folds the streamed deltas in the log (one row per token while a turn runs) into one row per item; starcode does this itself after every turn and once at startup, so the command is only for a log that predates it.
 
 ## Development
 
@@ -64,9 +64,11 @@ Run one instance as a systemd user service from the binary in the repo (`make se
 
 The title in the breadcrumb is a button: click it to rename the thread (Enter saves, Escape cancels). Agents that generate their own titles still set them on the first turn.
 
-A thread that had activity since this browser last had it open shows a dot and a bold title in the sidebar and on the project cards, and the tab title counts them, so a turn that ended while you were elsewhere is easy to find. A running turn is not unread yet; the mark appears when it ends. What was seen is kept in the browser (localStorage), so each browser keeps its own view. Opening the thread clears it.
+A thread that had activity since it was last on a screen shows a dot and a bold title in the sidebar and on the project cards, and the tab title counts them, so a turn that ended while you were elsewhere is easy to find. A running turn is not unread yet; the mark appears when it ends. The mark is shared: reading a thread on the phone clears it on the desktop too (the `seen` table records the last look). A thread started from another device shows up unread.
 
-Archive puts a thread out of the way without deleting it: it leaves the project's list and the home cards and moves to a folded "Archived" section at the bottom of the sidebar, which opens while you search or while you are on one of its threads. Nothing else changes; the transcript stays, and a reply (or the unarchive button) moves it back. A thread archived while a turn is running stays under Running until the turn ends.
+Answering an approval with "allow for session" makes a rule for the thread (a Bash command by its first word, any other tool by name) that answers later requests like it on its own. The rules show above the composer, each with a button that revokes it; they are part of the event log, so they survive a restart.
+
+Archive puts a thread out of the way without deleting it: it leaves the project's list and the home cards and moves to a folded "Archived" section at the bottom of the sidebar, which opens while you search or while you are on one of its threads. The transcript stays and a reply (or the unarchive button) moves it back; its terminal shells are ended, as they are on delete. A thread archived while a turn is running stays under Running until the turn ends.
 
 ## Side panel
 
@@ -84,7 +86,7 @@ The terminal button (or Ctrl+`) opens a shell in the project directory under the
 
 Each sent prompt has a copy button and an "edit and resend" button that puts the text back in the composer; each finished reply has a copy button for its markdown. In the terminal, Ctrl+V pastes (xterm.js would otherwise send it to the shell as a control byte), and the paste button in the terminal head does the same for a phone. Copying falls back to a selection copy without a secure context; pasting has no fallback, which is one reason for HTTPS above.
 
-What is typed in a composer is kept in the browser (localStorage, per thread and for the home page) until it is sent, so leaving for another page and coming back finds the draft in place.
+What is typed in a composer is saved on the server (the `drafts` table, per thread and for the home page) on every pause in typing and dropped when sent, so a prompt started on the phone is waiting on the desktop. Unread marks work the same way: the `seen` table records when a thread was last on any screen, and a thread with activity since then gets a dot and a bold title in the sidebar, counted in the tab title. Neither is an event; they are reader state, not history.
 
 Ctrl+K (Cmd+K on a Mac) opens the palette. Typing filters four lists at once: commands for the page you are on (new thread, rename, archive, the panels, settings, themes), threads by title, files of the current thread's project by path (`git ls-files` plus untracked files, or a bounded walk outside a repository), and messages by text, each with a snippet around the match. Enter runs the first row, the arrow keys walk the rest, Escape closes (on a phone, the close button in the search row). A message row opens its thread scrolled to that row. The search box in the sidebar only filters the thread list; the palette is the one that reads transcripts.
 

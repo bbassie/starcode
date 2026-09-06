@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -248,5 +249,117 @@ func TestSnippetFoldsRunesOneToOne(t *testing.T) {
 	}
 	if got := snippet(strings.Repeat("x ", 100)+"İİ needle", "NEEDLE", 30); !strings.HasSuffix(got, "İİ needle") {
 		t.Fatalf("snippet = %q", got)
+	}
+}
+
+func TestSessionRulesProjection(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/r", Name: "r"})
+	s.Append(ctx, "t1", domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "one", Agent: "claude"},
+		domain.ApprovalRequested{ID: "a1", ToolName: "Bash", Input: json.RawMessage(`{"command":"go test ./..."}`)},
+		domain.ApprovalResolved{ID: "a1", Decision: domain.DecisionAllowSession},
+		domain.ApprovalRequested{ID: "a2", ToolName: "Edit"},
+		domain.ApprovalResolved{ID: "a2", Decision: domain.DecisionAllow},
+		domain.ApprovalRequested{ID: "a3", ToolName: "Bash", Input: json.RawMessage(`{"command":"go vet"}`)},
+		domain.ApprovalResolved{ID: "a3", Decision: domain.DecisionAllowSession, Auto: true},
+	)
+	rules, err := s.SessionRules(ctx, "t1")
+	if err != nil || len(rules) != 1 || rules[0] != "Bash:go" {
+		t.Fatalf("rules = %v, %v", rules, err)
+	}
+	s.Append(ctx, "t1", domain.RuleRevoked{Key: "Bash:go"})
+	if rules, _ = s.SessionRules(ctx, "t1"); len(rules) != 0 {
+		t.Fatalf("after revoke = %v", rules)
+	}
+	s.Append(ctx, "t1", domain.ApprovalRequested{ID: "a4", ToolName: "Write"}, domain.ApprovalResolved{ID: "a4", Decision: domain.DecisionAllowSession})
+	if _, err := s.Replay(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rules, _ = s.SessionRules(ctx, "t1"); len(rules) != 1 || rules[0] != "Write" {
+		t.Fatalf("after replay = %v", rules)
+	}
+}
+
+func TestDraftsAndSeen(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/d", Name: "d"})
+	s.Append(ctx, "t1", domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "one", Agent: "claude"})
+	if err := s.SaveDraft(ctx, "t1", "half a thought"); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := s.Draft(ctx, "t1"); d != "half a thought" {
+		t.Fatalf("draft = %q", d)
+	}
+	s.SaveDraft(ctx, "t1", "")
+	if d, _ := s.Draft(ctx, "t1"); d != "" {
+		t.Fatalf("draft after clear = %q", d)
+	}
+	// First look at an idle thread: it was unread (never opened).
+	if changed, err := s.MarkSeen(ctx, "t1", time.Now()); err != nil || !changed {
+		t.Fatalf("first mark changed = %v, %v", changed, err)
+	}
+	first, _ := s.Seen(ctx)
+	if changed, _ := s.MarkSeen(ctx, "t1", time.Now().Add(-time.Hour)); changed { // never moves back
+		t.Fatal("older mark reported a change")
+	}
+	if seen, _ := s.Seen(ctx); !seen["t1"].Equal(first["t1"]) {
+		t.Fatalf("older mark moved seen_at: %v -> %v", first["t1"], seen["t1"])
+	}
+	if changed, _ := s.MarkSeen(ctx, "t1", time.Now()); changed {
+		t.Fatal("re-marking a read thread reported a change")
+	}
+	// Activity while nobody looks makes it unread again; a running thread
+	// is never counted as unread, so marking it changes nothing.
+	s.Append(ctx, "t1", domain.ThreadStatusChanged{Status: domain.StatusRunning})
+	if changed, _ := s.MarkSeen(ctx, "t1", time.Now()); changed {
+		t.Fatal("running thread reported a change")
+	}
+	s.Append(ctx, "t1", domain.ThreadStatusChanged{Status: domain.StatusIdle})
+	if changed, _ := s.MarkSeen(ctx, "t1", time.Now()); !changed {
+		t.Fatal("idle thread with new activity did not report a change")
+	}
+	s.Append(ctx, "t1", domain.ThreadDeleted{})
+	if seen, _ := s.Seen(ctx); len(seen) != 0 {
+		t.Fatalf("seen after delete = %v", seen)
+	}
+}
+
+func TestCompactFoldsDeltas(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/c", Name: "c"})
+	s.Append(ctx, "t1", domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "one", Agent: "claude"},
+		domain.ItemStarted{ID: "i1", Kind: domain.KindAssistant, Status: domain.ItemRunning, Body: "He"},
+		domain.ItemDelta{ID: "i1", Text: "llo"},
+		domain.ItemDelta{ID: "i1", Text: " wor"},
+		domain.ItemDelta{ID: "i1", Text: "ld"},
+		domain.ItemStarted{ID: "i2", Kind: domain.KindTool, ToolName: "Bash", Status: domain.ItemRunning},
+		domain.ItemDelta{ID: "i2", Field: "output", Text: "a"},
+		domain.ItemDelta{ID: "i2", Field: "output", Text: "b"},
+		domain.ItemDelta{ID: "i2", Text: "x"},
+		domain.ItemCompleted{ID: "i2", Status: domain.ItemDone},
+		domain.ItemCompleted{ID: "i1", Status: domain.ItemDone},
+	)
+	before, _ := s.Items(ctx, "t1")
+	removed, err := s.Compact(ctx, "t1")
+	if err != nil || removed != 3 {
+		t.Fatalf("removed = %d, %v", removed, err)
+	}
+	var n int
+	s.db.QueryRow(`SELECT count(*) FROM events WHERE type='item.delta'`).Scan(&n)
+	if n != 3 {
+		t.Fatalf("delta rows = %d", n)
+	}
+	if _, err := s.Replay(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.Items(ctx, "t1")
+	if len(after) != 2 || after[0].Body != before[0].Body || after[1].Output != before[1].Output || after[1].Body != before[1].Body || after[0].Body != "Hello world" || after[1].Output != "ab" {
+		t.Fatalf("after replay = %+v", after)
+	}
+	if again, _ := s.Compact(ctx, ""); again != 0 {
+		t.Fatalf("second compact removed %d", again)
 	}
 }

@@ -81,6 +81,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				}
 			case domain.BinaryUpdated:
 				err = c.renderUpdateBanner(ctx)
+			case domain.SeenChanged:
+				c.sideDirty = true
+				c.homeDirty = view == "home"
 			}
 			if err != nil {
 				s.Log.Debug("sse", "err", err)
@@ -126,6 +129,7 @@ func (c *conn) renderAll(ctx context.Context) error {
 	}
 	c.sideDirty, c.homeDirty = false, false
 	if pt.Thread != nil {
+		c.s.App.MarkSeen(ctx, c.threadID)
 		c.projectID = pt.Thread.Project.ID
 		c.work = ""
 		if blocks := views.GroupItems(pt.Thread.Items); len(blocks) > 0 && blocks[len(blocks)-1].Item == nil {
@@ -160,7 +164,11 @@ func (c *conn) renderHome(ctx context.Context) error {
 		return err
 	}
 	caps, capsErrs := c.s.capabilities(ctx)
-	home := views.HomeData{Projects: ps, Threads: ts, Looks: c.s.agentLooks(), Settings: views.SettingsData{Agents: c.s.agentNames(), Looks: c.s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: views.FirstOr(c.s.agentNames(), "claude")}}
+	seen, err := c.s.App.Store.Seen(ctx)
+	if err != nil {
+		return err
+	}
+	home := views.HomeData{Projects: ps, Threads: ts, Looks: c.s.agentLooks(), Seen: seen, Settings: views.SettingsData{Agents: c.s.agentNames(), Looks: c.s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: views.FirstOr(c.s.agentNames(), "claude")}}
 	return c.sse.PatchElementTempl(views.Home(home))
 }
 
@@ -300,6 +308,10 @@ func (c *conn) renderMessageRail(ctx context.Context) error {
 
 func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 	mine := c.view == "thread" && ev.ThreadID == c.threadID
+	if mine {
+		// Whatever just happened on this thread, someone is looking at it.
+		c.s.App.MarkSeen(ctx, c.threadID)
+	}
 	switch p := ev.Payload.(type) {
 	case domain.ProjectAdded, domain.ProjectRemoved, domain.ThreadCreated:
 		c.sideDirty = true
@@ -391,7 +403,17 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 			if err != nil {
 				return nil
 			}
-			return c.sse.PatchElementTempl(views.ApprovalResolved(a))
+			if err := c.sse.PatchElementTempl(views.ApprovalResolved(a)); err != nil {
+				return err
+			}
+			if p.Decision == domain.DecisionAllowSession && !p.Auto {
+				// The composer lists the session rules; a new one just landed.
+				return c.renderHead(ctx)
+			}
+		}
+	case domain.RuleRevoked:
+		if mine {
+			return c.renderHead(ctx)
 		}
 	case domain.TurnCompleted:
 		if c.view == "usage" {

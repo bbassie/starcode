@@ -271,6 +271,29 @@ templ PromptQueue(d ThreadData) {
 	</div>
 }
 
+// draftPost saves the composer text on a pause in typing. Only the prompt
+// signal travels: the attachments ride the signals as base64 and have no
+// place in a draft.
+func draftPost(key string) string {
+	return "@post('/api/drafts/" + key + "', {filterSignals: {include: /^prompt$/}})"
+}
+
+// SessionRules is the strip of "allow for session" rules above the
+// composer, each with a button that revokes it.
+templ SessionRules(d ThreadData) {
+	if len(d.Rules) > 0 {
+		<div class="rules">
+			<span class="dim tiny-text" title="Requests matching these are allowed without asking until revoked">@Icon("shield-check", "ui-icon") <span>allowed for session</span></span>
+			for _, k := range d.Rules {
+				<span class="rule-chip">
+					<span class="mono">{ k }</span>
+					<button type="button" class="rule-x" title={ "Revoke: ask again for " + k } aria-label={ "Revoke " + k } data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/rules/revoke?key=" + urlQuery(k) + "')" }>@Icon("x", "ui-icon")</button>
+				</span>
+			}
+		</div>
+	}
+}
+
 func plural(n int, one, many string) string {
 	if n == 1 {
 		return one
@@ -310,15 +333,16 @@ templ Composer(d ThreadData) {
 		data-signals={ signalsJSON(t.Agent, t.Model, t.Effort, t.PermissionMode, "") }
 		data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + t.ID + "/send')" }
 	>
+		@SessionRules(d)
 		@PromptQueue(d)
 		<textarea
 			class="prompt"
 			rows="1"
 			placeholder={ promptPlaceholder(d) }
 			data-bind:prompt
-			data-draft={ t.ID }
 			data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send'))" }
-			data-effect="autoGrow(el); draftSync(el, $prompt)"
+			data-on:input__debounce.600ms={ draftPost(t.ID) }
+			data-effect="$prompt; autoGrow(el)"
 			autocomplete="off"
 			spellcheck="false"
 		></textarea>

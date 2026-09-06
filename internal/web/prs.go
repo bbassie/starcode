@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -137,9 +136,8 @@ func (s *Server) pullRequestDraft(w http.ResponseWriter, r *http.Request) {
 }
 
 // pullRequestThread opens a new thread on the project with the fix prompt
-// waiting in its composer. The prompt travels as the thread's saved draft
-// (see draftSync in the layout), so the page loads with it in place and
-// the reader can adjust the agent or the text before sending.
+// waiting in its composer, saved as the thread's draft, so the reader can
+// adjust the agent or the text before sending.
 func (s *Server) pullRequestThread(w http.ResponseWriter, r *http.Request) {
 	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -171,7 +169,10 @@ func (s *Server) pullRequestThread(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	draft, _ := json.Marshal(d.FixPrompt())
+	if err := s.App.SaveDraft(r.Context(), id, d.FixPrompt()); err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	sse := datastar.NewSSE(w, r)
-	sse.ExecuteScript(fmt.Sprintf("draftPut(%q, %s); location.href = %q", id, draft, "/threads/"+id))
+	sse.Redirect("/threads/" + id)
 }

@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -38,16 +39,13 @@ type App struct {
 	mu       sync.Mutex
 	sessions map[string]*live
 	promptMu sync.Mutex // serializes send-vs-turn-complete queue handoffs
-	// rules holds per-thread "allow for session" decisions: thread id ->
-	// rule key -> true. See ruleKey.
-	rules map[string]map[string]bool
 }
 
 func New(st *store.Store, b *bus.Bus, agents map[string]agent.Agent, log *slog.Logger) *App {
 	if agents == nil {
 		agents = map[string]agent.Agent{}
 	}
-	a := &App{Store: st, Bus: b, agents: agents, Log: log, sessions: map[string]*live{}, rules: map[string]map[string]bool{}}
+	a := &App{Store: st, Bus: b, agents: agents, Log: log, sessions: map[string]*live{}}
 	st.Published = func(events []domain.Event) {
 		msgs := make([]any, len(events))
 		for i, e := range events {
@@ -397,13 +395,16 @@ func (a *App) SendPrompt(ctx context.Context, threadID, text string) error {
 		}
 	}
 	if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
-		_, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: newID(), Body: text})
-		return err
+		if _, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: newID(), Body: text}); err != nil {
+			return err
+		}
+		return a.Store.SaveDraft(ctx, threadID, "")
 	}
 	l, err := a.session(ctx, t)
 	if err != nil {
 		return err
 	}
+	a.Store.SaveDraft(ctx, threadID, "")
 	// A queue can survive an agent process closing unexpectedly. Preserve
 	// FIFO order: append this new follow-up, then restart the oldest one.
 	if len(queued) > 0 {
@@ -496,13 +497,8 @@ func (a *App) ResolveApproval(ctx context.Context, threadID, approvalID, decisio
 	case domain.DecisionAllow:
 		d = agent.Allow
 	case domain.DecisionAllowSession:
+		// The store turns the resolved event into a session rule.
 		d = agent.Allow
-		a.mu.Lock()
-		if a.rules[threadID] == nil {
-			a.rules[threadID] = map[string]bool{}
-		}
-		a.rules[threadID][ruleKey(ap.ToolName, ap.Input)] = true
-		a.mu.Unlock()
 	case domain.DecisionDeny:
 	default:
 		return fmt.Errorf("unknown decision %q", decision)
@@ -525,29 +521,55 @@ func (a *App) ResolveApproval(ctx context.Context, threadID, approvalID, decisio
 }
 
 // SessionRules lists the "allow for session" rules active on a thread.
-func (a *App) SessionRules(threadID string) []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	var out []string
-	for k := range a.rules[threadID] {
-		out = append(out, k)
+// They are a projection of the approval answers, so they survive a
+// restart and a revoke is an event like the answer was.
+func (a *App) SessionRules(ctx context.Context, threadID string) []string {
+	rules, err := a.Store.SessionRules(ctx, threadID)
+	if err != nil {
+		a.Log.Warn("read session rules", "thread", threadID, "err", err)
 	}
-	return out
+	return rules
 }
 
-// ruleKey reduces an approval to something worth remembering: Bash commands
-// by their first word, everything else by tool name.
-func ruleKey(tool string, input json.RawMessage) string {
-	if tool == "Bash" {
-		var in struct {
-			Command string `json:"command"`
-		}
-		json.Unmarshal(input, &in)
-		if f := strings.Fields(in.Command); len(f) > 0 {
-			return "Bash:" + f[0]
-		}
+// RevokeRule drops one session rule; the next matching request asks.
+func (a *App) RevokeRule(ctx context.Context, threadID, key string) error {
+	if !slices.Contains(a.SessionRules(ctx, threadID), key) {
+		return errors.New("no such rule")
 	}
-	return tool
+	_, err := a.Store.Append(ctx, threadID, domain.RuleRevoked{Key: key})
+	return err
+}
+
+// SaveDraft keeps composer text under key (a thread id, or "home") for
+// every browser to find; see Store.SaveDraft for why it is not an event.
+func (a *App) SaveDraft(ctx context.Context, key, body string) error {
+	if key == "" {
+		return errors.New("draft key is required")
+	}
+	return a.Store.SaveDraft(ctx, key, body)
+}
+
+// MarkSeen records that threadID is on someone's screen now. Other pages
+// hear about it only when a row's unread mark goes away.
+func (a *App) MarkSeen(ctx context.Context, threadID string) {
+	changed, err := a.Store.MarkSeen(ctx, threadID, time.Now())
+	if err != nil {
+		a.Log.Warn("mark seen", "thread", threadID, "err", err)
+		return
+	}
+	if changed {
+		a.Bus.Publish(domain.SeenChanged{ThreadID: threadID})
+	}
+}
+
+// Compact folds streamed deltas (see Store.Compact) and logs the count.
+func (a *App) Compact(ctx context.Context, threadID string) {
+	n, err := a.Store.Compact(ctx, threadID)
+	if err != nil {
+		a.Log.Warn("compact", "thread", threadID, "err", err)
+	} else if n > 0 {
+		a.Log.Debug("compacted", "thread", threadID, "rows", n)
+	}
 }
 
 // ---- sessions ----
@@ -691,9 +713,7 @@ func (a *App) pump(l *live) {
 			a.Bus.Publish(domain.GitChanged{})
 		case agent.KindApproval:
 			ap := *e.Approval
-			a.mu.Lock()
-			auto := a.rules[tid][ruleKey(ap.ToolName, ap.Input)]
-			a.mu.Unlock()
+			auto := slices.Contains(a.SessionRules(ctx, tid), domain.RuleKey(ap.ToolName, ap.Input))
 			req := domain.ApprovalRequested{ID: ap.ID, ItemID: itemID(ap.ToolID), ToolName: ap.ToolName, Description: ap.Description, Input: ap.Input}
 			if auto {
 				if err := l.sess.Resolve(ctx, ap.ID, agent.Allow); err != nil {
