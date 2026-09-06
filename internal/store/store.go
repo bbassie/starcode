@@ -44,6 +44,7 @@ type Thread struct {
 	ExternalSessionID string
 	Status            string
 	StatusDetail      string
+	Archived          bool
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -271,6 +272,12 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 	case domain.ThreadDeleted:
 		_, err := tx.ExecContext(ctx, `DELETE FROM threads WHERE id=?`, ev.ThreadID)
 		return err
+	case domain.ThreadArchived:
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET archived=1, updated_at=? WHERE id=?`, ts, ev.ThreadID)
+		return err
+	case domain.ThreadUnarchived:
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET archived=0, updated_at=? WHERE id=?`, ts, ev.ThreadID)
+		return err
 	case domain.ThreadSettingsChanged:
 		// A different agent cannot resume another agent's session.
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET model=?, effort=?, permission_mode=?, external_session_id=CASE WHEN agent=? THEN external_session_id ELSE '' END, agent=?, updated_at=? WHERE id=?`,
@@ -368,6 +375,10 @@ func deref(p any) any {
 		return *v
 	case *domain.ThreadDeleted:
 		return *v
+	case *domain.ThreadArchived:
+		return *v
+	case *domain.ThreadUnarchived:
+		return *v
 	case *domain.ThreadSettingsChanged:
 		return *v
 	case *domain.AgentSessionBound:
@@ -437,12 +448,12 @@ func (s *Store) Project(ctx context.Context, id string) (Project, error) {
 	return p, err
 }
 
-const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,created_at,updated_at`
+const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,created_at,updated_at`
 
 func scanThread(sc interface{ Scan(...any) error }) (Thread, error) {
 	var t Thread
 	var c, u string
-	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &c, &u)
+	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &c, &u)
 	t.CreatedAt, _ = time.Parse(timeFmt, c)
 	t.UpdatedAt, _ = time.Parse(timeFmt, u)
 	return t, err

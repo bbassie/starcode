@@ -176,6 +176,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .project-head { display: flex; align-items: center; gap: 4px; padding: 8px 6px 4px; font-weight: 600; cursor: pointer; }
 .project-head::before { content: "▸"; color: var(--fg-dim); font-size: 0.8em; width: 1em; }
 .project[open] > .project-head::before { content: "▾"; }
+.project.archived > .project-head { color: var(--fg-dim); font-weight: 500; }
 .thread-row a {
   display: flex;
   gap: 8px;
@@ -264,6 +265,10 @@ select.in {
 .show-sm { display: none; }
 .crumbs > .ellipsis { flex: 1; }
 .crumbs a { color: var(--fg-dim); font-weight: 500; }
+.crumb-title { flex: 1; text-align: left; background: none; border: 0; padding: 2px 4px; margin: 0 -4px; border-radius: var(--radius-sm); font-weight: 600; cursor: text; }
+.crumb-title:hover { background: var(--bg-3); }
+.rename { display: flex; flex: 1; gap: 4px; align-items: center; min-width: 0; }
+.rename .in { flex: 1; min-width: 0; min-height: 28px; padding: 2px 8px; font-weight: 600; }
 .mainhead > .tiny-text { max-width: 26%; flex: none; }
 .crumbs a:hover { color: var(--fg); }
 .status-pill {

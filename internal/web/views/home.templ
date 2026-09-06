@@ -67,7 +67,7 @@ templ Home(d HomeData) {
 						<ul class="threads">
 							{{ n := 0 }}
 							for _, t := range d.Threads {
-								if t.ProjectID == p.ID && n < 8 {
+								if t.ProjectID == p.ID && listed(t) && n < 8 {
 									{{ n++ }}
 									@ThreadRow(t, p, false, false, d.Looks[t.Agent])
 								}

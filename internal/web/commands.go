@@ -30,6 +30,7 @@ type signals struct {
 	Effort  string       `json:"effort"`
 	Mode    string       `json:"mode"`
 	File    string       `json:"file"`
+	Title   string       `json:"title"`
 	Attach  []UploadFile `json:"attach"`
 }
 
@@ -264,6 +265,32 @@ func (s *Server) deleteThread(w http.ResponseWriter, r *http.Request) {
 	}
 	sse := datastar.NewSSE(w, r)
 	sse.Redirect("/")
+}
+
+func (s *Server) archiveThread(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.ArchiveThread(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
+func (s *Server) unarchiveThread(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.UnarchiveThread(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
+func (s *Server) renameThread(w http.ResponseWriter, r *http.Request) {
+	sig := s.readSignals(r)
+	if err := s.App.RenameThread(r.Context(), r.PathValue("id"), sig.Title); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	sse := datastar.NewSSE(w, r)
+	sse.MarshalAndPatchSignals(map[string]any{"rename": false})
 }
 
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {

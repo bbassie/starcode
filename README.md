@@ -49,6 +49,12 @@ Run one instance as a systemd user service from the binary in the repo (`make se
 
 `make dev` (air) is the other way round: it restarts on every save, which is right for UI work on a scratch database and wrong while threads are running.
 
+## Threads
+
+The title in the breadcrumb is a button: click it to rename the thread (Enter saves, Escape cancels). Agents that generate their own titles still set them on the first turn.
+
+Archive puts a thread out of the way without deleting it: it leaves the project's list and the home cards and moves to a folded "Archived" section at the bottom of the sidebar, which opens while you search or while you are on one of its threads. Nothing else changes; the transcript stays, and a reply (or the unarchive button) moves it back. A thread archived while a turn is running stays under Running until the turn ends.
+
 ## Settings
 
 Appearance picks the theme. Usage charts cost and tokens from the CLIs' own transcripts (see `internal/usage`), scanning every instance's config dir and showing each instance as its own series, in its tag colour when it has one. Sessions starcode itself ran are matched to their transcript by session id so nothing is counted twice.

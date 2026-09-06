@@ -342,6 +342,36 @@ func (a *App) DeleteThread(ctx context.Context, id string) error {
 	return err
 }
 
+// ArchiveThread hides a thread from the sidebar and the project cards. An
+// idle session is closed so the agent process goes away; a running turn
+// keeps going and the thread stays listed under Running until it ends.
+func (a *App) ArchiveThread(ctx context.Context, id string) error {
+	t, err := a.Store.Thread(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.Archived {
+		return nil
+	}
+	if t.Status != domain.StatusRunning && t.Status != domain.StatusAwaitingApproval {
+		a.closeSession(id)
+	}
+	_, err = a.Store.Append(ctx, id, domain.ThreadArchived{})
+	return err
+}
+
+func (a *App) UnarchiveThread(ctx context.Context, id string) error {
+	t, err := a.Store.Thread(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !t.Archived {
+		return nil
+	}
+	_, err = a.Store.Append(ctx, id, domain.ThreadUnarchived{})
+	return err
+}
+
 // SendPrompt starts a turn when the thread is idle. While a turn or approval
 // is active it persists the prompt in the per-thread FIFO instead, allowing
 // the composer to accept follow-ups without disturbing transcript order.
@@ -359,6 +389,12 @@ func (a *App) SendPrompt(ctx context.Context, threadID, text string) error {
 	queued, err := a.Store.QueuedPrompts(ctx, threadID)
 	if err != nil {
 		return err
+	}
+	if t.Archived {
+		// A reply brings the thread back where it can be found.
+		if _, err := a.Store.Append(ctx, threadID, domain.ThreadUnarchived{}); err != nil {
+			return err
+		}
 	}
 	if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
 		_, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: newID(), Body: text})

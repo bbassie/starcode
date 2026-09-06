@@ -173,7 +173,7 @@ func Home(d HomeData) templ.Component {
 			}
 			n := 0
 			for _, t := range d.Threads {
-				if t.ProjectID == p.ID && n < 8 {
+				if t.ProjectID == p.ID && listed(t) && n < 8 {
 					n++
 					templ_7745c5c3_Err = ThreadRow(t, p, false, false, d.Looks[t.Agent]).Render(ctx, templ_7745c5c3_Buffer)
 					if templ_7745c5c3_Err != nil {

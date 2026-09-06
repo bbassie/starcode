@@ -155,3 +155,33 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 	}
 	s.Close()
 }
+
+func TestArchiveProjectionAndReplay(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if _, err := s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/arch", Name: "arch"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "t1", domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "one", Agent: "claude"}, domain.ThreadArchived{}); err != nil {
+		t.Fatal(err)
+	}
+	th, err := s.Thread(ctx, "t1")
+	if err != nil || !th.Archived {
+		t.Fatalf("after archive: %+v, %v", th, err)
+	}
+	if _, err := s.Append(ctx, "t1", domain.ThreadUnarchived{}); err != nil {
+		t.Fatal(err)
+	}
+	if th, _ = s.Thread(ctx, "t1"); th.Archived {
+		t.Fatalf("after unarchive: %+v", th)
+	}
+	if _, err := s.Append(ctx, "t1", domain.ThreadArchived{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Replay(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if th, _ = s.Thread(ctx, "t1"); !th.Archived {
+		t.Fatalf("after replay: %+v", th)
+	}
+}

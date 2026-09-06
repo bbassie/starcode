@@ -177,8 +177,17 @@ templ MainHead(d ThreadData) {
 		<nav class="crumbs ellipsis">
 			<a href="/">{ d.Project.Name }</a>
 			<span class="dim">/</span>
-			<span class="ellipsis">{ d.Thread.Title }</span>
+			// The title is a button that swaps in the rename box; Enter or
+			// the save button posts, Escape and blur put the title back.
+			<button type="button" class="crumb-title ellipsis" title="Rename thread" data-show="!$rename" data-preserve-attr="style" data-on:click={ "$title = " + jsq(d.Thread.Title) + "; $rename = true; renameFocus()" }>{ d.Thread.Title }</button>
+			<form class="rename" data-show="$rename" data-preserve-attr="style" style="display: none" data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + d.Thread.ID + "/rename')" }>
+				<input class="in" type="text" data-bind:title autocomplete="off" spellcheck="false" maxlength="200" data-on:keydown="evt.key === 'Escape' && (evt.preventDefault(), $rename = false)" data-on:blur__debounce.150ms="$rename = false"/>
+				<button class="btn icon tiny" type="submit" title="Save title" aria-label="Save title">@Icon("check", "ui-icon")</button>
+			</form>
 		</nav>
+		if d.Thread.Archived {
+			<span class="status-pill st-idle" title="Archived: sending a message unarchives it">@Icon("archive", "ui-icon") <span>archived</span></span>
+		}
 		<span class={ "status-pill", "st-" + d.Thread.Status } title={ d.Thread.StatusDetail }>@StatusIcon(d.Thread.Status) <span>{ statusLabel(d.Thread.Status) }</span></span>
 		<span class="dim tiny-text hide-sm ellipsis" title="Model reported by the agent">@Icon("bot", "ui-icon") <span class="ellipsis">{ modelShown(d.Thread) }</span></span>
 		<span class="spacer"></span>
@@ -187,6 +196,11 @@ templ MainHead(d ThreadData) {
 		}
 		<button class="btn ghost" data-on:click="$term = !$term" title="Toggle terminal">@Icon("terminal", "ui-icon") <span class="hide-sm">terminal</span></button>
 		<button class="btn ghost gittoggle" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
+		if d.Thread.Archived {
+			<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unarchive')" } title="Move this thread back into its project">@Icon("archive-restore", "ui-icon") <span class="hide-sm">unarchive</span></button>
+		} else {
+			<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/archive')" } title="Archive thread (hidden from the lists, kept in full)">@Icon("archive", "ui-icon") <span class="hide-sm">archive</span></button>
+		}
 		<button class="btn ghost dim" data-on:click={ "confirm('Delete this thread?') && @post('/api/threads/" + d.Thread.ID + "/delete')" } title="Delete thread"><span class="hide-sm">delete</span><span class="show-sm">@Icon("trash-2", "ui-icon")</span></button>
 	</header>
 }
@@ -327,6 +341,9 @@ func promptPlaceholder(d ThreadData) string {
 	}
 	if len(d.Items) == 0 {
 		return "Describe what " + d.Thread.Agent + " should do in " + d.Project.Name + "…"
+	}
+	if d.Thread.Archived {
+		return "Reply… (this moves the thread out of the archive)"
 	}
 	return "Reply…"
 }

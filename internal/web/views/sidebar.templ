@@ -51,6 +51,13 @@ func active(t store.Thread) bool {
 	return t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval
 }
 
+// listed is whether a thread belongs in its project's list: archived
+// threads move to the Archived section unless a turn is still running,
+// which keeps them under Running until it ends.
+func listed(t store.Thread) bool {
+	return !t.Archived || active(t)
+}
+
 func searchKey(t store.Thread, p store.Project) string {
 	return strings.ToLower(t.Title + " " + p.Name + " " + t.Agent)
 }
@@ -105,7 +112,7 @@ templ Sidebar(d SidebarData) {
 					</summary>
 					<ul class="threads">
 						for _, t := range d.Threads {
-							if t.ProjectID == p.ID && !active(t) {
+							if t.ProjectID == p.ID && !active(t) && listed(t) {
 								@ThreadRow(t, p, t.ID == d.Current, false, d.Looks[t.Agent])
 							}
 						}
@@ -114,6 +121,30 @@ templ Sidebar(d SidebarData) {
 			}
 			if len(d.Projects) == 0 {
 				<p class="dim pad">No projects yet. Add a folder with the + above.</p>
+			}
+			{{ archived := 0 }}
+			for _, t := range d.Threads {
+				if t.Archived && !active(t) {
+					{{ archived++ }}
+				}
+			}
+			if archived > 0 {
+				// Folded shut unless the reader is searching or is on one of
+				// these threads, so a match or the current row is never hidden.
+				<details class="project archived" open?={ currentArchived(d) } data-attr:open={ "$q != '' || " + fmt.Sprintf("%t", currentArchived(d)) }>
+					<summary class="project-head">
+						<span class="ellipsis">Archived</span>
+						<span class="dim tiny-text">{ fmt.Sprintf("%d", archived) }</span>
+						<span class="spacer"></span>
+					</summary>
+					<ul class="threads">
+						for _, t := range d.Threads {
+							if t.Archived && !active(t) {
+								@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true, d.Looks[t.Agent])
+							}
+						}
+					</ul>
+				</details>
 			}
 		</nav>
 		<div class="side-foot">
@@ -145,6 +176,17 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 			<span class="dim tiny-text"><span class="agent-mark" style={ agentMarkStyle(look.Color) } title={ t.Agent }>@Brand(look.Driver, "ui-icon")</span> <span data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span></span>
 		</a>
 	</li>
+}
+
+// currentArchived is whether the thread on screen is in the Archived
+// section, which then starts open.
+func currentArchived(d SidebarData) bool {
+	for _, t := range d.Threads {
+		if t.ID == d.Current {
+			return t.Archived && !active(t)
+		}
+	}
+	return false
 }
 
 // agentMarkStyle colours the agent glyph with the instance's tag colour;

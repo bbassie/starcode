@@ -148,3 +148,35 @@ func receivePrompt(t *testing.T, ch <-chan string) string {
 		return ""
 	}
 }
+
+func TestSendPromptUnarchives(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "arch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	sess := newQueueSession()
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ArchiveThread(ctx, threadID); err != nil {
+		t.Fatal(err)
+	}
+	if th, _ := st.Thread(ctx, threadID); !th.Archived {
+		t.Fatalf("not archived: %+v", th)
+	}
+	if err := a.SendPrompt(ctx, threadID, "hello again"); err != nil {
+		t.Fatal(err)
+	}
+	receivePrompt(t, sess.sent)
+	if th, _ := st.Thread(ctx, threadID); th.Archived || th.Status != domain.StatusRunning {
+		t.Fatalf("after send: %+v", th)
+	}
+}

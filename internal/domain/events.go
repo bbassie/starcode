@@ -78,6 +78,13 @@ type ThreadRenamed struct {
 
 type ThreadDeleted struct{}
 
+// ThreadArchived moves a thread out of the sidebar and the project cards
+// without deleting it. Sending a prompt to an archived thread unarchives
+// it first.
+type ThreadArchived struct{}
+
+type ThreadUnarchived struct{}
+
 // ThreadSettingsChanged updates how the thread's agent is launched. The
 // agent itself can only change before the first prompt; the rest applies
 // from the next turn on.
@@ -198,6 +205,10 @@ func TypeOf(p any) string {
 		return "thread.renamed"
 	case ThreadDeleted, *ThreadDeleted:
 		return "thread.deleted"
+	case ThreadArchived, *ThreadArchived:
+		return "thread.archived"
+	case ThreadUnarchived, *ThreadUnarchived:
+		return "thread.unarchived"
 	case ThreadSettingsChanged, *ThreadSettingsChanged:
 		return "thread.settings"
 	case AgentSessionBound, *AgentSessionBound:
@@ -246,6 +257,10 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &ThreadRenamed{}
 	case "thread.deleted":
 		p = &ThreadDeleted{}
+	case "thread.archived":
+		p = &ThreadArchived{}
+	case "thread.unarchived":
+		p = &ThreadUnarchived{}
 	case "thread.settings", "thread.agent":
 		p = &ThreadSettingsChanged{}
 	case "thread.session_bound":
