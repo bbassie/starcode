@@ -55,6 +55,10 @@ The title in the breadcrumb is a button: click it to rename the thread (Enter sa
 
 Archive puts a thread out of the way without deleting it: it leaves the project's list and the home cards and moves to a folded "Archived" section at the bottom of the sidebar, which opens while you search or while you are on one of its threads. Nothing else changes; the transcript stays, and a reply (or the unarchive button) moves it back. A thread archived while a turn is running stays under Running until the turn ends.
 
+## Side panel
+
+The panel on the right of a thread has three tabs. Changes is the working tree: `git status`, a diff per file, and an editor for any text file. Files browses the project directory, with uploads into the folder shown. PRs lists the repository's open pull requests through the GitHub CLI (`gh`, signed in), the current branch's first with its review state and check results, and a link to open one on GitHub when the branch has none. The list is cached for a minute per project; the refresh button in the tab bar reads it again. Without `gh`, or in a repository with no GitHub remote, the tab says so.
+
 ## Terminal
 
 The terminal button (or Ctrl+`) opens a shell in the project directory under the transcript. Split opens another one beside it; the restart and close buttons act on the pane that last had focus, and closing the last pane hides the panel. Shells run on the server and outlive the page: a reload gets its panes back with their scrollback (`GET /api/term/{id}/panes` lists them), and they end when the thread is deleted or starcode stops.

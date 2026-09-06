@@ -47,6 +47,7 @@ type Server struct {
 	mux       *http.ServeMux
 	cache     capsCache
 	providers providerCache
+	prs       prCache
 	assets    string
 }
 
@@ -88,6 +89,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/projects", s.addProject)
 	s.mux.HandleFunc("GET /api/project-paths", s.projectPaths)
 	s.mux.HandleFunc("GET /api/projects/{id}/files", s.projectFiles)
+	s.mux.HandleFunc("GET /api/projects/{id}/prs", s.pullRequests)
 	s.mux.HandleFunc("POST /api/projects/{id}/upload", s.uploadFiles)
 	s.mux.HandleFunc("GET /api/attachments/{id}/{name}", s.attachmentFile)
 	s.mux.HandleFunc("POST /api/projects/{id}/remove", s.removeProject)

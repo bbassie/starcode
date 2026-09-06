@@ -2,10 +2,11 @@ package views
 
 import (
 	pathpkg "path"
-	"strconv"
 	"starcode/internal/gitx"
 	"starcode/internal/store"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type GitData struct {
@@ -25,6 +26,14 @@ type ProjectFile struct {
 	IsDir bool
 }
 
+// PRData is the pull requests tab. Loaded is false for the placeholder
+// the page ships with; the list arrives when the tab is first opened.
+type PRData struct {
+	Project store.Project
+	List    gitx.PRList
+	Loaded  bool
+}
+
 type ExplorerData struct {
 	Project store.Project
 	Dir     string
@@ -42,6 +51,7 @@ templ GitPanel(d GitData) {
 		@GitHeader(d)
 		@GitFiles(d)
 		@FileExplorer(ExplorerData{Project: d.Project, Hidden: true})
+		@PullRequests(PRData{Project: d.Project})
 		@GitDetail(d)
 	</aside>
 }
@@ -52,6 +62,7 @@ templ GitHeader(d GitData) {
 			<div class="panel-tabs">
 				<button class="panel-tab" data-class:active="$panelTab === 'files'" data-on:click={ "$panelTab = 'files'; @get('/api/projects/" + d.Project.ID + "/files')" }>@Icon("folder", "ui-icon") files</button>
 				<button class="panel-tab active" data-class:active="$panelTab === 'changes'" data-on:click="$panelTab = 'changes'">@Icon("git-compare-arrows", "ui-icon") changes</button>
+				<button class="panel-tab" data-class:active="$panelTab === 'prs'" data-on:click={ "$panelTab = 'prs'; @get('/api/projects/" + d.Project.ID + "/prs')" } title="Pull requests on GitHub">@Icon("git-pull-request", "ui-icon") PRs</button>
 			</div>
 		} else {
 			<span>Project</span>
@@ -65,6 +76,7 @@ templ GitHeader(d GitData) {
 		}
 		if d.Project.ID != "" {
 			<button class="btn icon ghost tiny" data-show="$panelTab === 'changes'" data-on:click={ "@get('/api/git/" + d.Project.ID + "/refresh')" } title="Refresh">@Icon("refresh-cw", "ui-icon")</button>
+			<button class="btn icon ghost tiny" data-show="$panelTab === 'prs'" data-preserve-attr="style" style="display: none" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/prs?refresh=1')" } title="Refresh pull requests">@Icon("refresh-cw", "ui-icon")</button>
 		}
 		<button class="btn icon ghost tiny" data-on:click="$git = false" title="Close" aria-label="Close changes panel">@Icon("x", "ui-icon")</button>
 	</div>
@@ -133,6 +145,86 @@ templ FileExplorer(d ExplorerData) {
 			</ul>
 		}
 	</div>
+}
+
+// PullRequests lists the repository's open PRs from the GitHub CLI, the
+// current branch's first, with a link to open one when the branch has
+// none. The changes and files tabs split the panel with the diff; this
+// tab takes it whole.
+templ PullRequests(d PRData) {
+	<div id="pr-list" class="pr-list" data-show="$panelTab === 'prs'" data-preserve-attr="style" style="display: none">
+		if !d.Loaded {
+			<p class="dim pad">loading pull requests…</p>
+		} else if d.List.Err != "" {
+			<p class="dim pad">{ d.List.Err }</p>
+		} else {
+			{{ _, hasCurrent := d.List.Current() }}
+			if url := d.List.CompareURL(); url != "" && !hasCurrent {
+				<div class="pr-open">
+					<span class="dim ellipsis">@Icon("git-branch", "ui-icon") <span>{ d.List.Branch }</span></span>
+					<span class="spacer"></span>
+					<a class="btn tiny" href={ templ.SafeURL(url) } target="_blank" rel="noopener">@Icon("git-pull-request-create", "ui-icon") open a pull request</a>
+				</div>
+			}
+			if len(d.List.PRs) == 0 {
+				<p class="dim pad">no open pull requests in { d.List.Repo }.</p>
+			} else {
+				<ul class="prs">
+					for _, pr := range d.List.PRs {
+						<li class={ templ.KV("current", pr.Head == d.List.Branch) }>
+							<a href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener" title={ pr.Head + " → " + pr.Base }>
+								<span class={ "pr-mark", prClass(pr) }>@Icon(prIcon(pr), "ui-icon")</span>
+								<span class="pr-text">
+									<span class="ellipsis">{ pr.Title }</span>
+									<span class="dim tiny-text ellipsis">
+										#{ strconv.Itoa(pr.Number) } · { pr.Author } · { pr.Head }
+										if pr.Head == d.List.Branch {
+											· <span class="ok">this branch</span>
+										}
+										· <span data-ago={ pr.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(pr.UpdatedAt) }</span>
+									</span>
+								</span>
+								<span class="pr-badges">
+									if pr.Draft {
+										<span class="pr-badge">draft</span>
+									}
+									switch pr.Review {
+										case "approved":
+											<span class="pr-badge ok" title="Approved">@Icon("check", "ui-icon")</span>
+										case "changes_requested":
+											<span class="pr-badge err" title="Changes requested">@Icon("message-square-x", "ui-icon")</span>
+									}
+									switch pr.Checks {
+										case "success":
+											<span class="pr-badge ok" title="Checks passed">@Icon("circle-check", "ui-icon")</span>
+										case "failure":
+											<span class="pr-badge err" title="Checks failed">@Icon("circle-x", "ui-icon")</span>
+										case "pending":
+											<span class="pr-badge warn" title="Checks running">@Icon("circle-dot", "ui-icon")</span>
+									}
+								</span>
+							</a>
+						</li>
+					}
+				</ul>
+			}
+		}
+	</div>
+}
+
+// prClass colours the PR mark: the accent for open, dim for a draft.
+func prClass(pr gitx.PR) string {
+	if pr.Draft {
+		return "dim"
+	}
+	return "st-running"
+}
+
+func prIcon(pr gitx.PR) string {
+	if pr.Draft {
+		return "git-pull-request-draft"
+	}
+	return "git-pull-request"
 }
 
 templ GitDetail(d GitData) {

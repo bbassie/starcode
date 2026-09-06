@@ -850,6 +850,16 @@ body.scrolled-up .jump { display: inline-flex; }
 .explorer-head .ellipsis { flex: 1; font-size: 0.85em; }
 .files.explorer .explorer-kind { display: inline-flex; color: var(--accent); }
 .files.explorer a > .ellipsis { flex: 1; }
+.pr-list { flex: 1; min-height: 0; overflow: auto; border-bottom: var(--border-w) solid var(--border); }
+.pr-open { display: flex; align-items: center; gap: 8px; padding: 8px var(--pad); border-bottom: var(--border-w) solid var(--border); background: var(--bg-3); }
+.pr-open .dim { display: inline-flex; align-items: center; gap: 4px; }
+.prs li a { display: flex; gap: 8px; align-items: center; padding: 7px var(--pad); min-height: 44px; }
+.prs li a:hover { background: var(--bg-3); }
+.prs li.current a { background: var(--sel); }
+.pr-mark { flex: none; display: inline-flex; }
+.pr-text { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.3; }
+.pr-badges { display: inline-flex; gap: 4px; flex: none; }
+.pr-badge { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; background: var(--bg-4); color: var(--fg-dim); font-size: 0.75em; }
 .diff-head { padding: 6px var(--pad); border-top: var(--border-w) solid var(--border); border-bottom: var(--border-w) solid var(--border); background: var(--bg-3); }
 .diff { padding: 4px 0; overflow: auto; font-size: 0.85em; flex: 1; }
 .diff span { display: block; padding: 0 var(--pad); white-space: pre; }
