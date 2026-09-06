@@ -7,7 +7,7 @@ import (
 
 // Page identifies what the SSE stream should render.
 type Page struct {
-	View        string // "home" | "thread" | "settings" | "usage" | "providers"
+	View        string // "home" | "thread" | "settings" | "usage" | "providers" | "keys"
 	ThreadID    string
 	Theme       string
 	UsageDays   int
@@ -33,6 +33,8 @@ func (p Page) streamURL() string {
 		url = fmt.Sprintf("/events?view=thread&id=%s", p.ThreadID)
 	case "settings":
 		url = "/events?view=settings"
+	case "keys":
+		url = "/events?view=keys"
 	case "providers":
 		url = fmt.Sprintf("/events?view=providers&sel=%s&tab=%s", p.ProviderSel, p.ProviderTab)
 	case "usage":
@@ -309,6 +311,9 @@ templ Layout(title string, p Page, parts Parts) {
 						let k = e.key.toLowerCase();
 						if (k === 'arrowup') k = 'up';
 						if (k === 'arrowdown') k = 'down';
+						if (k === 'arrowleft') k = 'left';
+						if (k === 'arrowright') k = 'right';
+						if (k === ' ') k = 'space';
 						if (k === 'dead' || k === '~') k = '`';
 						if (e.code === 'Backquote') k = '`';
 						if (e.code === 'Comma') k = ',';
@@ -317,6 +322,7 @@ templ Layout(title string, p Page, parts Parts) {
 						parts.push(k);
 						return parts.join('+');
 					};
+					window.hotkeyCombo = combo;
 					window.runHotkey = (c, inTerm) => {
 						const b = document.querySelector(`#hotkeys [data-hotkey="${c}"]`);
 						if (!b || (inTerm && !b.hasAttribute('data-term'))) return false;
@@ -331,7 +337,10 @@ templ Layout(title string, p Page, parts Parts) {
 					document.addEventListener('keydown', (e) => {
 						const t = e.target instanceof Element ? e.target : null;
 						const inTerm = !!(t && t.closest('#termpanel'));
-						if ((e.ctrlKey || e.metaKey || e.altKey) && !e.repeat && runHotkey(combo(e), inTerm)) {
+						// A combo without a modifier (a bound "y") only counts
+						// while no text box has the keys.
+						const typing = !!(t && t.closest('input, textarea, select, [contenteditable]'));
+						if ((e.ctrlKey || e.metaKey || e.altKey || !typing) && !e.repeat && runHotkey(combo(e), inTerm)) {
 							e.preventDefault();
 							e.stopPropagation();
 							return;
@@ -806,6 +815,37 @@ templ Layout(title string, p Page, parts Parts) {
 						window.addEventListener('beforeunload', (e) => {
 							if (document.querySelector('form.git-editor.dirty')) e.preventDefault();
 						});
+					})();
+				</script>
+			}
+			if p.View == "keys" {
+				// Recorder for Settings > Keys: change arms a row, the next key
+				// press (not a bare modifier) becomes the combo, which goes to
+				// the hidden bound box and out through the row's save button.
+				// Escape or a click elsewhere cancels and redraws the section.
+				<script>
+					(() => {
+						let row = null;
+						const stop = () => { row?.classList.remove('recording'); row = null; };
+						const cancel = () => { if (!row) return; stop(); document.getElementById('keys-refresh')?.click(); };
+						document.addEventListener('click', (e) => {
+							const b = e.target instanceof Element && e.target.closest('.key-change');
+							if (b) { cancel(); row = b.closest('.key-row'); row.classList.add('recording'); b.blur(); return; }
+							if (row && !(e.target instanceof Element && e.target.closest('.key-row.recording'))) cancel();
+						});
+						document.addEventListener('keydown', (e) => {
+							if (!row) return;
+							e.preventDefault();
+							e.stopPropagation();
+							if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+							if (e.key === 'Escape' && !e.ctrlKey && !e.altKey && !e.metaKey) { cancel(); return; }
+							const r = row;
+							stop();
+							const box = document.querySelector('.key-combo');
+							box.value = hotkeyCombo(e);
+							box.dispatchEvent(new Event('input', { bubbles: true }));
+							r.querySelector('.key-save').click();
+						}, true);
 					})();
 				</script>
 			}

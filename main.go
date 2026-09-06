@@ -24,10 +24,12 @@ import (
 	"starcode/internal/agent"
 	"starcode/internal/app"
 	"starcode/internal/bus"
+	"starcode/internal/keys"
 	"starcode/internal/providers"
 	"starcode/internal/store"
 	"starcode/internal/tlsx"
 	"starcode/internal/web"
+	"starcode/internal/web/views"
 )
 
 func main() {
@@ -135,6 +137,12 @@ func run() (string, error) {
 
 	h := web.New(a, log, *token, filepath.Join(*data, "attachments"), prov)
 	defer h.Close()
+	kb, err := keys.Open(filepath.Join(*data, "keybindings.json"))
+	if err != nil {
+		return "", err
+	}
+	h.Keys = kb
+	views.SetKeys(kb)
 	// HTTPS is on wherever a phone could be on the other end. The
 	// certificate comes from a CA of this instance's own unless files are
 	// given; devices install the CA once and the warning goes away.

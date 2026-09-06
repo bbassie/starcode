@@ -16,8 +16,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/starfederation/datastar-go/datastar"
+
 	"starcode/internal/app"
 	"starcode/internal/gitx"
+	"starcode/internal/keys"
 	"starcode/internal/providers"
 	"starcode/internal/store"
 	"starcode/internal/term"
@@ -50,6 +53,8 @@ type Server struct {
 	// install; nil when the certificate came from elsewhere.
 	Secure bool
 	CA     []byte
+	// Keys are the shortcut overrides; nil serves the defaults.
+	Keys *keys.Store
 	mux       *http.ServeMux
 	cache     capsCache
 	providers providerCache
@@ -79,6 +84,11 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("GET /settings", s.settings)
 	s.mux.HandleFunc("GET /settings/usage", s.usage)
 	s.mux.HandleFunc("GET /settings/providers", s.providersPage)
+	s.mux.HandleFunc("GET /settings/keys", s.keysPage)
+	s.mux.HandleFunc("GET /api/keys", s.keysFragment)
+	s.mux.HandleFunc("POST /api/keys/reset", s.resetKeys)
+	s.mux.HandleFunc("POST /api/keys/{id}", s.setKey)
+	s.mux.HandleFunc("POST /api/keys/{id}/reset", s.resetKey)
 	s.mux.HandleFunc("GET /api/providers/refresh", s.refreshProviders)
 	s.mux.HandleFunc("POST /api/providers", s.addProvider)
 	s.mux.HandleFunc("POST /api/providers/interval", s.setCheckInterval)
@@ -285,6 +295,61 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	s.page(r.Context(), "settings", views.Page{View: "settings", Theme: s.theme(r)}).Render(r.Context(), w)
+}
+
+func (s *Server) keysPage(w http.ResponseWriter, r *http.Request) {
+	s.page(r.Context(), "keys", views.Page{View: "keys", Theme: s.theme(r)}).Render(r.Context(), w)
+}
+
+func (s *Server) keysData() views.KeysPageData {
+	return views.KeysPageData{Bindings: s.Keys.All()}
+}
+
+func (s *Server) keysFragment(w http.ResponseWriter, r *http.Request) {
+	datastar.NewSSE(w, r).PatchElementTempl(views.KeysSection(s.keysData()))
+}
+
+// setKey binds the posted combo to the action; the section re-renders
+// either way, so a refused combo puts the old one back on screen.
+func (s *Server) setKey(w http.ResponseWriter, r *http.Request) {
+	if s.Keys == nil {
+		s.fail(w, r, errors.New("shortcuts cannot be changed in this build"))
+		return
+	}
+	var sig struct {
+		Combo string `json:"combo"`
+	}
+	datastar.ReadSignals(r, &sig)
+	err := s.Keys.Set(r.PathValue("id"), sig.Combo)
+	sse := datastar.NewSSE(w, r)
+	sse.PatchElementTempl(views.KeysSection(s.keysData()))
+	if err != nil {
+		sse.PatchElementTempl(views.Toast(err.Error()))
+	}
+}
+
+func (s *Server) resetKey(w http.ResponseWriter, r *http.Request) {
+	if s.Keys == nil {
+		s.fail(w, r, errors.New("shortcuts cannot be changed in this build"))
+		return
+	}
+	if err := s.Keys.Reset(r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	datastar.NewSSE(w, r).PatchElementTempl(views.KeysSection(s.keysData()))
+}
+
+func (s *Server) resetKeys(w http.ResponseWriter, r *http.Request) {
+	if s.Keys == nil {
+		s.fail(w, r, errors.New("shortcuts cannot be changed in this build"))
+		return
+	}
+	if err := s.Keys.Reset(""); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	datastar.NewSSE(w, r).PatchElementTempl(views.KeysSection(s.keysData()))
 }
 
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {

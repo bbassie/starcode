@@ -6,6 +6,7 @@ import (
 	pathpkg "path"
 	"regexp"
 	"starcode/internal/domain"
+	"starcode/internal/keys"
 	"starcode/internal/store"
 	"strings"
 )
@@ -165,9 +166,9 @@ templ Approval(a store.Approval) {
 			<pre class="block input">{ clip(input, 4000) }</pre>
 		}
 		<div class="approval-actions">
-			<button class="btn primary" data-on:click={ approveURL(a, domain.DecisionAllow) }>allow</button>
-			<button class="btn" data-on:click={ approveURL(a, domain.DecisionAllowSession) }>allow for session</button>
-			<button class="btn warn" data-on:click={ approveURL(a, domain.DecisionDeny) }>deny</button>
+			<button class="btn primary" data-decision={ domain.DecisionAllow } title={ "Allow (" + keys.Display(Key("approve")) + ")" } data-on:click={ approveURL(a, domain.DecisionAllow) }>allow</button>
+			<button class="btn" data-decision={ domain.DecisionAllowSession } title={ "Allow for session (" + keys.Display(Key("approve-session")) + ")" } data-on:click={ approveURL(a, domain.DecisionAllowSession) }>allow for session</button>
+			<button class="btn warn" data-decision={ domain.DecisionDeny } title={ "Deny (" + keys.Display(Key("deny")) + ")" } data-on:click={ approveURL(a, domain.DecisionDeny) }>deny</button>
 		</div>
 	</div>
 }

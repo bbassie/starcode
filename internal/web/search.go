@@ -77,7 +77,7 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 	for _, p := range ps {
 		c := views.Command{Label: "New thread in " + p.Name, Icon: "plus", Action: "@post('/api/projects/" + p.ID + "/threads')"}
 		if p.ID == t.ProjectID {
-			c.Key = "mod+shift+o"
+			c.Key = views.Key("thread-new")
 		}
 		out = append(out, c)
 	}
@@ -91,17 +91,18 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 			out = append(out, views.Command{Label: "Archive thread", Icon: "archive", Action: "@post('/api/threads/" + t.ID + "/archive')"})
 		}
 		out = append(out,
-			views.Command{Label: "Toggle terminal", Icon: "terminal", Action: "$term = !$term", Key: "mod+`"},
-			views.Command{Label: "Toggle changes panel", Icon: "git-compare-arrows", Action: "$git = !$git", Key: "mod+shift+g"},
+			views.Command{Label: "Toggle terminal", Icon: "terminal", Action: "$term = !$term", Key: views.Key("terminal")},
+			views.Command{Label: "Toggle changes panel", Icon: "git-compare-arrows", Action: "$git = !$git", Key: views.Key("changes")},
 			views.Command{Label: "Delete thread", Icon: "trash-2", Action: "confirm('Delete this thread?') && @post('/api/threads/" + t.ID + "/delete')"},
 		)
 	}
 	out = append(out,
 		views.Command{Label: "Projects overview", Icon: "star", Href: "/"},
-		views.Command{Label: "Settings", Icon: "settings", Href: "/settings", Key: "mod+,"},
+		views.Command{Label: "Settings", Icon: "settings", Href: "/settings", Key: views.Key("settings")},
 		views.Command{Label: "Settings: usage", Icon: "chart-no-axes-combined", Href: "/settings/usage"},
 		views.Command{Label: "Settings: providers", Icon: "plug", Href: "/settings/providers"},
-		views.Command{Label: "Keyboard shortcuts", Icon: "keyboard", Action: "$help = true", Key: "mod+/"},
+		views.Command{Label: "Settings: keys", Icon: "keyboard", Href: "/settings/keys"},
+		views.Command{Label: "Keyboard shortcuts", Icon: "keyboard", Action: "$help = true", Key: views.Key("help")},
 	)
 	for _, th := range Themes {
 		out = append(out, views.Command{Label: "Theme: " + views.ThemeName(th), Icon: "palette", Action: "$theme = " + jsq(th) + "; @post('/api/theme')"})

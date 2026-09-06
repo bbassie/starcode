@@ -3,6 +3,8 @@ package views
 import (
 	"fmt"
 	pathpkg "path"
+	"starcode/internal/domain"
+	"starcode/internal/keys"
 	"starcode/internal/store"
 	"strconv"
 	"strings"
@@ -227,6 +229,14 @@ func keyLabel(k string) string {
 		return "↓"
 	case "enter":
 		return "↵"
+	case "escape", "esc":
+		return "Esc"
+	case "left":
+		return "←"
+	case "right":
+		return "→"
+	case "space":
+		return "Space"
 	}
 	return strings.ToUpper(k)
 }
@@ -243,31 +253,49 @@ type Hotkey struct {
 	Term bool
 }
 
+// keyStore is where combos come from; nil means the defaults. main sets
+// it once at startup.
+var keyStore *keys.Store
+
+func SetKeys(s *keys.Store) { keyStore = s }
+
+// Key is the combo in force for a keys.Actions id.
+func Key(id string) string { return keyStore.Combo(id) }
+
+// approveFirst is the expression that answers the oldest waiting
+// approval card with decision.
+func approveFirst(decision string) string {
+	return "document.querySelector('.item.approval:not(.resolved) [data-decision=\"" + decision + "\"]')?.click()"
+}
+
 // Hotkeys lists the shortcuts for a page. The palette and the help
 // dialog show the same list.
 func Hotkeys(p Page, parts Parts) []Hotkey {
-	keys := []Hotkey{
-		{Combo: "mod+k", Label: "Search and commands", Action: PaletteOpen(p)},
-		{Combo: "mod+/", Label: "Keyboard shortcuts", Action: "$help = !$help"},
-		{Combo: "mod+b", Label: "Toggle sidebar", Action: "innerWidth > 900 ? ($navhide = !$navhide) : ($nav = !$nav)"},
-		{Combo: "alt+up", Label: "Previous thread", Action: "threadStep(-1)"},
-		{Combo: "alt+down", Label: "Next thread", Action: "threadStep(1)"},
+	hk := []Hotkey{
+		{Combo: Key("palette"), Label: "Search and commands", Action: PaletteOpen(p)},
+		{Combo: Key("help"), Label: "Keyboard shortcuts", Action: "$help = !$help"},
+		{Combo: Key("sidebar"), Label: "Toggle sidebar", Action: "innerWidth > 900 ? ($navhide = !$navhide) : ($nav = !$nav)"},
+		{Combo: Key("thread-prev"), Label: "Previous thread", Action: "threadStep(-1)"},
+		{Combo: Key("thread-next"), Label: "Next thread", Action: "threadStep(1)"},
 	}
 	if parts.Thread != nil {
 		t := parts.Thread
-		keys = append(keys,
-			Hotkey{Combo: "mod+shift+o", Label: "New thread in " + t.Project.Name, Action: "@post('/api/projects/" + t.Project.ID + "/threads')"},
-			Hotkey{Combo: "mod+`", Label: "Toggle terminal", Action: "$term = !$term", Term: true},
-			Hotkey{Combo: "mod+shift+g", Label: "Toggle changes panel", Action: "$git = !$git", Term: true},
-			Hotkey{Combo: "mod+shift+f", Label: "Focus the prompt", Action: "promptFocus()", Term: true},
+		hk = append(hk,
+			Hotkey{Combo: Key("thread-new"), Label: "New thread in " + t.Project.Name, Action: "@post('/api/projects/" + t.Project.ID + "/threads')"},
+			Hotkey{Combo: Key("terminal"), Label: "Toggle terminal", Action: "$term = !$term", Term: true},
+			Hotkey{Combo: Key("changes"), Label: "Toggle changes panel", Action: "$git = !$git", Term: true},
+			Hotkey{Combo: Key("prompt"), Label: "Focus the prompt", Action: "promptFocus()", Term: true},
+			Hotkey{Combo: Key("approve"), Label: "Allow the waiting approval", Action: approveFirst(domain.DecisionAllow)},
+			Hotkey{Combo: Key("approve-session"), Label: "Allow it for the session", Action: approveFirst(domain.DecisionAllowSession)},
+			Hotkey{Combo: Key("deny"), Label: "Deny the waiting approval", Action: approveFirst(domain.DecisionDeny)},
 		)
 	}
 	if parts.Thread == nil && len(parts.Projects) > 0 {
 		p := parts.Projects[0]
-		keys = append(keys, Hotkey{Combo: "mod+shift+o", Label: "New thread in " + p.Name, Action: "@post('/api/projects/" + p.ID + "/threads')"})
+		hk = append(hk, Hotkey{Combo: Key("thread-new"), Label: "New thread in " + p.Name, Action: "@post('/api/projects/" + p.ID + "/threads')"})
 	}
-	keys = append(keys, Hotkey{Combo: "mod+,", Label: "Settings", Action: "location.href = '/settings'"})
-	return keys
+	hk = append(hk, Hotkey{Combo: Key("settings"), Label: "Settings", Action: "location.href = '/settings'"})
+	return hk
 }
 
 // HotkeyButtons is the hidden set of buttons the key handler clicks.
@@ -291,6 +319,7 @@ templ ShortcutHelp(keys []Hotkey) {
 				<div class="help-row"><span>Send the prompt</span>@Keys("enter")</div>
 				<div class="help-row"><span>New line in the prompt</span>@Keys("shift+enter")</div>
 				<div class="help-row"><span>Close a panel or menu</span>@Keys("esc")</div>
+				<a class="help-edit" href="/settings/keys" data-on:click="$help = false">@Icon("keyboard", "ui-icon") <span>Change these shortcuts</span></a>
 			</div>
 		</div>
 	</div>

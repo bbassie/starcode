@@ -178,7 +178,7 @@ func (c *conn) renderUpdateBanner(ctx context.Context) error {
 }
 
 func (c *conn) renderSidebar(ctx context.Context) error {
-	d, err := c.s.sidebarData(ctx, c.threadID, c.view == "settings" || c.view == "usage" || c.view == "providers")
+	d, err := c.s.sidebarData(ctx, c.threadID, c.view == "settings" || c.view == "usage" || c.view == "providers" || c.view == "keys")
 	if err != nil {
 		return err
 	}

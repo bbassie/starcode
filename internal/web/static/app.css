@@ -1018,6 +1018,17 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .mac .kbd-mod { font-size: 0; }
 .mac .kbd-mod::after { content: "⌘"; font-size: 12px; }
 .help-list { overflow-y: auto; padding: 8px 6px; }
+.help-edit { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding: 8px; color: var(--accent); border-top: var(--border-w) solid var(--border); }
+.help-edit:hover { text-decoration: underline; }
+/* Settings > Keys rows: the combo, then change and reset; a row being
+   recorded swaps the combo for a prompt. */
+.key-cell { display: flex; align-items: center; gap: 8px; flex: none; }
+.key-recording { display: none; white-space: nowrap; }
+.key-row.recording .keys, .key-row.recording .key-change { display: none; }
+.key-row.recording .key-recording { display: inline-flex; align-items: center; gap: 4px; }
+.key-row.recording { background: var(--sel); }
+.key-where { font-size: 0.9em; }
+.key-foot { display: flex; justify-content: flex-end; margin-top: 12px; }
 .help-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; padding: 0 8px; border-radius: var(--radius-sm); }
 .help-row:hover { background: var(--bg-3); }
 .item:target { animation: flash 2s ease-out; border-radius: var(--radius); }

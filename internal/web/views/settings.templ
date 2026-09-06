@@ -540,6 +540,7 @@ templ settingsLinks(current string) {
 	<a class={ templ.KV("current", current == "appearance") } href="/settings">@Icon("palette", "ui-icon") Appearance</a>
 	<a class={ templ.KV("current", current == "usage") } href="/settings/usage">@Icon("chart-no-axes-combined", "ui-icon") Usage</a>
 	<a class={ templ.KV("current", current == "providers") } href="/settings/providers">@Icon("plug", "ui-icon") Providers</a>
+	<a class={ templ.KV("current", current == "keys") } href="/settings/keys">@Icon("keyboard", "ui-icon") Keys</a>
 }
 
 // settingsSection maps a page view to the settings link that should be
@@ -548,7 +549,7 @@ func settingsSection(view string) string {
 	switch view {
 	case "settings":
 		return "appearance"
-	case "usage", "providers":
+	case "usage", "providers", "keys":
 		return view
 	}
 	return ""

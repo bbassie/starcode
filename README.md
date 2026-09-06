@@ -88,7 +88,9 @@ What is typed in a composer is kept in the browser (localStorage, per thread and
 
 Ctrl+K (Cmd+K on a Mac) opens the palette. Typing filters four lists at once: commands for the page you are on (new thread, rename, archive, the panels, settings, themes), threads by title, files of the current thread's project by path (`git ls-files` plus untracked files, or a bounded walk outside a repository), and messages by text, each with a snippet around the match. Enter runs the first row, the arrow keys walk the rest, Escape closes (on a phone, the close button in the search row). A message row opens its thread scrolled to that row. The search box in the sidebar only filters the thread list; the palette is the one that reads transcripts.
 
-Ctrl+/ lists the shortcuts. The set is decided per page by `views.Hotkeys` and rendered as hidden buttons in `#hotkeys`; the key handler in `layout.templ` clicks the one whose combo matches, so adding a shortcut is adding a row there. Inside the terminal only the keys marked for it work (toggle terminal, toggle changes, focus the prompt); the shell keeps Ctrl+K and the rest.
+Ctrl+/ lists the shortcuts, and Settings > Keys changes them: press change on a row, then the new keys. The set is decided per page by `views.Hotkeys` and rendered as hidden buttons in `#hotkeys`; the key handler in `layout.templ` clicks the one whose combo matches. The actions and their defaults live in `internal/keys`, overrides in `<data>/keybindings.json`, so a change applies to every browser. A combo another action has is refused; a combo without a modifier (say, a bare Y) only fires while no text box has focus. Inside the terminal only the keys marked for it work (toggle terminal, toggle changes, focus the prompt); the shell keeps Ctrl+K and the rest. Pages already open pick up a change when they reload.
+
+Defaults:
 
 | key | does |
 |---|---|
@@ -100,6 +102,7 @@ Ctrl+/ lists the shortcuts. The set is decided per page by `views.Hotkeys` and r
 | Ctrl+` | toggle the terminal |
 | Ctrl+Shift+G | toggle the changes panel |
 | Ctrl+Shift+F | focus the prompt |
+| Alt+Y / Alt+Shift+Y / Alt+N | allow, allow for session, deny the oldest waiting approval |
 | Ctrl+, | settings |
 | Enter, Ctrl+Enter | send (Shift+Enter for a new line; on a touch screen Enter breaks the line) |
 | Esc | close the palette, a side panel or an open menu |
@@ -107,6 +110,8 @@ Ctrl+/ lists the shortcuts. The set is decided per page by `views.Hotkeys` and r
 ## Settings
 
 Appearance picks the theme. Usage charts cost and tokens from the CLIs' own transcripts (see `internal/usage`), scanning every instance's config dir and showing each instance as its own series, in its tag colour when it has one. Sessions starcode itself ran are matched to their transcript by session id so nothing is counted twice.
+
+Keys lists every shortcut with a change button; see above.
 
 Providers is where the agent CLIs are set up. Each row is an instance: a driver (Claude Code or Codex), a binary path, a config directory (`CLAUDE_CONFIG_DIR` or `CODEX_HOME`), extra environment variables, a display name and a colour that tags its threads in the sidebar. The built-in `claude` and `codex` instances run the binaries from the `-claude` and `-codex` flags and can be disabled but not removed; added instances get a name of their own, which is what their threads store, so a second Claude signed into another account is just another row with its own config dir. The list lives in `<data>/providers.json` (owner-readable, since the environment may hold keys). Saving an instance closes its idle sessions so the next prompt runs with the new settings; running turns finish on the old ones.
 

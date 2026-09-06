@@ -1,0 +1,69 @@
+package views
+
+import "starcode/internal/keys"
+
+// KeysPageData is Settings > Keys: every action with its combo.
+type KeysPageData struct {
+	Bindings []keys.Binding
+}
+
+templ KeysPage(d KeysPageData) {
+	<main id="main" class="settings-page">
+		<header id="mainhead" class="mainhead">
+			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
+			<nav class="crumbs"><a href="/settings">Settings</a><span class="dim">/</span><span>Keys</span></nav>
+		</header>
+		<div class="settings-scroll">
+			<div class="settings-shell">
+				@SettingsNav("keys")
+				<div class="settings-content">
+					@KeysSection(d)
+				</div>
+			</div>
+		</div>
+	</main>
+}
+
+// KeysSection is the part the save and reset endpoints patch. The
+// recorder script in the layout fills the hidden combo box and clicks
+// the row's save button, so the post carries the combo as a signal.
+templ KeysSection(d KeysPageData) {
+	{{ custom := 0 }}
+	for _, b := range d.Bindings {
+		if b.Custom {
+			{{ custom++ }}
+		}
+	}
+	<section id="keys" class="settings-section" data-signals="{combo: ''}">
+		<header>
+			<h1>Keyboard shortcuts</h1>
+			<p class="dim">Press change, then the new keys. Mod is Ctrl, or Cmd on a Mac. A shortcut without a modifier only fires when no text box has focus; inside the terminal only the ones marked for it work. Pages already open pick up a change when they reload.</p>
+		</header>
+		<input type="text" class="key-combo" data-bind:combo style="display: none" tabindex="-1" aria-hidden="true"/>
+		<button type="button" id="keys-refresh" hidden data-on:click="@get('/api/keys')"></button>
+		<div class="settings-card">
+			for _, b := range d.Bindings {
+				<div class="setting-row key-row" data-key-id={ b.ID }>
+					<div>
+						<label>{ b.Label }</label>
+						<p class="dim">{ b.Desc } <span class="key-where">· { b.Where }</span></p>
+					</div>
+					<div class="key-cell">
+						@Keys(b.Combo)
+						<span class="key-recording dim tiny-text">press keys… <kbd>esc</kbd> cancels</span>
+						<button type="button" class="btn tiny key-change" title="Press the new keys after clicking">change</button>
+						if b.Custom {
+							<button type="button" class="btn tiny ghost" title={ "Back to " + keys.Display(b.Default) } data-on:click={ "@post('/api/keys/" + b.ID + "/reset')" }>reset</button>
+						}
+						<button type="button" class="key-save" hidden data-on:click={ "@post('/api/keys/" + b.ID + "')" }></button>
+					</div>
+				</div>
+			}
+		</div>
+		if custom > 0 {
+			<div class="key-foot">
+				<button type="button" class="btn tiny" data-on:click="confirm('Put every shortcut back on its default?') && @post('/api/keys/reset')">@Icon("rotate-ccw", "ui-icon") reset all to defaults</button>
+			</div>
+		}
+	</section>
+}
