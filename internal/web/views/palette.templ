@@ -48,7 +48,9 @@ templ Palette(p Page) {
 			<label class="palette-search">
 				@Icon("search", "ui-icon")
 				<input type="text" placeholder="Search threads and messages, or type a command…" data-bind:pq autocomplete="off" spellcheck="false" data-on:input__debounce.120ms={ searchGet(p) }/>
-				<kbd>esc</kbd>
+				<kbd class="hide-sm">esc</kbd>
+				// A phone has no Escape and little backdrop to tap.
+				<button type="button" class="btn icon ghost palette-close" data-on:click="$palette = false" title="Close" aria-label="Close search">@Icon("x", "ui-icon")</button>
 			</label>
 			<div id="palette-results" class="palette-results"></div>
 		</div>

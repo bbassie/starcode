@@ -36,6 +36,14 @@ type PRData struct {
 	Loaded  bool
 }
 
+// PRDetailData is one PR opened from the list.
+type PRDetailData struct {
+	Project store.Project
+	Detail  gitx.PRDetail
+	Loaded  bool
+	Err     string
+}
+
 type ExplorerData struct {
 	Project store.Project
 	Dir     string
@@ -54,6 +62,7 @@ templ GitPanel(d GitData) {
 		@GitFiles(d)
 		@FileExplorer(ExplorerData{Project: d.Project, Hidden: true})
 		@PullRequests(PRData{Project: d.Project})
+		@PRDetailView(PRDetailData{Project: d.Project})
 		@GitDetail(d)
 	</aside>
 }
@@ -194,7 +203,7 @@ func treeDepth(dir string) int {
 // none. The changes and files tabs split the panel with the diff; this
 // tab takes it whole.
 templ PullRequests(d PRData) {
-	<div id="pr-list" class="pr-list" data-show="$panelTab === 'prs'" data-preserve-attr="style" style="display: none">
+	<div id="pr-list" class="pr-list" data-show="$panelTab === 'prs' && !$pr" data-preserve-attr="style" style="display: none">
 		if !d.Loaded {
 			<p class="dim pad">loading pull requests…</p>
 		} else if d.List.Err != "" {
@@ -214,7 +223,9 @@ templ PullRequests(d PRData) {
 				<ul class="prs">
 					for _, pr := range d.List.PRs {
 						<li class={ templ.KV("current", pr.Head == d.List.Branch) }>
-							<a href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener" title={ pr.Head + " → " + pr.Base }>
+							// The row opens the detail in the panel; the GitHub page
+							// is one click further, in the detail's head.
+							<a href="#" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + "')" }>
 								<span class={ "pr-mark", prClass(pr) }>@Icon(prIcon(pr), "ui-icon")</span>
 								<span class="pr-text">
 									<span class="ellipsis">{ pr.Title }</span>
@@ -234,7 +245,7 @@ templ PullRequests(d PRData) {
 										case "approved":
 											<span class="pr-badge ok" title="Approved">@Icon("check", "ui-icon")</span>
 										case "changes_requested":
-											<span class="pr-badge err" title="Changes requested">@Icon("message-square-x", "ui-icon")</span>
+											<span class="pr-badge err text" title="A reviewer asked for changes">@Icon("message-square-x", "ui-icon") <span>changes requested</span></span>
 									}
 									switch pr.Checks {
 										case "success":
@@ -254,6 +265,301 @@ templ PullRequests(d PRData) {
 	</div>
 }
 
+// PRDetailView is one PR in full: its state, then what stands in the way
+// of merging (reviews asking for changes, open review threads, failing
+// checks) with two ways to hand that to an agent, then the rest.
+templ PRDetailView(d PRDetailData) {
+	<div id="pr-detail" class="pr-detail" data-show="$panelTab === 'prs' && $pr" data-preserve-attr="style" style="display: none">
+		<div class="pr-detail-head">
+			<button class="btn icon ghost tiny" data-on:click="$pr = 0" title="Back to the list" aria-label="Back to the list">@Icon("arrow-left", "ui-icon")</button>
+			if d.Loaded && d.Err == "" {
+				<span class="mono dim">#{ strconv.Itoa(d.Detail.Number) }</span>
+				<span class="spacer"></span>
+				<button class="btn icon ghost tiny" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(d.Detail.Number) + "?refresh=1')" } title="Refresh" aria-label="Refresh">@Icon("refresh-cw", "ui-icon")</button>
+				<a class="btn icon ghost tiny" href={ templ.SafeURL(d.Detail.URL) } target="_blank" rel="noopener" title="Open on GitHub" aria-label="Open on GitHub">@Icon("external-link", "ui-icon")</a>
+			}
+		</div>
+		if !d.Loaded {
+			<p class="dim pad">loading…</p>
+		} else if d.Err != "" {
+			<p class="dim pad">{ d.Err }</p>
+		} else {
+			{{ pr := d.Detail }}
+			<div class="pr-detail-body">
+				<h2 class="pr-title">{ pr.Title }</h2>
+				<div class="dim tiny-text pr-meta">
+					<span>@Icon("git-branch", "ui-icon") <span class="mono">{ pr.Head }</span> → <span class="mono">{ pr.Base }</span></span>
+					<span>{ pr.Author } · <span data-ago={ pr.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(pr.UpdatedAt) }</span></span>
+				</div>
+				<div class="pr-facts">
+					if pr.Draft {
+						<span class="pr-fact">@Icon("git-pull-request-draft", "ui-icon") draft</span>
+					}
+					switch pr.Review {
+						case "approved":
+							<span class="pr-fact ok">@Icon("check", "ui-icon") approved</span>
+						case "changes_requested":
+							<span class="pr-fact err">@Icon("message-square-x", "ui-icon") changes requested</span>
+						case "review_required":
+							<span class="pr-fact">@Icon("eye", "ui-icon") review required</span>
+					}
+					switch pr.PR.Checks {
+						case "success":
+							<span class="pr-fact ok">@Icon("circle-check", "ui-icon") <span>checks passed</span></span>
+						case "failure":
+							<span class="pr-fact err">@Icon("circle-x", "ui-icon") <span>{ fmt.Sprintf("%d %s failed", len(pr.Failing()), plural(len(pr.Failing()), "check", "checks")) }</span></span>
+						case "pending":
+							<span class="pr-fact warn">@Icon("circle-dot", "ui-icon") <span>checks running</span></span>
+					}
+					switch mergeWord(pr) {
+						case "conflicts":
+							<span class="pr-fact err">@Icon("git-merge", "ui-icon") merge conflicts</span>
+						case "behind":
+							<span class="pr-fact warn">@Icon("git-merge", "ui-icon") <span>behind { pr.Base }</span></span>
+						case "clean":
+							<span class="pr-fact ok">@Icon("git-merge", "ui-icon") ready to merge</span>
+					}
+					<span class="pr-fact mono"><span class="ok">+{ strconv.Itoa(pr.Additions) }</span> <span class="err">−{ strconv.Itoa(pr.Deletions) }</span> · { fmt.Sprintf("%d %s", pr.ChangedFiles, plural(pr.ChangedFiles, "file", "files")) }</span>
+					for _, l := range pr.Labels {
+						<span class="pr-fact">{ l }</span>
+					}
+				</div>
+				{{ crs, open, failing := pr.ChangesRequested(), pr.Unresolved(), pr.Failing() }}
+				if len(crs) > 0 || len(open) > 0 || len(failing) > 0 || pr.Mergeable == "CONFLICTING" {
+					<section class="pr-attention">
+						<header>
+							<span class="err">@Icon("triangle-alert", "ui-icon") Needs work</span>
+							<span class="dim tiny-text">{ attentionSummary(pr) }</span>
+						</header>
+						for _, r := range crs {
+							<div class="pr-card">
+								<div class="pr-card-head"><span class="err">@Icon("message-square-x", "ui-icon")</span> <b>{ r.Author }</b> <span class="dim">requested changes · { ago(r.SubmittedAt) }</span></div>
+								if strings.TrimSpace(r.Body) != "" {
+									<div class="md pr-md">@templ.Raw(Markdown(r.Body))</div>
+								}
+							</div>
+						}
+						for _, t := range open {
+							<div class="pr-card">
+								<div class="pr-card-head">
+									@Icon("message-square", "ui-icon opt-icon")
+									<a class="mono ellipsis" href="#" title="Open in the editor" data-on:click={ "evt.preventDefault(); " + openFile(d.Project, t.Path) }>{ threadWhere(t) }</a>
+									if t.Outdated {
+										<span class="pr-badge" title="The line has changed since this comment">outdated</span>
+									}
+								</div>
+								for _, c := range t.Comments {
+									<div class="pr-comment">
+										<span class="dim tiny-text"><b>{ c.Author }</b> · { ago(c.CreatedAt) }</span>
+										<div class="md pr-md">@templ.Raw(Markdown(c.Body))</div>
+									</div>
+								}
+							</div>
+						}
+						for _, c := range failing {
+							<div class="pr-card pr-check">
+								<span class="err">@Icon("circle-x", "ui-icon")</span>
+								if c.URL != "" {
+									<a class="ellipsis" href={ templ.SafeURL(c.URL) } target="_blank" rel="noopener">{ c.Name }</a>
+								} else {
+									<span class="ellipsis">{ c.Name }</span>
+								}
+								<span class="dim tiny-text">failed</span>
+							</div>
+						}
+						if pr.Mergeable == "CONFLICTING" {
+							<div class="pr-card pr-check"><span class="err">@Icon("git-merge", "ui-icon")</span> <span>merge conflicts with { pr.Base }</span></div>
+						}
+						<div class="pr-actions">
+							<button class="btn tiny primary" data-on:click={ "@post('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + "/thread')" } title="Open a new thread on this project with a prompt that lists every point above">@Icon("message-square-plus", "ui-icon") fix in a new thread</button>
+							<button class="btn tiny" data-on:click={ "@post('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + "/draft')" } title="Put the same prompt in this thread's composer">@Icon("pencil-line", "ui-icon") draft it here</button>
+						</div>
+					</section>
+				}
+				if len(pr.Reviews) > 0 {
+					<details class="pr-section">
+						<summary>{ fmt.Sprintf("%d %s", len(pr.Reviews), plural(len(pr.Reviews), "review", "reviews")) } <span class="dim">· { reviewSummary(pr) }</span></summary>
+						<ul class="pr-rows">
+							for _, r := range pr.Reviews {
+								<li>
+									<span class={ reviewClass(r.State) }>@Icon(reviewIcon(r.State), "ui-icon")</span>
+									<a class="ellipsis" href={ templ.SafeURL(r.URL) } target="_blank" rel="noopener"><b>{ r.Author }</b> { reviewWord(r.State) }</a>
+									<span class="dim tiny-text">{ ago(r.SubmittedAt) }</span>
+								</li>
+							}
+						</ul>
+					</details>
+				}
+				if len(pr.Checks) > 0 {
+					<details class="pr-section">
+						<summary>{ fmt.Sprintf("%d %s", len(pr.Checks), plural(len(pr.Checks), "check", "checks")) } <span class="dim">· { checkSummary(pr) }</span></summary>
+						<ul class="pr-rows">
+							for _, c := range pr.Checks {
+								<li>
+									<span class={ checkClass(c.Status) }>@Icon(checkIcon(c.Status), "ui-icon")</span>
+									if c.URL != "" {
+										<a class="ellipsis" href={ templ.SafeURL(c.URL) } target="_blank" rel="noopener">{ c.Name }</a>
+									} else {
+										<span class="ellipsis">{ c.Name }</span>
+									}
+									<span class="dim tiny-text">{ c.Status }</span>
+								</li>
+							}
+						</ul>
+					</details>
+				}
+				{{ resolved := len(pr.Threads) - len(open) }}
+				if resolved > 0 {
+					<details class="pr-section">
+						<summary>{ fmt.Sprintf("%d resolved %s", resolved, plural(resolved, "comment", "comments")) }</summary>
+						for _, t := range pr.Threads {
+							if t.Resolved {
+								<div class="pr-card resolved">
+									<div class="pr-card-head">@Icon("check", "ui-icon ok") <span class="mono ellipsis">{ threadWhere(t) }</span></div>
+									for _, c := range t.Comments {
+										<div class="pr-comment">
+											<span class="dim tiny-text"><b>{ c.Author }</b> · { ago(c.CreatedAt) }</span>
+											<div class="md pr-md">@templ.Raw(Markdown(c.Body))</div>
+										</div>
+									}
+								</div>
+							}
+						}
+					</details>
+				}
+				if strings.TrimSpace(pr.Body) != "" {
+					<details class="pr-section" open>
+						<summary>Description</summary>
+						<div class="md pr-md pr-desc">@templ.Raw(Markdown(pr.Body))</div>
+					</details>
+				}
+			</div>
+		}
+	</div>
+}
+
+func threadWhere(t gitx.ReviewThread) string {
+	if t.Line > 0 {
+		return fmt.Sprintf("%s:%d", t.Path, t.Line)
+	}
+	return t.Path
+}
+
+// mergeWord folds gh's two merge fields into one of conflicts, behind,
+// clean or "" (blocked by reviews or checks, which are shown on their own).
+func mergeWord(pr gitx.PRDetail) string {
+	switch {
+	case pr.Mergeable == "CONFLICTING" || pr.MergeState == "DIRTY":
+		return "conflicts"
+	case pr.MergeState == "BEHIND":
+		return "behind"
+	case pr.MergeState == "CLEAN":
+		return "clean"
+	}
+	return ""
+}
+
+func attentionSummary(pr gitx.PRDetail) string {
+	var parts []string
+	if n := len(pr.ChangesRequested()); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s asking for changes", n, plural(n, "reviewer", "reviewers")))
+	}
+	if n := len(pr.Unresolved()); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d open %s", n, plural(n, "comment", "comments")))
+	}
+	if n := len(pr.Failing()); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d failing %s", n, plural(n, "check", "checks")))
+	}
+	if pr.Mergeable == "CONFLICTING" {
+		parts = append(parts, "merge conflicts")
+	}
+	return strings.Join(parts, " · ")
+}
+
+func reviewSummary(pr gitx.PRDetail) string {
+	counts := map[string]int{}
+	for _, r := range pr.Reviews {
+		counts[r.State]++
+	}
+	var parts []string
+	for _, st := range []string{"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"} {
+		if counts[st] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[st], reviewWord(st)))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func checkSummary(pr gitx.PRDetail) string {
+	counts := map[string]int{}
+	for _, c := range pr.Checks {
+		counts[c.Status]++
+	}
+	var parts []string
+	for _, st := range []string{"failure", "pending", "success", "skipped"} {
+		if counts[st] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[st], map[string]string{"failure": "failed", "pending": "running", "success": "passed", "skipped": "skipped"}[st]))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func reviewWord(state string) string {
+	switch state {
+	case "APPROVED":
+		return "approved"
+	case "CHANGES_REQUESTED":
+		return "requested changes"
+	case "DISMISSED":
+		return "dismissed"
+	}
+	return "commented"
+}
+
+func reviewClass(state string) string {
+	switch state {
+	case "APPROVED":
+		return "ok"
+	case "CHANGES_REQUESTED":
+		return "err"
+	}
+	return "dim"
+}
+
+func reviewIcon(state string) string {
+	switch state {
+	case "APPROVED":
+		return "check"
+	case "CHANGES_REQUESTED":
+		return "message-square-x"
+	}
+	return "message-square"
+}
+
+func checkClass(status string) string {
+	switch status {
+	case "success":
+		return "ok"
+	case "failure":
+		return "err"
+	case "pending":
+		return "warn"
+	}
+	return "dim"
+}
+
+func checkIcon(status string) string {
+	switch status {
+	case "success":
+		return "circle-check"
+	case "failure":
+		return "circle-x"
+	case "pending":
+		return "circle-dot"
+	}
+	return "circle-slash"
+}
+
 // prClass colours the PR mark: the accent for open, dim for a draft.
 func prClass(pr gitx.PR) string {
 	if pr.Draft {
@@ -269,8 +575,11 @@ func prIcon(pr gitx.PR) string {
 	return "git-pull-request"
 }
 
+// GitDetail is the diff or editor under the changes and files lists. The
+// pull requests tab has its own detail and takes the panel whole, so this
+// one leaves the layout there.
 templ GitDetail(d GitData) {
-	<div id="git-detail">
+	<div id="git-detail" data-show="$panelTab !== 'prs'" data-preserve-attr="style">
 		if d.Selected != "" {
 			<div class="diff-head mono ellipsis">{ d.Selected }</div>
 			<div class="git-detail-actions" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) }>

@@ -316,8 +316,9 @@ templ Composer(d ThreadData) {
 			rows="1"
 			placeholder={ promptPlaceholder(d) }
 			data-bind:prompt
+			data-draft={ t.ID }
 			data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send'))" }
-			data-effect="$prompt; autoGrow(el)"
+			data-effect="autoGrow(el); draftSync(el, $prompt)"
 			autocomplete="off"
 			spellcheck="false"
 		></textarea>

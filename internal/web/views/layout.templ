@@ -84,7 +84,7 @@ templ Layout(title string, p Page, parts Parts) {
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: false, updir: '', _hb: 0}`, p.View == "thread", p.Theme) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: false, updir: '', pr: 0, _hb: 0}`, p.View == "thread", p.Theme) }
 			data-attr:data-theme="$theme"
 			data-class:nav-collapsed="$navhide"
 			data-class:panel-wide="$wide"
@@ -215,6 +215,34 @@ templ Layout(title string, p Page, parts Parts) {
 					const box = document.querySelector('form.rename input');
 					if (box) { box.focus(); box.select(); }
 				});
+				// Drafts: what is typed in a composer is kept in localStorage
+				// under the thread id (or "home"), so leaving the page and
+				// coming back finds it again. draftSync runs from the
+				// textarea's effect: the first run restores a saved draft into
+				// an empty box (dispatching input so the signal follows), later
+				// runs save the value or drop the key once it is empty, which
+				// is what a send does.
+				// Which drafts have had their first run is kept here and not on
+				// the element: a morph strips attributes the server did not
+				// send, which would make every re-render look like a first run.
+				window.draftKey = (id) => 'starcode.draft.' + id;
+				window.draftPut = (id, text) => { try { text ? localStorage.setItem(draftKey(id), text) : localStorage.removeItem(draftKey(id)); } catch (e) {} };
+				const draftReady = new Set();
+				window.draftSync = (el, value) => {
+					const id = el.dataset.draft;
+					if (!id) return;
+					if (!draftReady.has(id)) {
+						draftReady.add(id);
+						let saved = '';
+						try { saved = localStorage.getItem(draftKey(id)) || ''; } catch (e) {}
+						if (value === '' && saved !== '') {
+							el.value = saved;
+							el.dispatchEvent(new Event('input', { bubbles: true }));
+						}
+						return;
+					}
+					draftPut(id, value);
+				};
 				window.autoGrow = (el) => queueMicrotask(() => {
 					el.style.height = 'auto';
 					el.style.height = el.scrollHeight + 'px';

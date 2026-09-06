@@ -36,8 +36,9 @@ templ Home(d HomeData) {
 							rows="1"
 							placeholder="Describe the task. Sending starts a new thread with it; send nothing to just open one."
 							data-bind:prompt
+							data-draft="home"
 							data-on:keydown="sendKey(evt) && (evt.preventDefault(), @post('/api/threads'))"
-							data-effect="$prompt; autoGrow(el)"
+							data-effect="autoGrow(el); draftSync(el, $prompt)"
 							autocomplete="off"
 							spellcheck="false"
 						></textarea>
