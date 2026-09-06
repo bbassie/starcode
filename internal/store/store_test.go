@@ -238,3 +238,15 @@ func TestSearch(t *testing.T) {
 		t.Fatalf("long snippet = %q", got)
 	}
 }
+
+func TestSnippetFoldsRunesOneToOne(t *testing.T) {
+	// İ lowercases to a shorter byte sequence; byte offsets from the
+	// folded text would cut the original mid-rune.
+	got := snippet("İİİİabc def", "ABC", 40)
+	if got != "İİİİabc def" {
+		t.Fatalf("snippet = %q", got)
+	}
+	if got := snippet(strings.Repeat("x ", 100)+"İİ needle", "NEEDLE", 30); !strings.HasSuffix(got, "İİ needle") {
+		t.Fatalf("snippet = %q", got)
+	}
+}

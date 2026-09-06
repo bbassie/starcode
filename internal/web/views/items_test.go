@@ -97,3 +97,13 @@ func TestPromptSummaryAndPreview(t *testing.T) {
 		t.Fatalf("attachment summary = %q", got)
 	}
 }
+
+func TestSplitMatchesFoldsRunesOneToOne(t *testing.T) {
+	parts := splitMatches("İİİİabc", "ABC")
+	if len(parts) != 2 || parts[0].text != "İİİİ" || parts[0].hit || parts[1].text != "abc" || !parts[1].hit {
+		t.Fatalf("parts = %+v", parts)
+	}
+	if parts := splitMatches("a-b-a", "A"); len(parts) != 3 || !parts[0].hit || parts[1].text != "-b-" || !parts[2].hit {
+		t.Fatalf("parts = %+v", parts)
+	}
+}

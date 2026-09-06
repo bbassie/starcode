@@ -115,15 +115,20 @@ func jsq(s string) string { return views.JSQ(s) }
 // asks on every keystroke.
 func (s *Server) projectFileList(ctx context.Context, p store.Project) []string {
 	s.files.mu.Lock()
-	defer s.files.mu.Unlock()
 	if s.files.items == nil {
 		s.files.items = map[string]fileListEntry{}
 	}
-	if e, ok := s.files.items[p.ID]; ok && time.Since(e.at) < 30*time.Second {
+	e, ok := s.files.items[p.ID]
+	s.files.mu.Unlock()
+	if ok && time.Since(e.at) < 30*time.Second {
 		return e.files
 	}
-	e := fileListEntry{at: time.Now(), files: gitx.ListFiles(ctx, p.Path)}
+	// Listing runs outside the lock so one slow tree does not hold up
+	// the palette for other projects.
+	e = fileListEntry{at: time.Now(), files: gitx.ListFiles(ctx, p.Path)}
+	s.files.mu.Lock()
 	s.files.items[p.ID] = e
+	s.files.mu.Unlock()
 	return e.files
 }
 

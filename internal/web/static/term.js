@@ -132,9 +132,12 @@
     panes.get(active).term.focus();
   };
 
+  // The server allows 16 panes per thread; more is not a terminal anyone
+  // can read anyway.
   const split = () => {
     let n = 1;
     while (panes.has(n)) n++;
+    if (n > 16) return;
     addPane(n);
     for (const q of panes.values()) q.fit.fit();
     panes.get(n).term.focus();

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"starcode/internal/term"
 )
 
 // The terminal endpoints speak plain SSE and raw bodies instead of Datastar
@@ -22,13 +24,20 @@ import (
 // POST /api/term/{id}/kill    end the shell so the next stream starts fresh
 // GET  /api/term/{id}/panes   JSON list of the panes with a live shell
 
-// termID is the session id for the request's thread and pane.
-func termID(r *http.Request) string {
+const maxPanes = 16
+
+// termID is the session id for the request's thread and pane: pane 1
+// when the query has none, an error for one outside 1..maxPanes.
+func termID(r *http.Request) (string, error) {
 	pane := r.URL.Query().Get("pane")
-	if n, err := strconv.Atoi(pane); err != nil || n < 1 || n > 16 {
+	if pane == "" {
 		pane = "1"
 	}
-	return r.PathValue("id") + "/" + pane
+	n, err := strconv.Atoi(pane)
+	if err != nil || n < 1 || n > maxPanes {
+		return "", fmt.Errorf("pane must be 1 to %d", maxPanes)
+	}
+	return r.PathValue("id") + "/" + strconv.Itoa(n), nil
 }
 
 // termPrefix is what every pane id of a thread starts with.
@@ -67,7 +76,12 @@ func (s *Server) termStream(w http.ResponseWriter, r *http.Request) {
 	}
 	cols, _ := strconv.Atoi(r.URL.Query().Get("cols"))
 	rows, _ := strconv.Atoi(r.URL.Query().Get("rows"))
-	sess, err := s.Term.Session(termID(r), dir, cols, rows)
+	id, err := termID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sess, err := s.Term.Session(id, dir, cols, rows)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -113,9 +127,8 @@ func (s *Server) termStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) termInput(w http.ResponseWriter, r *http.Request) {
-	sess := s.Term.Live(termID(r))
+	sess := s.livePane(w, r)
 	if sess == nil {
-		http.Error(w, "no terminal session", http.StatusConflict)
 		return
 	}
 	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -131,9 +144,8 @@ func (s *Server) termInput(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) termResize(w http.ResponseWriter, r *http.Request) {
-	sess := s.Term.Live(termID(r))
+	sess := s.livePane(w, r)
 	if sess == nil {
-		http.Error(w, "no terminal session", http.StatusConflict)
 		return
 	}
 	cols, _ := strconv.Atoi(r.URL.Query().Get("cols"))
@@ -145,7 +157,27 @@ func (s *Server) termResize(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// livePane is the running session the request names, or nil after an
+// error has been written.
+func (s *Server) livePane(w http.ResponseWriter, r *http.Request) *term.Session {
+	id, err := termID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return nil
+	}
+	sess := s.Term.Live(id)
+	if sess == nil {
+		http.Error(w, "no terminal session", http.StatusConflict)
+	}
+	return sess
+}
+
 func (s *Server) termKill(w http.ResponseWriter, r *http.Request) {
-	s.Term.Kill(termID(r))
+	id, err := termID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.Term.Kill(id)
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 
@@ -409,6 +410,26 @@ func deref(p any) any {
 	return p
 }
 
+// runeIndex is strings.Index over rune slices.
+func runeIndex(hay, needle []rune) int {
+	if len(needle) == 0 {
+		return 0
+	}
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		match := true
+		for j := range needle {
+			if hay[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
 func nullIfEmpty(s string) any {
 	if s == "" {
 		return nil
@@ -695,15 +716,21 @@ func (s *Store) SearchItems(ctx context.Context, q string, limit int) ([]SearchH
 }
 
 // snippet returns about width characters of body around the first
-// case-insensitive occurrence of q, on one line.
+// case-insensitive occurrence of q, on one line. Runes are folded one by
+// one so the index found in the folded text is an index into r.
 func snippet(body, q string, width int) string {
 	text := strings.Join(strings.Fields(body), " ")
 	r := []rune(text)
-	at := strings.Index(strings.ToLower(text), strings.ToLower(q))
+	fold := func(r []rune) []rune {
+		out := make([]rune, len(r))
+		for i, c := range r {
+			out[i] = unicode.ToLower(c)
+		}
+		return out
+	}
 	start := 0
-	if at > 0 {
-		start = len([]rune(text[:at]))
-		start -= width / 3
+	if at := runeIndex(fold(r), fold([]rune(q))); at > 0 {
+		start = at - width/3
 		if start < 0 {
 			start = 0
 		}

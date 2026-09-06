@@ -130,9 +130,10 @@ templ Sidebar(d SidebarData) {
 				}
 			}
 			if archived > 0 {
-				// Folded shut unless the reader is searching or is on one of
-				// these threads, so a match or the current row is never hidden.
-				<details class="project archived" open?={ currentArchived(d) } data-attr:open={ "$q != '' || " + fmt.Sprintf("%t", currentArchived(d)) }>
+				// Starts open when the reader is on one of these threads and
+				// opens while they filter, so a match is never hidden; a morph
+				// keeps whatever they set by clicking.
+				<details class="project archived" open?={ currentArchived(d) } data-preserve-attr="open" data-effect="$q != '' && (el.open = true)">
 					<summary class="project-head">
 						<span class="ellipsis">Archived</span>
 						<span class="dim tiny-text">{ fmt.Sprintf("%d", archived) }</span>

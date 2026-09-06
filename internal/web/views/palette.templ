@@ -6,6 +6,7 @@ import (
 	"starcode/internal/store"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // openFile is the expression that shows path in the side panel's editor:
@@ -167,21 +168,35 @@ type matchPart struct {
 	hit  bool
 }
 
+// splitMatches works on runes folded one by one, so the offsets found in
+// the folded text are valid in the original (strings.ToLower can change
+// the byte length of a rune).
 func splitMatches(text, q string) []matchPart {
 	var out []matchPart
-	lower := strings.ToLower(text)
-	lq := strings.ToLower(q)
-	for len(text) > 0 {
-		i := strings.Index(lower, lq)
+	r := []rune(text)
+	lower := foldRunes(r)
+	lq := string(foldRunes([]rune(q)))
+	for len(r) > 0 {
+		i := strings.Index(string(lower), lq)
 		if i < 0 || lq == "" {
-			out = append(out, matchPart{text: text})
+			out = append(out, matchPart{text: string(r)})
 			break
 		}
-		if i > 0 {
-			out = append(out, matchPart{text: text[:i]})
+		at := len([]rune(string(lower)[:i]))
+		n := len([]rune(lq))
+		if at > 0 {
+			out = append(out, matchPart{text: string(r[:at])})
 		}
-		out = append(out, matchPart{text: text[i : i+len(q)], hit: true})
-		text, lower = text[i+len(q):], lower[i+len(q):]
+		out = append(out, matchPart{text: string(r[at : at+n]), hit: true})
+		r, lower = r[at+n:], lower[at+n:]
+	}
+	return out
+}
+
+func foldRunes(r []rune) []rune {
+	out := make([]rune, len(r))
+	for i, c := range r {
+		out[i] = unicode.ToLower(c)
 	}
 	return out
 }

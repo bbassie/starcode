@@ -289,7 +289,9 @@ templ Layout(title string, p Page, parts Parts) {
 					// sidebar, in the order shown; from a page without a
 					// current thread it opens the first or last one.
 					window.threadStep = (dir) => {
-						const rows = [...document.querySelectorAll('#sidebar .thread-row')].filter((r) => r.getClientRects().length);
+						// Rows the filter box hides are skipped; a collapsed sidebar
+						// (Ctrl+B) still counts, so the keys work without it.
+						const rows = [...document.querySelectorAll('#sidebar .thread-row')].filter((r) => r.style.display !== 'none');
 						if (!rows.length) return;
 						const i = rows.findIndex((r) => r.classList.contains('current'));
 						const next = i < 0 ? (dir > 0 ? rows[0] : rows[rows.length - 1]) : rows[(i + dir + rows.length) % rows.length];
@@ -707,9 +709,13 @@ templ Layout(title string, p Page, parts Parts) {
 							const ta = ed.querySelector('textarea');
 							const state = ed.closest('form').querySelector('.editor-state');
 							let initial = null;
+							let path = ed.dataset.path;
 							const refresh = () => {
 								// The first paint after Datastar has bound the text is
-								// the baseline for the unsaved marker.
+								// the baseline for the unsaved marker. A morph reuses
+								// this element for the next file, and cancel empties
+								// the buffer; both start a new baseline.
+								if (ed.dataset.path !== path || ta.value === '') { path = ed.dataset.path; initial = null; }
 								if (initial === null && ta.value !== '') initial = ta.value;
 								paint(ed, ta);
 								sync(ed, ta);

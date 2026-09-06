@@ -281,7 +281,7 @@ templ GitDetail(d GitData) {
 			// that static/highlight.js colours; the gutter counts lines.
 			// static editor script in layout.templ keeps the three in step.
 			<form class="git-editor" data-show="$gitEdit" data-preserve-attr="style" style={ hiddenUnless(d.Editing) } data-on:submit={ "evt.preventDefault(); @post('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>
-				<div class="editor" data-lang={ editorLang(d.Selected) }>
+				<div class="editor" data-lang={ editorLang(d.Selected) } data-path={ d.Selected }>
 					<pre class="editor-gutter" aria-hidden="true"></pre>
 					<pre class="editor-hl" aria-hidden="true"><code></code></pre>
 					<textarea class="file-editor" data-bind:file spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off"></textarea>

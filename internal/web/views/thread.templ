@@ -181,8 +181,10 @@ templ MainHead(d ThreadData) {
 			// the save button posts, Escape and blur put the title back.
 			<button type="button" class="crumb-title ellipsis" title="Rename thread" data-show="!$rename" data-preserve-attr="style" data-on:click={ "$title = " + jsq(d.Thread.Title) + "; $rename = true; renameFocus()" }>{ d.Thread.Title }</button>
 			<form class="rename" data-show="$rename" data-preserve-attr="style" style="display: none" data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + d.Thread.ID + "/rename')" }>
-				<input class="in" type="text" data-bind:title autocomplete="off" spellcheck="false" maxlength="200" data-on:keydown="evt.key === 'Escape' && (evt.preventDefault(), $rename = false)" data-on:blur__debounce.150ms="$rename = false"/>
-				<button class="btn icon tiny" type="submit" title="Save title" aria-label="Save title">@Icon("check", "ui-icon")</button>
+				<input class="in" type="text" data-bind:title autocomplete="off" spellcheck="false" maxlength="200" data-on:keydown="evt.key === 'Escape' && (evt.preventDefault(), $rename = false)" data-on:blur="!el.form.contains(evt.relatedTarget) && ($rename = false)"/>
+				// mousedown is stopped so the click does not blur the input
+				// before the submit lands.
+				<button class="btn icon tiny" type="submit" title="Save title" aria-label="Save title" data-on:mousedown="evt.preventDefault()">@Icon("check", "ui-icon")</button>
 			</form>
 		</nav>
 		if d.Thread.Archived {
