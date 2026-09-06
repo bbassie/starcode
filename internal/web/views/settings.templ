@@ -76,6 +76,9 @@ func pickSet(signal, value, onChange string) string {
 // jsq quotes s for use inside a Datastar expression.
 func jsq(s string) string { return fmt.Sprintf("%q", s) }
 
+// JSQ is jsq for other packages.
+func JSQ(s string) string { return jsq(s) }
+
 // ModelPick is the model chip and its menu: a search box, the agent rail
 // (when there is a choice to make) and the catalog of the agent shown,
 // with the default first, the groups after, and a row that takes the
@@ -446,6 +449,9 @@ type SettingsPageData struct {
 	Theme  string
 	Themes []string
 }
+
+// ThemeName is the display name of a theme id.
+func ThemeName(theme string) string { return themeName(theme) }
 
 func themeName(theme string) string {
 	switch theme {

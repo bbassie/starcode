@@ -77,8 +77,9 @@ templ Layout(title string, p Page, parts Parts) {
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', rename: false, title: '', _hb: 0}`, p.View == "thread", p.Theme) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, _hb: 0}`, p.View == "thread", p.Theme) }
 			data-attr:data-theme="$theme"
+			data-class:nav-collapsed="$navhide"
 			data-init={ streamOpen(p) }
 			data-on:stream__window={ streamOpen(p) }
 			data-effect="$_hb; streamAlive()"
@@ -120,6 +121,10 @@ templ Layout(title string, p Page, parts Parts) {
 			</div>
 			<div id="toast"></div>
 			<datalist id="project-paths"></datalist>
+			{{ keys := Hotkeys(p, parts) }}
+			@Palette(p)
+			@ShortcutHelp(keys)
+			@HotkeyButtons(keys)
 			// Stream keepalive. Datastar retries a stream that fails, but one
 			// that ends cleanly (starcode restarted, a proxy timed out, a
 			// phone came back from the background) just stops, and the page
@@ -159,6 +164,18 @@ templ Layout(title string, p Page, parts Parts) {
 				(() => {
 					const near = (m) => m.scrollHeight - m.scrollTop - m.clientHeight < 160;
 					let stick = true;
+					// A link into the transcript (search results, the message
+					// rail) lands on its row instead of the bottom.
+					const jumpToHash = () => {
+						if (!location.hash.startsWith('#it-')) return;
+						const row = document.getElementById(location.hash.slice(1));
+						if (!row) return;
+						stick = false;
+						document.body.classList.add('scrolled-up');
+						row.scrollIntoView({ block: 'center' });
+					};
+					window.addEventListener('DOMContentLoaded', () => setTimeout(jumpToHash, 50));
+					window.addEventListener('hashchange', jumpToHash);
 					const track = (m) => {
 						stick = near(m);
 						document.body.classList.toggle('scrolled-up', !stick);
@@ -198,26 +215,101 @@ templ Layout(title string, p Page, parts Parts) {
 					if (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')) autoGrow(e.target);
 				});
 			</script>
-			// Keyboard: Escape closes an open side panel or setting menu; a
-			// printable key pressed with nothing focused goes to the
-			// composer. Keys on a focused control (Space on a button, arrows
-			// in a select) and everything inside the terminal are left
-			// alone. A menu whose own keydown handler saw the Escape has
-			// closed already; one that lost focus closes through a click on
-			// the body, which its outside-click handler answers.
+			// Keyboard. Shortcuts are the hidden #hotkeys buttons: the server
+			// lists what each page offers (see views.Hotkeys) and the handler
+			// clicks the one whose combo matches, "mod" being Ctrl or, on a
+			// Mac, Cmd. Inside the terminal only the keys marked data-term
+			// apply; the shell owns the rest. Escape closes the palette or
+			// help, then an open side panel or setting menu. A printable key
+			// pressed with nothing focused goes to the composer. Keys on a
+			// focused control (Space on a button, arrows in a select) are
+			// left alone. A menu whose own keydown handler saw the Escape
+			// has closed already; one that lost focus closes through a click
+			// on the body, which its outside-click handler answers.
 			<script>
-				document.addEventListener('keydown', (e) => {
-					const t = e.target instanceof Element ? e.target : null;
-					if (t && t.closest('#termpanel')) return;
-					if (e.key === 'Escape') {
-						if (document.querySelector('#sidebar.open, #gitpanel.open')) document.querySelector('.backdrop')?.click();
-						else if (document.querySelector('.chip.open') && !(t && t.closest('.pick'))) document.body.click();
-						return;
-					}
-					if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1 || e.key === ' ') return;
-					if (t && t.closest('button, a, summary, input, textarea, select, [contenteditable], [tabindex]')) return;
-					document.querySelector('form.composer .prompt')?.focus();
-				});
+				(() => {
+					const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+					if (mac) document.documentElement.classList.add('mac');
+					const combo = (e) => {
+						const parts = [];
+						if (mac ? e.metaKey : e.ctrlKey) parts.push('mod');
+						if (e.altKey) parts.push('alt');
+						if (e.shiftKey) parts.push('shift');
+						let k = e.key.toLowerCase();
+						if (k === 'arrowup') k = 'up';
+						if (k === 'arrowdown') k = 'down';
+						if (k === 'dead' || k === '~') k = '`';
+						if (e.code === 'Backquote') k = '`';
+						if (e.code === 'Comma') k = ',';
+						if (e.code === 'Slash') k = '/';
+						if (k.length === 1 && e.code.startsWith('Key')) k = e.code.slice(3).toLowerCase();
+						parts.push(k);
+						return parts.join('+');
+					};
+					window.runHotkey = (c, inTerm) => {
+						const b = document.querySelector(`#hotkeys [data-hotkey="${c}"]`);
+						if (!b || (inTerm && !b.hasAttribute('data-term'))) return false;
+						b.click();
+						return true;
+					};
+					window.hotkeyInTerm = (e) => {
+						const c = combo(e);
+						const b = document.querySelector(`#hotkeys [data-hotkey="${c}"]`);
+						return !!(b && b.hasAttribute('data-term'));
+					};
+					document.addEventListener('keydown', (e) => {
+						const t = e.target instanceof Element ? e.target : null;
+						const inTerm = !!(t && t.closest('#termpanel'));
+						if ((e.ctrlKey || e.metaKey || e.altKey) && !e.repeat && runHotkey(combo(e), inTerm)) {
+							e.preventDefault();
+							e.stopPropagation();
+							return;
+						}
+						if (inTerm) return;
+						if (e.key === 'Escape') {
+							if (document.querySelector('#palette:not([style*="none"]), #help:not([style*="none"])')) document.querySelector('#palette:not([style*="none"]), #help:not([style*="none"])').click();
+							else if (document.querySelector('#sidebar.open, #gitpanel.open')) document.querySelector('.backdrop')?.click();
+							else if (document.querySelector('.chip.open') && !(t && t.closest('.pick'))) document.body.click();
+							return;
+						}
+						if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1 || e.key === ' ') return;
+						if (t && t.closest('button, a, summary, input, textarea, select, [contenteditable], [tabindex]')) return;
+						document.querySelector('form.composer .prompt')?.focus();
+					});
+					window.promptFocus = () => document.querySelector('form.composer .prompt')?.focus();
+					// threadStep moves to the previous or next thread in the
+					// sidebar, in the order shown; from a page without a
+					// current thread it opens the first or last one.
+					window.threadStep = (dir) => {
+						const rows = [...document.querySelectorAll('#sidebar .thread-row')].filter((r) => r.getClientRects().length);
+						if (!rows.length) return;
+						const i = rows.findIndex((r) => r.classList.contains('current'));
+						const next = i < 0 ? (dir > 0 ? rows[0] : rows[rows.length - 1]) : rows[(i + dir + rows.length) % rows.length];
+						next.querySelector('a')?.click();
+					};
+					// Palette: the box gets focus on open; arrows walk the
+					// rows, Enter in the box picks the first row, Escape and
+					// a picked row close it (paletteKey answers true to close).
+					window.paletteFocus = () => setTimeout(() => document.querySelector('#palette input')?.focus());
+					window.paletteKey = (e, root) => {
+						if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); return true; }
+						const opts = [...root.querySelectorAll('.opt')];
+						if (!opts.length) return false;
+						if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+							e.preventDefault();
+							const i = opts.indexOf(document.activeElement);
+							const n = i < 0 ? (e.key === 'ArrowDown' ? 0 : opts.length - 1) : (e.key === 'ArrowDown' ? (i + 1) % opts.length : (i - 1 + opts.length) % opts.length);
+							opts[n].focus();
+							opts[n].scrollIntoView({ block: 'nearest' });
+						} else if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
+							e.preventDefault();
+							opts[0].click();
+						} else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.target instanceof HTMLInputElement)) {
+							root.querySelector('input')?.focus();
+						}
+						return false;
+					};
+				})();
 			</script>
 			// Clock: relative ages in thread rows ([data-ago], same rules as
 			// views.ago) and the busy row's elapsed time tick without a

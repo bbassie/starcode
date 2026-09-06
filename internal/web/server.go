@@ -83,6 +83,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/restart", s.restart)
 	s.mux.HandleFunc("GET /threads/{id}", s.thread)
 	s.mux.HandleFunc("GET /events", s.events)
+	s.mux.HandleFunc("GET /api/search", s.search)
 
 	s.mux.HandleFunc("POST /api/projects", s.addProject)
 	s.mux.HandleFunc("GET /api/project-paths", s.projectPaths)

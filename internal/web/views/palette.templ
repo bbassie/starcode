@@ -1,0 +1,253 @@
+package views
+
+import (
+	"fmt"
+	"starcode/internal/store"
+	"strings"
+)
+
+// Command is one action row in the palette. Action is a Datastar
+// expression; Href a plain link. Exactly one is set.
+type Command struct {
+	Label  string
+	Icon   string
+	Action string
+	Href   string
+	Key    string // hotkey shown on the row, for example "mod+`"
+}
+
+// SearchData is what one palette query renders: the commands that match,
+// threads by title and messages by text.
+type SearchData struct {
+	Query    string
+	Commands []Command
+	Threads  []store.Thread
+	Hits     []store.SearchHit
+	Projects map[string]store.Project
+	Looks    map[string]AgentLook
+}
+
+// Palette is the Ctrl+K dialog. It lives in the layout; the results box
+// is filled by /api/search on open and after every keystroke, so the list
+// always reflects the store rather than the page as it was served.
+templ Palette(p Page) {
+	<div id="palette" class="palette-wrap" data-show="$palette" data-preserve-attr="style" style="display: none" data-on:click="evt.target === el && ($palette = false)">
+		<div class="palette" role="dialog" aria-label="Search and commands" data-on:keydown="paletteKey(evt, el) && ($palette = false)">
+			<label class="palette-search">
+				@Icon("search", "ui-icon")
+				<input type="text" placeholder="Search threads and messages, or type a command…" data-bind:pq autocomplete="off" spellcheck="false" data-on:input__debounce.120ms={ searchGet(p) }/>
+				<kbd>esc</kbd>
+			</label>
+			<div id="palette-results" class="palette-results"></div>
+		</div>
+	</div>
+}
+
+// searchGet is the fetch behind the palette: the page's view and thread
+// ride along so the command list can fit the page.
+func searchGet(p Page) string {
+	return fmt.Sprintf("@get('/api/search?view=%s&id=%s&q=' + encodeURIComponent($pq))", p.View, p.ThreadID)
+}
+
+// PaletteOpen is the expression a hotkey or button runs to open the
+// palette: clear the query, show it, load the default rows, focus the box.
+func PaletteOpen(p Page) string {
+	return "$pq = ''; $palette = true; " + searchGet(p) + "; paletteFocus()"
+}
+
+templ PaletteResults(d SearchData) {
+	<div id="palette-results" class="palette-results">
+		if len(d.Commands) > 0 {
+			<div class="palette-head">Commands</div>
+			for _, c := range d.Commands {
+				if c.Href != "" {
+					<a class="opt" href={ templ.SafeURL(c.Href) } data-on:click="$palette = false">
+						@Icon(c.Icon, "ui-icon opt-icon")
+						<span class="opt-text"><span class="opt-name"><span class="ellipsis">{ c.Label }</span></span></span>
+						if c.Key != "" {
+							@Keys(c.Key)
+						}
+					</a>
+				} else {
+					<button type="button" class="opt" data-on:click={ "$palette = false; " + c.Action }>
+						@Icon(c.Icon, "ui-icon opt-icon")
+						<span class="opt-text"><span class="opt-name"><span class="ellipsis">{ c.Label }</span></span></span>
+						if c.Key != "" {
+							@Keys(c.Key)
+						}
+					</button>
+				}
+			}
+		}
+		if len(d.Threads) > 0 {
+			<div class="palette-head">
+				if d.Query == "" {
+					Recent threads
+				} else {
+					Threads
+				}
+			</div>
+			for _, t := range d.Threads {
+				<a class="opt" href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$palette = false">
+					<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
+					<span class="opt-text">
+						<span class="opt-name"><span class="ellipsis">{ t.Title }</span>
+							if t.Archived {
+								<span class="opt-badge">archived</span>
+							}
+						</span>
+						<span class="opt-desc">{ d.Projects[t.ProjectID].Name } · { t.Agent } · { ago(t.UpdatedAt) }</span>
+					</span>
+				</a>
+			}
+		}
+		if len(d.Hits) > 0 {
+			<div class="palette-head">Messages</div>
+			for _, h := range d.Hits {
+				<a class="opt" href={ templ.SafeURL("/threads/" + h.ThreadID + "#it-" + h.ItemID) } data-on:click="$palette = false">
+					if h.Kind == "user" {
+						@Icon("user", "ui-icon opt-icon")
+					} else {
+						@Icon("bot", "ui-icon opt-icon")
+					}
+					<span class="opt-text">
+						<span class="opt-name"><span class="ellipsis">{ h.ThreadTitle }</span></span>
+						<span class="opt-desc">@Highlight(h.Snippet, d.Query)</span>
+					</span>
+				</a>
+			}
+		}
+		if len(d.Commands) == 0 && len(d.Threads) == 0 && len(d.Hits) == 0 {
+			<p class="dim pad">Nothing matches "{ d.Query }".</p>
+		}
+	</div>
+}
+
+// Highlight wraps every case-insensitive occurrence of q in text in a
+// <mark>.
+templ Highlight(text, q string) {
+	if q == "" {
+		{ text }
+	} else {
+		for _, part := range splitMatches(text, q) {
+			if part.hit {
+				<mark>{ part.text }</mark>
+			} else {
+				{ part.text }
+			}
+		}
+	}
+}
+
+type matchPart struct {
+	text string
+	hit  bool
+}
+
+func splitMatches(text, q string) []matchPart {
+	var out []matchPart
+	lower := strings.ToLower(text)
+	lq := strings.ToLower(q)
+	for len(text) > 0 {
+		i := strings.Index(lower, lq)
+		if i < 0 || lq == "" {
+			out = append(out, matchPart{text: text})
+			break
+		}
+		if i > 0 {
+			out = append(out, matchPart{text: text[:i]})
+		}
+		out = append(out, matchPart{text: text[i : i+len(q)], hit: true})
+		text, lower = text[i+len(q):], lower[i+len(q):]
+	}
+	return out
+}
+
+// Keys renders a hotkey like "mod+shift+o" as key caps, with mod shown
+// as the platform's key by the layout script (see .kbd-mod).
+templ Keys(combo string) {
+	<span class="keys">
+		for _, k := range strings.Split(combo, "+") {
+			<kbd class={ templ.KV("kbd-mod", k == "mod") }>{ keyLabel(k) }</kbd>
+		}
+	</span>
+}
+
+func keyLabel(k string) string {
+	switch k {
+	case "mod":
+		return "Ctrl"
+	case "shift":
+		return "⇧"
+	case "alt":
+		return "Alt"
+	case "up":
+		return "↑"
+	case "down":
+		return "↓"
+	case "enter":
+		return "↵"
+	}
+	return strings.ToUpper(k)
+}
+
+// Hotkey is one keyboard shortcut the page offers. The layout renders
+// them as hidden buttons; the key handler clicks the one whose combo
+// matches, so the server decides what a key does on each page.
+type Hotkey struct {
+	Combo  string
+	Label  string
+	Action string
+	// Term is whether the key also works while the terminal has focus.
+	// Most do not: the shell has its own meaning for Ctrl+K and friends.
+	Term bool
+}
+
+// Hotkeys lists the shortcuts for a page. The palette and the help
+// dialog show the same list.
+func Hotkeys(p Page, parts Parts) []Hotkey {
+	keys := []Hotkey{
+		{Combo: "mod+k", Label: "Search and commands", Action: PaletteOpen(p)},
+		{Combo: "mod+/", Label: "Keyboard shortcuts", Action: "$help = !$help"},
+		{Combo: "mod+b", Label: "Toggle sidebar", Action: "innerWidth > 900 ? ($navhide = !$navhide) : ($nav = !$nav)"},
+		{Combo: "alt+up", Label: "Previous thread", Action: "threadStep(-1)"},
+		{Combo: "alt+down", Label: "Next thread", Action: "threadStep(1)"},
+	}
+	if parts.Thread != nil {
+		t := parts.Thread
+		keys = append(keys,
+			Hotkey{Combo: "mod+shift+o", Label: "New thread in " + t.Project.Name, Action: "@post('/api/projects/" + t.Project.ID + "/threads')"},
+			Hotkey{Combo: "mod+`", Label: "Toggle terminal", Action: "$term = !$term", Term: true},
+			Hotkey{Combo: "mod+shift+g", Label: "Toggle changes panel", Action: "$git = !$git", Term: true},
+			Hotkey{Combo: "mod+shift+f", Label: "Focus the prompt", Action: "promptFocus()", Term: true},
+		)
+	}
+	keys = append(keys, Hotkey{Combo: "mod+,", Label: "Settings", Action: "location.href = '/settings'"})
+	return keys
+}
+
+// HotkeyButtons is the hidden set of buttons the key handler clicks.
+templ HotkeyButtons(keys []Hotkey) {
+	<div id="hotkeys" hidden>
+		for _, k := range keys {
+			<button type="button" data-hotkey={ k.Combo } data-term?={ k.Term } data-on:click={ k.Action }>{ k.Label }</button>
+		}
+	</div>
+}
+
+// ShortcutHelp is the Ctrl+/ dialog.
+templ ShortcutHelp(keys []Hotkey) {
+	<div id="help" class="palette-wrap" data-show="$help" data-preserve-attr="style" style="display: none" data-on:click="evt.target === el && ($help = false)">
+		<div class="palette help" role="dialog" aria-label="Keyboard shortcuts">
+			<div class="palette-search"><span>Keyboard shortcuts</span><span class="spacer"></span><button class="btn icon ghost tiny" type="button" data-on:click="$help = false" aria-label="Close">@Icon("x", "ui-icon")</button></div>
+			<div class="help-list">
+				for _, k := range keys {
+					<div class="help-row"><span>{ k.Label }</span>@Keys(k.Combo)</div>
+				}
+				<div class="help-row"><span>Send the prompt</span>@Keys("enter")</div>
+				<div class="help-row"><span>New line in the prompt</span>@Keys("shift+enter")</div>
+				<div class="help-row"><span>Close a panel or menu</span>@Keys("esc")</div>
+			</div>
+		</div>
+	</div>
+}

@@ -74,7 +74,8 @@ templ Sidebar(d SidebarData) {
 			<button class="btn icon ghost" data-on:click="$nav = false" aria-label="Close navigation">@Icon("x", "ui-icon")</button>
 		</div>
 		<div class="side-search">
-			<input class="in" type="search" placeholder="Search threads" data-bind:q autocomplete="off"/>
+			<input class="in" type="search" placeholder="Filter threads" data-bind:q autocomplete="off"/>
+			<button class="btn icon ghost" type="button" title="Search threads and messages, run a command (Ctrl+K)" aria-label="Search and commands" data-on:click="runHotkey('mod+k')">@Icon("command", "ui-icon")</button>
 		</div>
 		<div class="side-section">
 			<span>All projects</span>

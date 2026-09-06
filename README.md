@@ -55,6 +55,26 @@ The title in the breadcrumb is a button: click it to rename the thread (Enter sa
 
 Archive puts a thread out of the way without deleting it: it leaves the project's list and the home cards and moves to a folded "Archived" section at the bottom of the sidebar, which opens while you search or while you are on one of its threads. Nothing else changes; the transcript stays, and a reply (or the unarchive button) moves it back. A thread archived while a turn is running stays under Running until the turn ends.
 
+## Search, commands and keys
+
+Ctrl+K (Cmd+K on a Mac) opens the palette. Typing filters three lists at once: commands for the page you are on (new thread, rename, archive, the panels, settings, themes), threads by title, and messages by text, each with a snippet around the match. Enter runs the first row, the arrow keys walk the rest, Escape closes. A message row opens its thread scrolled to that row. The search box in the sidebar only filters the thread list; the palette is the one that reads transcripts.
+
+Ctrl+/ lists the shortcuts. The set is decided per page by `views.Hotkeys` and rendered as hidden buttons in `#hotkeys`; the key handler in `layout.templ` clicks the one whose combo matches, so adding a shortcut is adding a row there. Inside the terminal only the keys marked for it work (toggle terminal, toggle changes, focus the prompt); the shell keeps Ctrl+K and the rest.
+
+| key | does |
+|---|---|
+| Ctrl+K | search and commands |
+| Ctrl+/ | keyboard shortcuts |
+| Ctrl+B | toggle the sidebar |
+| Alt+Up / Alt+Down | previous / next thread |
+| Ctrl+Shift+O | new thread in the current project |
+| Ctrl+` | toggle the terminal |
+| Ctrl+Shift+G | toggle the changes panel |
+| Ctrl+Shift+F | focus the prompt |
+| Ctrl+, | settings |
+| Enter, Ctrl+Enter | send (Shift+Enter for a new line; on a touch screen Enter breaks the line) |
+| Esc | close the palette, a side panel or an open menu |
+
 ## Settings
 
 Appearance picks the theme. Usage charts cost and tokens from the CLIs' own transcripts (see `internal/usage`), scanning every instance's config dir and showing each instance as its own series, in its tag colour when it has one. Sessions starcode itself ran are matched to their transcript by session id so nothing is counted twice.

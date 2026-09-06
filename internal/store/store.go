@@ -627,3 +627,101 @@ func scanApproval(sc interface{ Scan(...any) error }) (Approval, error) {
 	a.CreatedAt, _ = time.Parse(timeFmt, c)
 	return a, err
 }
+
+// SearchHit is one transcript message that matched a search: enough to
+// list it under its thread and jump to the row.
+type SearchHit struct {
+	ThreadID    string
+	ThreadTitle string
+	ProjectID   string
+	ItemID      string
+	Kind        string
+	Snippet     string
+	CreatedAt   time.Time
+}
+
+// likePattern turns free text into a LIKE pattern that matches it anywhere,
+// with the wildcard characters escaped (ESCAPE '\' in the query).
+func likePattern(q string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return "%" + r.Replace(q) + "%"
+}
+
+// SearchThreads lists threads whose title contains q, newest activity
+// first. An empty q lists the most recent ones.
+func (s *Store) SearchThreads(ctx context.Context, q string, limit int) ([]Thread, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+threadCols+` FROM threads WHERE title LIKE ? ESCAPE '\' ORDER BY updated_at DESC LIMIT ?`, likePattern(q), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Thread
+	for rows.Next() {
+		t, err := scanThread(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SearchItems finds prompts and replies containing q, newest first, with a
+// snippet of text around the first match.
+func (s *Store) SearchItems(ctx context.Context, q string, limit int) ([]SearchHit, error) {
+	if strings.TrimSpace(q) == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.thread_id, i.kind, i.body, i.created_at, t.title, t.project_id
+		FROM items i JOIN threads t ON t.id = i.thread_id
+		WHERE i.kind IN ('user','assistant') AND i.body LIKE ? ESCAPE '\'
+		ORDER BY i.seq DESC LIMIT ?`, likePattern(q), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SearchHit
+	for rows.Next() {
+		var h SearchHit
+		var body, created string
+		if err := rows.Scan(&h.ItemID, &h.ThreadID, &h.Kind, &body, &created, &h.ThreadTitle, &h.ProjectID); err != nil {
+			return nil, err
+		}
+		h.CreatedAt, _ = time.Parse(timeFmt, created)
+		h.Snippet = snippet(body, q, 160)
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// snippet returns about width characters of body around the first
+// case-insensitive occurrence of q, on one line.
+func snippet(body, q string, width int) string {
+	text := strings.Join(strings.Fields(body), " ")
+	r := []rune(text)
+	at := strings.Index(strings.ToLower(text), strings.ToLower(q))
+	start := 0
+	if at > 0 {
+		start = len([]rune(text[:at]))
+		start -= width / 3
+		if start < 0 {
+			start = 0
+		}
+	}
+	end := start + width
+	if end > len(r) {
+		end = len(r)
+		start = end - width
+		if start < 0 {
+			start = 0
+		}
+	}
+	out := string(r[start:end])
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(r) {
+		out += "…"
+	}
+	return out
+}

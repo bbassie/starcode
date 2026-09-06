@@ -56,6 +56,9 @@
       cursorBlink: true,
       scrollback: 5000,
     });
+    // Page shortcuts marked for the terminal (toggle it, the changes
+    // panel) go to the layout's key handler instead of the shell.
+    term.attachCustomKeyEventHandler((e) => !(e.type === 'keydown' && window.hotkeyInTerm && hotkeyInTerm(e)));
     fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(mount);

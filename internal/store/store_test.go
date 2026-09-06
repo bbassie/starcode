@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,5 +184,57 @@ func TestArchiveProjectionAndReplay(t *testing.T) {
 	}
 	if th, _ = s.Thread(ctx, "t1"); !th.Archived {
 		t.Fatalf("after replay: %+v", th)
+	}
+}
+
+func TestSearch(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if _, err := s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/search", Name: "search"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "t1",
+		domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "Fix the login_page bug", Agent: "claude"},
+		domain.ItemStarted{ID: "i1", Kind: domain.KindUser, Body: "please look at the login page,\nit shows 100% wrong"},
+		domain.ItemStarted{ID: "i2", Kind: domain.KindTool, ToolName: "Bash", Body: "login page grep"},
+		domain.ItemStarted{ID: "i3", Kind: domain.KindAssistant, Body: "The LOGIN page reads the cookie twice."},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "t2", domain.ThreadCreated{ID: "t2", ProjectID: "p1", Title: "unrelated", Agent: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+
+	threads, err := s.SearchThreads(ctx, "login", 10)
+	if err != nil || len(threads) != 1 || threads[0].ID != "t1" {
+		t.Fatalf("threads = %+v, %v", threads, err)
+	}
+	// LIKE wildcards in the query are literal.
+	if threads, _ = s.SearchThreads(ctx, "login_page", 10); len(threads) != 1 {
+		t.Fatalf("underscore search = %+v", threads)
+	}
+	if threads, _ = s.SearchThreads(ctx, "login%page", 10); len(threads) != 0 {
+		t.Fatalf("percent search = %+v", threads)
+	}
+	if threads, _ = s.SearchThreads(ctx, "", 10); len(threads) != 2 {
+		t.Fatalf("empty search = %+v", threads)
+	}
+
+	hits, err := s.SearchItems(ctx, "login page", 10)
+	if err != nil || len(hits) != 2 {
+		t.Fatalf("hits = %+v, %v", hits, err)
+	}
+	// Newest first, tool output excluded, snippet on one line.
+	if hits[0].ItemID != "i3" || hits[1].ItemID != "i1" || hits[0].ThreadTitle != "Fix the login_page bug" {
+		t.Fatalf("hit order = %+v", hits)
+	}
+	if hits[1].Snippet != "please look at the login page, it shows 100% wrong" {
+		t.Fatalf("snippet = %q", hits[1].Snippet)
+	}
+	if hits, _ = s.SearchItems(ctx, "100%", 10); len(hits) != 1 {
+		t.Fatalf("percent in body = %+v", hits)
+	}
+	if got := snippet("aaaa bbbb "+strings.Repeat("x", 300)+" needle "+strings.Repeat("y", 300), "needle", 60); !strings.Contains(got, "needle") || !strings.HasPrefix(got, "…") || !strings.HasSuffix(got, "…") || len([]rune(got)) > 62 {
+		t.Fatalf("long snippet = %q", got)
 	}
 }
