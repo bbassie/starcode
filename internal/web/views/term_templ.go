@@ -11,6 +11,9 @@ import templruntime "github.com/a-h/templ/runtime"
 // TermPanel is the collapsible shell panel under the transcript. It lives in
 // the layout, outside #main, so SSE re-renders never touch the xterm DOM;
 // static/term.js owns everything inside .term-mount.
+// Several shells can sit side by side: split adds a pane, the pane
+// buttons act on the one that last had focus. Panes come back after a
+// reload from /api/term/{id}/panes.
 func TermPanel(threadID string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -39,7 +42,7 @@ func TermPanel(threadID string) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.ResolveAttributeValue(threadID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/term.templ`, Line: 7, Col: 67}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/term.templ`, Line: 10, Col: 67}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var2)
 		if templ_7745c5c3_Err != nil {
@@ -53,7 +56,15 @@ func TermPanel(threadID string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "terminal</span> <span class=\"spacer\"></span> <button class=\"btn icon ghost tiny term-restart\" title=\"Restart shell\" aria-label=\"Restart shell\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "terminal</span> <span class=\"spacer\"></span> <button class=\"btn icon ghost tiny term-split\" title=\"Split: open another shell beside this one\" aria-label=\"Split terminal\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = Icon("columns-2", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</button> <button class=\"btn icon ghost tiny term-restart\" title=\"Restart this shell\" aria-label=\"Restart shell\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -61,15 +72,23 @@ func TermPanel(threadID string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</button> <button class=\"btn icon ghost tiny\" data-on:click=\"$term = false\" title=\"Close\" aria-label=\"Close terminal\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</button> <button class=\"btn icon ghost tiny term-close-pane\" title=\"Close this shell\" aria-label=\"Close shell\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = Icon("x", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = Icon("square-x", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</button></div><div class=\"term-mount\"></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</button> <button class=\"btn icon ghost tiny term-hide\" data-on:click=\"$term = false\" title=\"Hide the terminal panel (shells keep running)\" aria-label=\"Hide terminal\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = Icon("chevron-down", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</button></div><div class=\"term-mount\"></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

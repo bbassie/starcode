@@ -104,3 +104,25 @@ func TestSessionExit(t *testing.T) {
 		}
 	}
 }
+
+func TestPanesListAndKillPrefix(t *testing.T) {
+	m := NewManager(nil)
+	m.shell = "sh"
+	defer m.Shutdown()
+	dir := t.TempDir()
+	for _, id := range []string{"t1/1", "t1/2", "t2/1"} {
+		if _, err := m.Session(id, dir, 80, 24); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := m.LiveIDs("t1/"); strings.Join(got, ",") != "t1/1,t1/2" {
+		t.Fatalf("LiveIDs = %v", got)
+	}
+	m.KillPrefix("t1/")
+	if got := m.LiveIDs("t1/"); len(got) != 0 {
+		t.Fatalf("after KillPrefix = %v", got)
+	}
+	if m.Live("t2/1") == nil {
+		t.Fatal("other thread's shell was killed")
+	}
+}

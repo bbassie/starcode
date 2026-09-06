@@ -55,6 +55,10 @@ The title in the breadcrumb is a button: click it to rename the thread (Enter sa
 
 Archive puts a thread out of the way without deleting it: it leaves the project's list and the home cards and moves to a folded "Archived" section at the bottom of the sidebar, which opens while you search or while you are on one of its threads. Nothing else changes; the transcript stays, and a reply (or the unarchive button) moves it back. A thread archived while a turn is running stays under Running until the turn ends.
 
+## Terminal
+
+The terminal button (or Ctrl+`) opens a shell in the project directory under the transcript. Split opens another one beside it; the restart and close buttons act on the pane that last had focus, and closing the last pane hides the panel. Shells run on the server and outlive the page: a reload gets its panes back with their scrollback (`GET /api/term/{id}/panes` lists them), and they end when the thread is deleted or starcode stops.
+
 ## Search, commands and keys
 
 Ctrl+K (Cmd+K on a Mac) opens the palette. Typing filters three lists at once: commands for the page you are on (new thread, rename, archive, the panels, settings, themes), threads by title, and messages by text, each with a snippet around the match. Enter runs the first row, the arrow keys walk the rest, Escape closes. A message row opens its thread scrolled to that row. The search box in the sidebar only filters the thread list; the palette is the one that reads transcripts.

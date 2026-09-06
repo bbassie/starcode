@@ -889,8 +889,11 @@ body.scrolled-up .jump { display: inline-flex; }
   min-height: 30px;
   flex: none;
 }
-.term-mount { flex: 1; min-height: 0; padding: 6px 0 2px 10px; }
-.term-mount .terminal { height: 100%; }
+.term-mount { flex: 1; min-height: 0; display: flex; }
+.term-pane { flex: 1; min-width: 0; min-height: 0; padding: 6px 0 2px 10px; border-left: 2px solid transparent; }
+.term-pane + .term-pane { border-left-color: var(--border); }
+.term-mount:has(.term-pane + .term-pane) .term-pane.active { border-left-color: var(--accent); }
+.term-pane .terminal { height: 100%; }
 
 /* ---- palette (Ctrl+K) and shortcut help ---- */
 

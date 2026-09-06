@@ -259,7 +259,7 @@ func (s *Server) deleteThread(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.Term.Kill(r.PathValue("id"))
+	s.Term.KillPrefix(termPrefix(r.PathValue("id")))
 	if s.AttachDir != "" {
 		os.RemoveAll(filepath.Join(s.AttachDir, r.PathValue("id")))
 	}

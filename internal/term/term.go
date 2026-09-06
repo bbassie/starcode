@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/creack/pty"
@@ -67,6 +69,39 @@ func (m *Manager) Kill(id string) {
 	delete(m.sessions, id)
 	m.mu.Unlock()
 	if s != nil {
+		s.Kill()
+	}
+}
+
+// Live lists the running session ids that start with prefix, sorted. The
+// web layer keys panes as "<thread>/<n>", so this is how a reloaded page
+// finds the panes it had.
+func (m *Manager) LiveIDs(prefix string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for id, s := range m.sessions {
+		if strings.HasPrefix(id, prefix) && !s.Exited() {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// KillPrefix ends every session whose id starts with prefix: all the panes
+// of one thread.
+func (m *Manager) KillPrefix(prefix string) {
+	m.mu.Lock()
+	var all []*Session
+	for id, s := range m.sessions {
+		if strings.HasPrefix(id, prefix) {
+			all = append(all, s)
+			delete(m.sessions, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, s := range all {
 		s.Kill()
 	}
 }

@@ -111,6 +111,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/term/{id}/input", s.termInput)
 	s.mux.HandleFunc("POST /api/term/{id}/resize", s.termResize)
 	s.mux.HandleFunc("POST /api/term/{id}/kill", s.termKill)
+	s.mux.HandleFunc("GET /api/term/{id}/panes", s.termPanes)
 	s.Usage.SetRoots(s.usageRoots())
 	s.warm()
 	return s
