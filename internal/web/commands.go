@@ -12,6 +12,7 @@ import (
 	"starcode/internal/app"
 	"starcode/internal/domain"
 	"starcode/internal/gitx"
+	"starcode/internal/store"
 	"starcode/internal/web/views"
 )
 
@@ -80,17 +81,26 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	dir, entries, err := listProjectDir(p.Path, r.URL.Query().Get("path"))
+	sse := datastar.NewSSE(w, r)
+	s.patchDir(sse, p, r.URL.Query().Get("path"))
+}
+
+// patchDir renders one directory of the file tree: the whole explorer
+// for the root, the children list of a folder node otherwise.
+func (s *Server) patchDir(sse *datastar.ServerSentEventGenerator, p store.Project, path string) error {
+	dir, entries, err := listProjectDir(p.Path, path)
 	if err != nil {
-		s.fail(w, r, err)
-		return
+		return sse.PatchElementTempl(views.Toast(err.Error()))
 	}
 	files := make([]views.ProjectFile, len(entries))
 	for i, entry := range entries {
 		files[i] = views.ProjectFile{Name: entry.Name, Path: entry.Path, IsDir: entry.IsDir}
 	}
-	sse := datastar.NewSSE(w, r)
-	sse.PatchElementTempl(views.FileExplorer(views.ExplorerData{Project: p, Dir: dir, Files: files}))
+	d := views.ExplorerData{Project: p, Dir: dir, Files: files}
+	if dir == "" {
+		return sse.PatchElementTempl(views.FileExplorer(d))
+	}
+	return sse.PatchElementTempl(views.TreeChildren(d))
 }
 
 // uploadFiles saves browser-picked files (base64 in the "upload" signal, put
@@ -121,15 +131,7 @@ func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.App.Bus.Publish(domain.GitChanged{})
-	dir, entries, err := listProjectDir(p.Path, r.URL.Query().Get("path"))
-	if err != nil {
-		return
-	}
-	files := make([]views.ProjectFile, len(entries))
-	for i, entry := range entries {
-		files[i] = views.ProjectFile{Name: entry.Name, Path: entry.Path, IsDir: entry.IsDir}
-	}
-	sse.PatchElementTempl(views.FileExplorer(views.ExplorerData{Project: p, Dir: dir, Files: files}))
+	s.patchDir(sse, p, r.URL.Query().Get("path"))
 }
 
 func (s *Server) newThreadForProject(w http.ResponseWriter, r *http.Request) {

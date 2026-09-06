@@ -5,9 +5,12 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
 
+	"starcode/internal/gitx"
 	"starcode/internal/store"
 	"starcode/internal/web/views"
 )
@@ -40,6 +43,16 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := views.SearchData{Query: q, Threads: threads, Hits: hits, Projects: byID, Looks: s.agentLooks()}
+	// On a thread, file names of its project are searchable too; a hit
+	// opens the file in the side panel's editor.
+	if view == "thread" && q != "" {
+		if t, err := s.App.Store.Thread(ctx, threadID); err == nil {
+			if p, ok := byID[t.ProjectID]; ok {
+				d.Files = gitx.MatchFiles(s.projectFileList(ctx, p), q, 8)
+				d.FileProject = p
+			}
+		}
+	}
 	for _, c := range s.commands(ctx, view, threadID, ps) {
 		if q == "" || strings.Contains(strings.ToLower(c.Label), strings.ToLower(q)) {
 			d.Commands = append(d.Commands, c)
@@ -97,3 +110,29 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 }
 
 func jsq(s string) string { return views.JSQ(s) }
+
+// projectFileList is gitx.ListFiles behind a short cache: the palette
+// asks on every keystroke.
+func (s *Server) projectFileList(ctx context.Context, p store.Project) []string {
+	s.files.mu.Lock()
+	defer s.files.mu.Unlock()
+	if s.files.items == nil {
+		s.files.items = map[string]fileListEntry{}
+	}
+	if e, ok := s.files.items[p.ID]; ok && time.Since(e.at) < 30*time.Second {
+		return e.files
+	}
+	e := fileListEntry{at: time.Now(), files: gitx.ListFiles(ctx, p.Path)}
+	s.files.items[p.ID] = e
+	return e.files
+}
+
+type fileListCache struct {
+	mu    sync.Mutex
+	items map[string]fileListEntry
+}
+
+type fileListEntry struct {
+	at    time.Time
+	files []string
+}

@@ -2,9 +2,17 @@ package views
 
 import (
 	"fmt"
+	pathpkg "path"
 	"starcode/internal/store"
+	"strconv"
 	"strings"
 )
+
+// openFile is the expression that shows path in the side panel's editor:
+// the panel opens on the files tab with the file loaded.
+func openFile(p store.Project, path string) string {
+	return "$git = true; $panelTab = 'files'; $gitPath = " + strconv.Quote(path) + "; $gitEdit = false; @get('/api/git/" + p.ID + "/file?path=" + urlQuery(path) + "')"
+}
 
 // Command is one action row in the palette. Action is a Datastar
 // expression; Href a plain link. Exactly one is set.
@@ -25,6 +33,9 @@ type SearchData struct {
 	Hits     []store.SearchHit
 	Projects map[string]store.Project
 	Looks    map[string]AgentLook
+	// Files are paths in FileProject that match; only on a thread page.
+	Files       []string
+	FileProject store.Project
 }
 
 // Palette is the Ctrl+K dialog. It lives in the layout; the results box
@@ -101,6 +112,18 @@ templ PaletteResults(d SearchData) {
 				</a>
 			}
 		}
+		if len(d.Files) > 0 {
+			<div class="palette-head">Files in { d.FileProject.Name }</div>
+			for _, f := range d.Files {
+				<button type="button" class="opt" data-on:click={ "$palette = false; " + openFile(d.FileProject, f) }>
+					@Icon("file", "ui-icon opt-icon")
+					<span class="opt-text">
+						<span class="opt-name"><span class="ellipsis">{ pathpkg.Base(f) }</span></span>
+						<span class="opt-desc">@Highlight(f, d.Query)</span>
+					</span>
+				</button>
+			}
+		}
 		if len(d.Hits) > 0 {
 			<div class="palette-head">Messages</div>
 			for _, h := range d.Hits {
@@ -117,7 +140,7 @@ templ PaletteResults(d SearchData) {
 				</a>
 			}
 		}
-		if len(d.Commands) == 0 && len(d.Threads) == 0 && len(d.Hits) == 0 {
+		if len(d.Commands) == 0 && len(d.Threads) == 0 && len(d.Hits) == 0 && len(d.Files) == 0 {
 			<p class="dim pad">Nothing matches "{ d.Query }".</p>
 		}
 	</div>

@@ -1,6 +1,8 @@
 package views
 
 import (
+	"fmt"
+	"hash/fnv"
 	pathpkg "path"
 	"starcode/internal/gitx"
 	"starcode/internal/store"
@@ -78,6 +80,7 @@ templ GitHeader(d GitData) {
 			<button class="btn icon ghost tiny" data-show="$panelTab === 'changes'" data-on:click={ "@get('/api/git/" + d.Project.ID + "/refresh')" } title="Refresh">@Icon("refresh-cw", "ui-icon")</button>
 			<button class="btn icon ghost tiny" data-show="$panelTab === 'prs'" data-preserve-attr="style" style="display: none" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/prs?refresh=1')" } title="Refresh pull requests">@Icon("refresh-cw", "ui-icon")</button>
 		}
+		<button class="btn icon ghost tiny wide-toggle" type="button" data-on:click="$wide = !$wide" title="Widen or narrow the panel" aria-label="Widen or narrow the panel">@Icon("unfold-horizontal", "ui-icon")</button>
 		<button class="btn icon ghost tiny" data-on:click="$git = false" title="Close" aria-label="Close changes panel">@Icon("x", "ui-icon")</button>
 	</div>
 }
@@ -105,46 +108,85 @@ templ GitFiles(d GitData) {
 	</div>
 }
 
+// FileExplorer is the project tree. The root ships with the panel (empty
+// until the tab is opened); folders load their children the first time
+// they open. Which folders are open is remembered by the layout's tree
+// script (treeRestore), so a morph or a reload puts them back and their
+// placeholders fetch the children again. Uploads go to the folder whose
+// button was pressed ($updir), through the one file input in the head.
 templ FileExplorer(d ExplorerData) {
 	<div id="file-explorer" data-show="$panelTab === 'files'" data-preserve-attr="style" style={ hiddenUnless(!d.Hidden) }>
 		<div class="explorer-head">
-			if d.Dir != "" {
-				<button class="btn icon ghost tiny" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(explorerParent(d.Dir)) + "')" } title="Parent directory" aria-label="Parent directory">@Icon("arrow-up", "ui-icon")</button>
-			}
-			<span class="mono ellipsis" title={ d.Dir }>{ explorerPath(d) }</span>
+			<span class="mono ellipsis" title={ d.Project.Path }>{ d.Project.Name }/</span>
 			if d.Project.ID != "" {
 				// data-bind fills $upload asynchronously after the picker
 				// closes; the effect fires on that signal change and posts
-				// to the directory shown here.
-				<label class="btn icon ghost tiny" title="Upload files here" data-effect={ "$upload.length > 0 && @post('/api/projects/" + d.Project.ID + "/upload?path=" + urlQuery(d.Dir) + "')" }>
-					@Icon("upload", "ui-icon")
-					<input type="file" multiple data-bind:upload data-on:click="el.value = ''" style="display: none"/>
-				</label>
+				// to the folder named by $updir.
+				<button class="btn icon ghost tiny" type="button" title="Upload files into the project root" aria-label="Upload files into the project root" data-on:click="$updir = ''; el.nextElementSibling.click()">@Icon("upload", "ui-icon")</button>
+				<input type="file" multiple data-bind:upload data-on:click="el.value = ''" style="display: none" data-effect={ "$upload.length > 0 && @post('/api/projects/" + d.Project.ID + "/upload?path=' + encodeURIComponent($updir))" }/>
+				<button class="btn icon ghost tiny" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/files')" } title="Reload the tree" aria-label="Reload the tree">@Icon("refresh-cw", "ui-icon")</button>
 			}
 		</div>
 		if len(d.Files) == 0 && d.Project.ID != "" {
 			<p class="dim pad">this directory is empty.</p>
 		} else if d.Project.ID != "" {
-			<ul class="files explorer">
-				for _, f := range d.Files {
-					<li data-class:current={ "$gitPath === " + strconv.Quote(f.Path) }>
-						if f.IsDir {
-							<a href="#" data-on:click={ "evt.preventDefault(); @get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')" }>
-								<span class="explorer-kind">@Icon("folder", "ui-icon")</span>
-								<span class="ellipsis">{ f.Name }</span>
-								@Icon("chevron-right", "ui-icon dim")
-							</a>
-						} else {
-							<a href="#" title="Open in editor" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')" }>
-								<span class="explorer-kind">@Icon("file", "ui-icon")</span>
-								<span class="ellipsis">{ f.Name }</span>
-							</a>
-						}
-					</li>
-				}
-			</ul>
+			@TreeChildren(d)
 		}
 	</div>
+}
+
+// TreeChildren is the list under one folder (the root when Dir is empty).
+// Its id comes from the path so a folder's fetch can patch it in place.
+templ TreeChildren(d ExplorerData) {
+	<ul id={ treeID(d.Dir) } class="files explorer tree" style={ "--depth: " + strconv.Itoa(treeDepth(d.Dir)) }>
+		for _, f := range d.Files {
+			if f.IsDir {
+				<li>
+					<details class="tree-dir" data-path={ f.Path } data-preserve-attr="open" data-init="treeRestore(el)">
+						<summary data-on:click={ "!el.parentElement.open && @get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')" }>
+							@Icon("chevron-right", "ui-icon tree-caret")
+							<span class="explorer-kind">@Icon("folder", "ui-icon")</span>
+							<span class={ "ellipsis", templ.KV("dim", strings.HasPrefix(f.Name, ".")) }>{ f.Name }</span>
+							<button class="btn icon ghost tiny tree-upload" type="button" title={ "Upload files into " + f.Path } data-on:click={ "evt.preventDefault(); evt.stopPropagation(); $updir = " + strconv.Quote(f.Path) + "; el.closest('#file-explorer').querySelector('input[type=file]').click()" }>@Icon("upload", "ui-icon")</button>
+						</summary>
+						<ul id={ treeID(f.Path) } class="files explorer tree" style={ "--depth: " + strconv.Itoa(treeDepth(f.Path)) }>
+							// A morph (an upload, a reload) brings this placeholder
+							// back under a folder that was open; it loads itself then.
+							<li class="dim tiny-text tree-loading" data-init={ "el.closest('details').open && @get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')" }>loading…</li>
+						</ul>
+					</details>
+				</li>
+			} else {
+				<li data-class:current={ "$gitPath === " + strconv.Quote(f.Path) }>
+					<a href="#" title="Open in editor" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')" }>
+						<span class="explorer-kind">@Icon("file", "ui-icon")</span>
+						<span class={ "ellipsis", templ.KV("dim", strings.HasPrefix(f.Name, ".")) }>{ f.Name }</span>
+					</a>
+				</li>
+			}
+		}
+		if len(d.Files) == 0 {
+			<li class="dim tiny-text tree-loading">empty</li>
+		}
+	</ul>
+}
+
+// treeID names a folder's children list; the path is hashed so any
+// character is fine in the id.
+func treeID(dir string) string {
+	if dir == "" {
+		return "dir-root"
+	}
+	h := fnv.New32a()
+	h.Write([]byte(dir))
+	return fmt.Sprintf("dir-%08x", h.Sum32())
+}
+
+func treeDepth(dir string) int {
+	if dir == "" {
+		return 0
+	}
+	return strings.Count(dir, "/") + 1
 }
 
 // PullRequests lists the repository's open PRs from the GitHub CLI, the
@@ -231,13 +273,23 @@ templ GitDetail(d GitData) {
 	<div id="git-detail">
 		if d.Selected != "" {
 			<div class="diff-head mono ellipsis">{ d.Selected }</div>
-			<div class="git-detail-actions">
-				<button class="btn tiny" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) } data-on:click={ "@get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
+			<div class="git-detail-actions" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) }>
+				<span class="spacer"></span>
+				<button class="btn tiny" data-on:click={ "@get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
 			</div>
+			// The editor is a textarea with transparent text over a <pre>
+			// that static/highlight.js colours; the gutter counts lines.
+			// static editor script in layout.templ keeps the three in step.
 			<form class="git-editor" data-show="$gitEdit" data-preserve-attr="style" style={ hiddenUnless(d.Editing) } data-on:submit={ "evt.preventDefault(); @post('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>
-				<textarea class="file-editor" data-bind:file spellcheck="false"></textarea>
+				<div class="editor" data-lang={ editorLang(d.Selected) }>
+					<pre class="editor-gutter" aria-hidden="true"></pre>
+					<pre class="editor-hl" aria-hidden="true"><code></code></pre>
+					<textarea class="file-editor" data-bind:file spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off"></textarea>
+				</div>
 				<div class="git-editor-actions">
-					<button class="btn primary" type="submit">@Icon("save", "ui-icon") save</button>
+					<span class="dim tiny-text editor-state"></span>
+					<span class="spacer"></span>
+					<button class="btn primary" type="submit" title="Save (Ctrl+S)">@Icon("save", "ui-icon") save</button>
 					<button class="btn" type="button" data-on:click="$gitEdit = false; $file = ''">cancel</button>
 				</div>
 			</form>
@@ -253,6 +305,76 @@ templ GitDetail(d GitData) {
 			}
 		}
 	</div>
+}
+
+// editorLang maps a file name to a highlight.js language, or "" for
+// plain text.
+func editorLang(path string) string {
+	base := strings.ToLower(pathpkg.Base(path))
+	switch base {
+	case "makefile", "gnumakefile":
+		return "makefile"
+	case "dockerfile":
+		return "dockerfile"
+	}
+	ext := strings.TrimPrefix(pathpkg.Ext(base), ".")
+	switch ext {
+	case "go":
+		return "go"
+	case "js", "mjs", "cjs", "jsx":
+		return "javascript"
+	case "ts", "tsx", "mts":
+		return "typescript"
+	case "py":
+		return "python"
+	case "rb":
+		return "ruby"
+	case "rs":
+		return "rust"
+	case "java":
+		return "java"
+	case "kt", "kts":
+		return "kotlin"
+	case "c", "h":
+		return "c"
+	case "cc", "cpp", "hpp", "cxx":
+		return "cpp"
+	case "cs":
+		return "csharp"
+	case "sh", "bash", "zsh":
+		return "bash"
+	case "json", "jsonc":
+		return "json"
+	case "yaml", "yml":
+		return "yaml"
+	case "md", "markdown":
+		return "markdown"
+	case "html", "htm", "xml", "svg", "templ", "vue", "svelte":
+		return "xml"
+	case "css":
+		return "css"
+	case "scss", "less":
+		return "scss"
+	case "sql":
+		return "sql"
+	case "php":
+		return "php"
+	case "swift":
+		return "swift"
+	case "diff", "patch":
+		return "diff"
+	case "toml", "ini", "cfg", "env", "service":
+		return "ini"
+	case "lua":
+		return "lua"
+	case "pl", "pm":
+		return "perl"
+	case "r":
+		return "r"
+	case "graphql", "gql":
+		return "graphql"
+	}
+	return ""
 }
 
 func statusClass(s string) string {
@@ -286,17 +408,3 @@ func urlQuery(s string) string {
 	return r.Replace(s)
 }
 
-func explorerParent(dir string) string {
-	parent := pathpkg.Dir(dir)
-	if parent == "." {
-		return ""
-	}
-	return parent
-}
-
-func explorerPath(d ExplorerData) string {
-	if d.Dir == "" {
-		return d.Project.Name + "/"
-	}
-	return d.Project.Name + "/" + d.Dir
-}

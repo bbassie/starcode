@@ -74,12 +74,14 @@ templ Layout(title string, p Page, parts Parts) {
 				<script defer src={ asset("/static/xterm.js") }></script>
 				<script defer src={ asset("/static/xterm-addon-fit.js") }></script>
 				<script defer src={ asset("/static/term.js") }></script>
+				<script defer src={ asset("/static/highlight.js") }></script>
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, _hb: 0}`, p.View == "thread", p.Theme) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: false, updir: '', _hb: 0}`, p.View == "thread", p.Theme) }
 			data-attr:data-theme="$theme"
 			data-class:nav-collapsed="$navhide"
+			data-class:panel-wide="$wide"
 			data-init={ streamOpen(p) }
 			data-on:stream__window={ streamOpen(p) }
 			data-effect="$_hb; streamAlive()"
@@ -558,6 +560,137 @@ templ Layout(title string, p Page, parts Parts) {
 					});
 				})();
 			</script>
+			if p.View == "thread" {
+				// File tree (views.FileExplorer): the open folders are kept in
+				// sessionStorage per thread, so a morphed or reloaded tree
+				// opens them again; their placeholders then load the children.
+				<script>
+					(() => {
+						const key = 'tree:' + location.pathname;
+						let open = new Set();
+						try { open = new Set(JSON.parse(sessionStorage.getItem(key) || '[]')); } catch {}
+						const save = () => sessionStorage.setItem(key, JSON.stringify([...open]));
+						document.addEventListener('toggle', (e) => {
+							const d = e.target;
+							if (!(d instanceof HTMLDetailsElement) || !d.classList.contains('tree-dir')) return;
+							if (d.open) open.add(d.dataset.path); else open.delete(d.dataset.path);
+							save();
+						}, true);
+						window.treeRestore = (el) => { if (open.has(el.dataset.path)) el.open = true; };
+					})();
+				</script>
+				// File editor (views.GitDetail): line numbers, a highlighted
+				// copy of the text behind the transparent textarea, Tab and
+				// Enter that keep the indentation, Ctrl+S to save, and an
+				// unsaved marker with a warning before the page is left. The
+				// form is server rendered and morphed, so each editor is set
+				// up when it appears and the state lives on the element.
+				<script>
+					(() => {
+						const seen = new WeakSet();
+						const lang = (ed) => ed.dataset.lang && window.hljs && hljs.getLanguage(ed.dataset.lang) ? ed.dataset.lang : '';
+						const paint = (ed, ta) => {
+							const code = ed.querySelector('.editor-hl code');
+							const text = ta.value;
+							const l = lang(ed);
+							// A trailing newline needs a visible last line so the
+							// layers stay the same height.
+							const shown = text.endsWith('\n') ? text + ' ' : text;
+							if (l && text.length < 200000) {
+								code.innerHTML = hljs.highlight(shown, { language: l, ignoreIllegals: true }).value;
+							} else {
+								code.textContent = shown;
+							}
+							const lines = text.split('\n').length;
+							const g = ed.querySelector('.editor-gutter');
+							if (Number(g.dataset.lines) !== lines) {
+								g.dataset.lines = lines;
+								g.textContent = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
+							}
+						};
+						const sync = (ed, ta) => {
+							ed.querySelector('.editor-hl').style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
+							ed.querySelector('.editor-gutter').style.transform = `translateY(${-ta.scrollTop}px)`;
+						};
+						const indentUnit = (text) => /^\t/m.test(text) ? '\t' : (text.match(/^ +/m)?.[0].length % 4 === 0 ? '    ' : '  ');
+						const edit = (ta, start, end, insert) => {
+							ta.setRangeText(insert, start, end, 'end');
+							ta.dispatchEvent(new Event('input', { bubbles: true }));
+						};
+						const keys = (ta) => (e) => {
+							const v = ta.value;
+							const s = ta.selectionStart;
+							const en = ta.selectionEnd;
+							if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+								e.preventDefault();
+								ta.closest('form').requestSubmit();
+								return;
+							}
+							if (e.key === 'Tab') {
+								e.preventDefault();
+								const unit = indentUnit(v);
+								const lineStart = v.lastIndexOf('\n', s - 1) + 1;
+								if (s !== en && v.slice(s, en).includes('\n')) {
+									// Several lines: indent or outdent each.
+									const lineEnd = v.indexOf('\n', en - 1) < 0 ? v.length : Math.max(en, v.indexOf('\n', en - 1));
+									const block = v.slice(lineStart, lineEnd);
+									const out = block.split('\n').map((l) => e.shiftKey ? l.replace(new RegExp('^(' + unit + '|\t| {1,' + unit.length + '})'), '') : (l ? unit + l : l)).join('\n');
+									ta.setRangeText(out, lineStart, lineEnd, 'select');
+									ta.dispatchEvent(new Event('input', { bubbles: true }));
+								} else if (e.shiftKey) {
+									const m = v.slice(lineStart).match(new RegExp('^(' + unit + '|\t| {1,' + unit.length + '})'));
+									if (m) edit(ta, lineStart, lineStart + m[0].length, '');
+								} else {
+									edit(ta, s, en, unit);
+								}
+								return;
+							}
+							if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.isComposing) {
+								e.preventDefault();
+								const lineStart = v.lastIndexOf('\n', s - 1) + 1;
+								const indent = v.slice(lineStart, s).match(/^[ \t]*/)[0];
+								edit(ta, s, en, '\n' + indent);
+							}
+						};
+						const setup = (ed) => {
+							if (seen.has(ed)) return;
+							seen.add(ed);
+							const ta = ed.querySelector('textarea');
+							const state = ed.closest('form').querySelector('.editor-state');
+							let initial = null;
+							const refresh = () => {
+								// The first paint after Datastar has bound the text is
+								// the baseline for the unsaved marker.
+								if (initial === null && ta.value !== '') initial = ta.value;
+								paint(ed, ta);
+								sync(ed, ta);
+								const dirty = initial !== null && ta.value !== initial;
+								ed.closest('form').classList.toggle('dirty', dirty);
+								state.textContent = dirty ? 'unsaved changes' : '';
+							};
+							ta.addEventListener('input', refresh);
+							ta.addEventListener('scroll', () => sync(ed, ta));
+							ta.addEventListener('keydown', keys(ta));
+							ed.closest('form').addEventListener('submit', () => { initial = ta.value; setTimeout(refresh); });
+							// Datastar sets the value without an input event; watch for it.
+							let last = ta.value;
+							const tick = () => {
+								if (!ed.isConnected) return;
+								if (ta.value !== last) { last = ta.value; refresh(); }
+								requestAnimationFrame(tick);
+							};
+							requestAnimationFrame(tick);
+							refresh();
+						};
+						const scan = () => document.querySelectorAll('.editor').forEach(setup);
+						new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
+						scan();
+						window.addEventListener('beforeunload', (e) => {
+							if (document.querySelector('form.git-editor.dirty')) e.preventDefault();
+						});
+					})();
+				</script>
+			}
 			if p.View == "usage" {
 				// The usage view is replaced by the live stream, so chart events are
 				// delegated from the document instead of bound to one render.

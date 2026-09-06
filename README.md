@@ -57,7 +57,11 @@ Archive puts a thread out of the way without deleting it: it leaves the project'
 
 ## Side panel
 
-The panel on the right of a thread has three tabs. Changes is the working tree: `git status`, a diff per file, and an editor for any text file. Files browses the project directory, with uploads into the folder shown. PRs lists the repository's open pull requests through the GitHub CLI (`gh`, signed in), the current branch's first with its review state and check results, and a link to open one on GitHub when the branch has none. The list is cached for a minute per project; the refresh button in the tab bar reads it again. Without `gh`, or in a repository with no GitHub remote, the tab says so.
+The panel on the right of a thread has three tabs. Changes is the working tree: `git status`, a diff per file, and an editor for any text file. Files is the project tree: folders load their children when opened and stay open across reloads (the list of open folders is kept in sessionStorage per thread), each folder has an upload button, and hidden files are shown dimmed. PRs lists the repository's open pull requests through the GitHub CLI (`gh`, signed in), the current branch's first with its review state and check results, and a link to open one on GitHub when the branch has none. The list is cached for a minute per project; the refresh button in the tab bar reads it again. Without `gh`, or in a repository with no GitHub remote, the tab says so.
+
+### Editor
+
+Any text file up to 1 MiB opens in the panel, from the tree, the changes list or the palette. The editor is a textarea over a copy of the text that `highlight.js` (vendored, common languages, mapped from the file extension in `views.editorLang`) colours, with a line number gutter that scrolls with it. Tab indents with the file's own unit (a tab, or the space count already in use), Shift+Tab outdents, Enter keeps the indentation, Ctrl+S saves; a modified buffer shows "unsaved changes" and the browser asks before the page is left. The unfold button in the panel header widens the panel to most of the window for longer lines. Monaco and CodeMirror would need a bundler, which this project does not have, so the editor stays this one.
 
 ## Terminal
 
@@ -65,7 +69,7 @@ The terminal button (or Ctrl+`) opens a shell in the project directory under the
 
 ## Search, commands and keys
 
-Ctrl+K (Cmd+K on a Mac) opens the palette. Typing filters three lists at once: commands for the page you are on (new thread, rename, archive, the panels, settings, themes), threads by title, and messages by text, each with a snippet around the match. Enter runs the first row, the arrow keys walk the rest, Escape closes. A message row opens its thread scrolled to that row. The search box in the sidebar only filters the thread list; the palette is the one that reads transcripts.
+Ctrl+K (Cmd+K on a Mac) opens the palette. Typing filters four lists at once: commands for the page you are on (new thread, rename, archive, the panels, settings, themes), threads by title, files of the current thread's project by path (`git ls-files` plus untracked files, or a bounded walk outside a repository), and messages by text, each with a snippet around the match. Enter runs the first row, the arrow keys walk the rest, Escape closes. A message row opens its thread scrolled to that row. The search box in the sidebar only filters the thread list; the palette is the one that reads transcripts.
 
 Ctrl+/ lists the shortcuts. The set is decided per page by `views.Hotkeys` and rendered as hidden buttons in `#hotkeys`; the key handler in `layout.templ` clicks the one whose combo matches, so adding a shortcut is adding a row there. Inside the terminal only the keys marked for it work (toggle terminal, toggle changes, focus the prompt); the shell keeps Ctrl+K and the rest.
 

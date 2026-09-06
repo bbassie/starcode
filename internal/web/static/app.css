@@ -850,6 +850,20 @@ body.scrolled-up .jump { display: inline-flex; }
 .explorer-head .ellipsis { flex: 1; font-size: 0.85em; }
 .files.explorer .explorer-kind { display: inline-flex; color: var(--accent); }
 .files.explorer a > .ellipsis { flex: 1; }
+/* Tree: each level indents by --depth; folders are <details> whose
+   summary row looks like a file row. */
+.tree li a, .tree-dir > summary { padding-left: calc(var(--pad) + var(--depth, 0) * 14px); }
+.tree-dir > summary { list-style: none; display: flex; gap: 8px; align-items: center; padding-top: 6px; padding-bottom: 6px; padding-right: var(--pad); min-height: 34px; cursor: pointer; }
+.tree-dir > summary::-webkit-details-marker { display: none; }
+.tree-dir > summary:hover { background: var(--bg-3); }
+.tree-dir > summary > .ellipsis { flex: 1; }
+.tree-caret { color: var(--fg-dim); transition: transform 0.12s; margin-left: -4px; }
+.tree-dir[open] > summary .tree-caret { transform: rotate(90deg); }
+.tree-upload { visibility: hidden; margin: -4px 0; }
+.tree-dir > summary:hover .tree-upload { visibility: visible; }
+.tree li a { padding-left: calc(var(--pad) + var(--depth, 0) * 14px + 12px); }
+.tree-loading { padding: 4px var(--pad) 4px calc(var(--pad) + var(--depth, 0) * 14px + 12px); }
+body.panel-wide { --gitpanel-w: min(62vw, 960px); }
 .pr-list { flex: 1; min-height: 0; overflow: auto; border-bottom: var(--border-w) solid var(--border); }
 .pr-open { display: flex; align-items: center; gap: 8px; padding: 8px var(--pad); border-bottom: var(--border-w) solid var(--border); background: var(--bg-3); }
 .pr-open .dim { display: inline-flex; align-items: center; gap: 4px; }
@@ -867,10 +881,29 @@ body.scrolled-up .jump { display: inline-flex; }
 .diff .del { background: var(--del-bg); color: var(--err); }
 .diff .hunk { color: var(--accent); }
 .diff .dim { color: var(--fg-dim); }
-.git-detail-actions { display: flex; justify-content: flex-end; padding: 6px var(--pad); border-bottom: var(--border-w) solid var(--border); }
+.git-detail-actions { display: flex; align-items: center; gap: 6px; padding: 6px var(--pad); border-bottom: var(--border-w) solid var(--border); }
 .git-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-.file-editor { flex: 1; min-height: 240px; resize: none; border: 0; outline: none; background: var(--bg); padding: var(--pad); font: 0.85em/1.5 var(--font-mono); tab-size: 2; }
-.git-editor-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px var(--pad); border-top: var(--border-w) solid var(--border); }
+/* Editor layers: the gutter, the highlighted copy and the textarea share
+   one font and padding; the textarea scrolls and the others follow it. */
+.editor { position: relative; flex: 1; min-height: 240px; display: flex; overflow: hidden; background: var(--bg); font: 0.85em/1.5 var(--font-mono); tab-size: 4; }
+.editor-gutter { flex: none; width: 3.5ch; padding: var(--pad) 0; text-align: right; color: var(--fg-dim); user-select: none; background: var(--bg-2); border-right: var(--border-w) solid var(--border); overflow: hidden; padding-right: 6px; box-sizing: content-box; will-change: transform; }
+.editor-hl, .file-editor { position: absolute; top: 0; left: calc(3.5ch + 7px); right: 0; bottom: 0; margin: 0; padding: var(--pad); font: inherit; line-height: inherit; tab-size: inherit; white-space: pre; word-break: normal; overflow-wrap: normal; }
+.editor-hl { pointer-events: none; color: var(--fg); will-change: transform; overflow: visible; width: max-content; min-width: 100%; height: max-content; min-height: 100%; }
+.file-editor { resize: none; border: 0; outline: none; background: transparent; color: transparent; caret-color: var(--fg); overflow: auto; }
+.file-editor::selection { background: var(--sel); }
+.git-editor-actions { display: flex; align-items: center; gap: 6px; padding: 8px var(--pad); border-top: var(--border-w) solid var(--border); }
+.git-editor.dirty .btn.primary { box-shadow: 0 0 0 2px var(--sel); }
+/* highlight.js classes in the theme's colours. */
+.hljs-comment, .hljs-quote { color: var(--fg-dim); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-meta { color: var(--accent); }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-template-tag { color: var(--ok); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet, .hljs-link { color: var(--warn); }
+.hljs-title, .hljs-section, .hljs-name, .hljs-selector-id, .hljs-selector-class { color: var(--fg); font-weight: 600; }
+.hljs-type, .hljs-built_in, .hljs-class .hljs-title, .hljs-title.class_ { color: color-mix(in srgb, var(--accent) 70%, var(--fg)); }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property { color: color-mix(in srgb, var(--warn) 60%, var(--fg)); }
+.hljs-deletion { color: var(--err); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
 
 /* ---- terminal ---- */
 
@@ -980,6 +1013,7 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 }
 @media (max-width: 1100px) {
   #settingsnav { display: none; }
+  .wide-toggle { display: none; }
   .settings-menu { display: flex; }
   #gitpanel { position: absolute; top: 0; bottom: 0; right: 0; width: min(92vw, 420px); z-index: 10; transform: translateX(100%); transition: transform 0.15s ease-out; box-shadow: var(--shadow); }
   #gitpanel.open { transform: none; }

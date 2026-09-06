@@ -48,6 +48,7 @@ type Server struct {
 	cache     capsCache
 	providers providerCache
 	prs       prCache
+	files     fileListCache
 	assets    string
 }
 
