@@ -53,6 +53,8 @@ Run one instance as a systemd user service from the binary in the repo (`make se
 
 The title in the breadcrumb is a button: click it to rename the thread (Enter saves, Escape cancels). Agents that generate their own titles still set them on the first turn.
 
+A thread that had activity since this browser last had it open shows a dot and a bold title in the sidebar and on the project cards, and the tab title counts them, so a turn that ended while you were elsewhere is easy to find. A running turn is not unread yet; the mark appears when it ends. What was seen is kept in the browser (localStorage), so each browser keeps its own view. Opening the thread clears it.
+
 Archive puts a thread out of the way without deleting it: it leaves the project's list and the home cards and moves to a folded "Archived" section at the bottom of the sidebar, which opens while you search or while you are on one of its threads. Nothing else changes; the transcript stays, and a reply (or the unarchive button) moves it back. A thread archived while a turn is running stays under Running until the turn ends.
 
 ## Side panel

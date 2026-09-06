@@ -163,6 +163,7 @@ templ Sidebar(d SidebarData) {
 templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool, look AgentLook) {
 	<li
 		class={ "thread-row", "st-" + t.Status, templ.KV("current", current) }
+		data-id={ t.ID }
 		data-k={ searchKey(t, p) }
 		data-show="$q == '' || el.dataset.k.includes($q.toLowerCase())"
 	>
