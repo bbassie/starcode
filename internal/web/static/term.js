@@ -77,8 +77,16 @@
       scrollback: 5000,
     });
     // Page shortcuts marked for the terminal (toggle it, the changes
-    // panel) go to the layout's key handler instead of the shell.
-    term.attachCustomKeyEventHandler((e) => !(e.type === 'keydown' && window.hotkeyInTerm && hotkeyInTerm(e)));
+    // panel) go to the layout's key handler instead of the shell. Ctrl+V
+    // is left to the browser too: xterm would turn it into the ^V byte,
+    // which a login prompt ignores, while the browser's own paste event
+    // lands in xterm's textarea and becomes input. (Shift+Insert and
+    // Ctrl+Shift+V already worked that way.)
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === 'keydown' && window.hotkeyInTerm && hotkeyInTerm(e)) return false;
+      if (e.type === 'keydown' && e.key.toLowerCase() === 'v' && (e.ctrlKey || e.metaKey) && !e.altKey) return false;
+      return true;
+    });
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(el);
@@ -176,6 +184,26 @@
     if (w > 0 && width === 0 && active) panes.get(active)?.term.focus();
     width = w;
   }).observe(mount);
+
+  // The paste button is for phones, which have no paste shortcut. It
+  // needs the clipboard API, which browsers only give a secure context
+  // (HTTPS, or localhost).
+  panel.querySelector('.term-paste')?.addEventListener('click', async () => {
+    const p = active && panes.get(active);
+    if (!p) return;
+    if (!navigator.clipboard?.readText) {
+      p.term.write('\r\n\x1b[2m[paste needs a secure context: open starcode over https]\x1b[0m\r\n');
+      p.term.focus();
+      return;
+    }
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) p.term.paste(text);
+    } catch (e) {
+      p.term.write('\r\n\x1b[2m[clipboard read was refused]\x1b[0m\r\n');
+    }
+    p.term.focus();
+  });
 
   const drag = panel.querySelector('.term-drag');
   drag.addEventListener('pointerdown', (e) => {

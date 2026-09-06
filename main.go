@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"starcode/internal/bus"
 	"starcode/internal/providers"
 	"starcode/internal/store"
+	"starcode/internal/tlsx"
 	"starcode/internal/web"
 )
 
@@ -55,6 +57,10 @@ func run() (string, error) {
 	debug := fs.Bool("debug", false, "debug logging")
 	claudeBin := fs.String("claude", envOr("STARCODE_CLAUDE", "claude"), "claude binary")
 	codexBin := fs.String("codex", envOr("STARCODE_CODEX", "codex"), "codex binary")
+	tlsMode := fs.String("tls", envOr("STARCODE_TLS", "auto"), "serve HTTPS: auto (on for a non-loopback -addr), on, off")
+	tlsCert := fs.String("tls-cert", os.Getenv("STARCODE_TLS_CERT"), "certificate file to serve instead of the generated one (with -tls-key)")
+	tlsKey := fs.String("tls-key", os.Getenv("STARCODE_TLS_KEY"), "key file for -tls-cert")
+	tlsHosts := fs.String("tls-hosts", os.Getenv("STARCODE_TLS_HOSTS"), "extra names for the generated certificate, comma separated")
 
 	args := os.Args[1:]
 	sub := ""
@@ -129,6 +135,31 @@ func run() (string, error) {
 
 	h := web.New(a, log, *token, filepath.Join(*data, "attachments"), prov)
 	defer h.Close()
+	// HTTPS is on wherever a phone could be on the other end. The
+	// certificate comes from a CA of this instance's own unless files are
+	// given; devices install the CA once and the warning goes away.
+	var tlsCfg *tls.Config
+	useTLS := *tlsMode == "on" || (*tlsMode == "auto" && !isLoopback(host))
+	switch {
+	case *tlsMode != "on" && *tlsMode != "off" && *tlsMode != "auto":
+		return "", fmt.Errorf("bad -tls %q: want auto, on or off", *tlsMode)
+	case useTLS && *tlsCert != "":
+		cert, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+		if err != nil {
+			return "", fmt.Errorf("load -tls-cert: %w", err)
+		}
+		tlsCfg = &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2", "http/1.1"}, MinVersion: tls.VersionTLS12}
+	case useTLS:
+		hosts := tlsx.LocalHosts(strings.Split(*tlsHosts, ",")...)
+		cert, ca, err := tlsx.Load(filepath.Join(*data, "tls"), hosts)
+		if err != nil {
+			return "", err
+		}
+		h.CA = ca
+		tlsCfg = &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2", "http/1.1"}, MinVersion: tls.VersionTLS12}
+		log.Info("tls certificate", "hosts", hosts, "ca", filepath.Join(*data, "tls", "ca.pem"))
+	}
+	h.Secure = tlsCfg != nil
 	h.Update = web.NewSelfUpdate(log)
 	var restart atomic.Bool
 	h.OnRestart = func() {
@@ -144,6 +175,7 @@ func run() (string, error) {
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           h,
+		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return reqCtx },
 	}
@@ -155,8 +187,17 @@ func run() (string, error) {
 		srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Info("listening", "addr", "http://"+*addr, "data", *data, "auth", *token != "")
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return "", err
+	}
+	scheme := "http://"
+	if tlsCfg != nil {
+		ln = tlsx.Listen(ln, tlsCfg)
+		scheme = "https://"
+	}
+	log.Info("listening", "addr", scheme+*addr, "data", *data, "auth", *token != "")
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return "", err
 	}
 	if restart.Load() {

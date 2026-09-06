@@ -2,7 +2,9 @@ package views
 
 // Login is a plain form, no Datastar: it has to work before any cookie is
 // set and the browser handles the redirect itself.
-templ Login(next string, failed bool, theme string) {
+// ca is whether the instance issues its own certificate, in which case
+// the page offers the CA so the browser warning can be put to rest.
+templ Login(next string, failed bool, theme string, ca bool) {
 	<!DOCTYPE html>
 	<html lang="en" data-theme={ theme }>
 		<head>
@@ -24,6 +26,9 @@ templ Login(next string, failed bool, theme string) {
 					<p class="err">wrong token.</p>
 				}
 				<button class="btn primary" type="submit">enter</button>
+				if ca {
+					<p class="dim tiny-text login-ca">Certificate warning? <a href="/starcode-ca.crt">Download the CA certificate</a> and install it on this device once; every certificate this instance issues is trusted after that.</p>
+				}
 			</form>
 		</body>
 	</html>

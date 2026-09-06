@@ -27,8 +27,13 @@ Then, once:
 loginctl enable-linger $USER   # keep user services running after logout
 ```
 
-Open `http://<host>:4000`, paste the token from `~/.config/starcode.env`. A
-cookie keeps you signed in for a year.
+Open `https://<host>:4000` (plain `http://` redirects there), accept the
+certificate warning once, paste the token from `~/.config/starcode.env`. A
+cookie keeps you signed in for a year. To lose the warning, install
+`https://<host>:4000/starcode-ca.crt` on the device; the README's HTTPS
+section says how per platform. If you reach the machine by a name it does
+not know about itself (a VPN DNS name), add `STARCODE_TLS_HOSTS=that.name`
+to the env file, or the certificate will not match.
 
 The unit file (also in `docs/starcode.service`):
 
@@ -58,8 +63,10 @@ Things in it worth knowing:
 - `SHELL` is what the terminal panel starts. Without it, user services get
   no shell variable and you would land in `sh`.
 - `-addr 0.0.0.0:4000` listens on every interface, which is why the token
-  is required. On a LAN reached over WireGuard that is fine; on anything
-  public put a TLS proxy in front.
+  is required and why HTTPS is on (`-tls auto`): browsers only allow the
+  clipboard and notifications on a secure origin. The certificate comes
+  from a CA starcode keeps in `~/.starcode/tls/`. On anything public put a
+  real certificate in front, or pass one with `-tls-cert` and `-tls-key`.
 - Data lives in `~/.starcode` (`starcode.db`, `providers.json`,
   `attachments/`, caches). Change it with `STARCODE_DATA` in the env file.
 

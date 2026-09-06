@@ -12,6 +12,7 @@ templ TermPanel(threadID string) {
 		<div class="term-head">
 			<span class="dim">@Icon("terminal", "ui-icon") terminal</span>
 			<span class="spacer"></span>
+			<button class="btn icon ghost tiny term-paste" title="Paste the clipboard into the active shell (Ctrl+V works too)" aria-label="Paste into terminal">@Icon("clipboard-paste", "ui-icon")</button>
 			<button class="btn icon ghost tiny term-split" title="Split: open another shell beside this one" aria-label="Split terminal">@Icon("columns-2", "ui-icon")</button>
 			<button class="btn icon ghost tiny term-restart" title="Restart this shell" aria-label="Restart shell">@Icon("rotate-cw", "ui-icon")</button>
 			<button class="btn icon ghost tiny term-close-pane" title="Close this shell" aria-label="Close shell">@Icon("square-x", "ui-icon")</button>

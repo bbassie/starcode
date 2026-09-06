@@ -307,7 +307,7 @@ func (s *Server) setTheme(w http.ResponseWriter, r *http.Request) {
 	sig := s.readSignals(r)
 	for _, t := range Themes {
 		if t == sig.Theme {
-			http.SetCookie(w, &http.Cookie{Name: "theme", Value: t, Path: "/", SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
+			http.SetCookie(w, &http.Cookie{Name: "theme", Value: t, Path: "/", Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
 			s.ok(w, r)
 			return
 		}

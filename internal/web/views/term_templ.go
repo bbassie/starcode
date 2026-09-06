@@ -56,7 +56,15 @@ func TermPanel(threadID string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "terminal</span> <span class=\"spacer\"></span> <button class=\"btn icon ghost tiny term-split\" title=\"Split: open another shell beside this one\" aria-label=\"Split terminal\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "terminal</span> <span class=\"spacer\"></span> <button class=\"btn icon ghost tiny term-paste\" title=\"Paste the clipboard into the active shell (Ctrl+V works too)\" aria-label=\"Paste into terminal\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = Icon("clipboard-paste", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</button> <button class=\"btn icon ghost tiny term-split\" title=\"Split: open another shell beside this one\" aria-label=\"Split terminal\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -64,7 +72,7 @@ func TermPanel(threadID string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</button> <button class=\"btn icon ghost tiny term-restart\" title=\"Restart this shell\" aria-label=\"Restart shell\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</button> <button class=\"btn icon ghost tiny term-restart\" title=\"Restart this shell\" aria-label=\"Restart shell\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -72,7 +80,7 @@ func TermPanel(threadID string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</button> <button class=\"btn icon ghost tiny term-close-pane\" title=\"Close this shell\" aria-label=\"Close shell\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</button> <button class=\"btn icon ghost tiny term-close-pane\" title=\"Close this shell\" aria-label=\"Close shell\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -80,7 +88,7 @@ func TermPanel(threadID string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</button> <button class=\"btn icon ghost tiny term-hide\" data-on:click=\"$term = false\" title=\"Hide the terminal panel (shells keep running)\" aria-label=\"Hide terminal\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</button> <button class=\"btn icon ghost tiny term-hide\" data-on:click=\"$term = false\" title=\"Hide the terminal panel (shells keep running)\" aria-label=\"Hide terminal\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -88,7 +96,7 @@ func TermPanel(threadID string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</button></div><div class=\"term-mount\"></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</button></div><div class=\"term-mount\"></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

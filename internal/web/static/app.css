@@ -303,6 +303,18 @@ select.in {
   padding: 10px 14px;
   max-width: 85%;
 }
+/* Copy and resend tools sit in the message's corner and show on hover
+   (always on a touch screen, where there is no hover). */
+.item.user .user-msg, .item.assistant { position: relative; }
+.msg-tools { position: absolute; top: -4px; right: 0; display: flex; gap: 2px; opacity: 0; transition: opacity 0.12s; z-index: 2; }
+.item.user .msg-tools { right: auto; left: -60px; }
+.item.assistant .msg-tools { top: -10px; }
+.item:hover .msg-tools, .msg-tools:focus-within { opacity: 1; }
+.msg-tools .btn { background: var(--bg-2); border-color: var(--border); color: var(--fg-dim); }
+.msg-tools .btn:hover { color: var(--fg); }
+.msg-tools .btn.copied { color: var(--ok); border-color: var(--ok); }
+.msg-tools .btn.copy-failed { color: var(--err); border-color: var(--err); }
+@media (hover: none) { .msg-tools { opacity: 0.7; } }
 .tag { color: var(--fg-dim); font-size: 0.85em; }
 .tag.warn { color: var(--warn); }
 .tag.err { color: var(--err); }
@@ -1047,6 +1059,8 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .login { width: min(92vw, 400px); display: flex; flex-direction: column; gap: var(--gap); padding: 20px; border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); box-shadow: var(--shadow); }
 .login label { display: flex; flex-direction: column; gap: 4px; }
 .login .btn { min-height: var(--tap); }
+.login-ca { margin: 4px 0 0; }
+.login-ca a { color: var(--accent); text-decoration: underline; }
 
 /* ---- responsive ---- */
 
@@ -1110,6 +1124,7 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   .message-rail { display: none; }
   .item.user .bubble { max-width: 100%; }
   .user-msg { max-width: 100%; }
+  .item.user .msg-tools { left: auto; right: 0; top: -14px; }
 
   .settings-shell { padding: 24px 16px 48px; gap: 24px; }
   .prov-shell { grid-template-columns: 1fr; }

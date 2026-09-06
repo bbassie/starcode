@@ -211,6 +211,41 @@ templ Layout(title string, p Page, parts Parts) {
 			<script>
 				window.sendKey = (evt) => evt.key === 'Enter' && !evt.isComposing
 					&& (evt.ctrlKey || evt.metaKey || (!evt.shiftKey && !matchMedia('(pointer: coarse)').matches));
+				// copyText puts text on the clipboard and flashes the button
+				// that asked. The clipboard API needs a secure context; the
+				// selection-based fallback covers plain http on a LAN.
+				window.copyText = async (text, btn) => {
+					let ok = false;
+					try {
+						if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); ok = true; }
+					} catch (e) {}
+					if (!ok) {
+						const ta = document.createElement('textarea');
+						ta.value = text;
+						ta.style.position = 'fixed';
+						ta.style.opacity = '0';
+						document.body.append(ta);
+						ta.focus();
+						ta.select();
+						try { ok = document.execCommand('copy'); } catch (e) {}
+						ta.remove();
+					}
+					if (btn) {
+						btn.classList.add(ok ? 'copied' : 'copy-failed');
+						setTimeout(() => btn.classList.remove('copied', 'copy-failed'), 1200);
+					}
+				};
+				// promptSet replaces the composer text (after a check when
+				// something is already typed) and focuses it.
+				window.promptSet = (text) => {
+					const ta = document.querySelector('form.composer .prompt');
+					if (!ta) return;
+					if (ta.value.trim() && ta.value !== text && !confirm('Replace what is in the composer?')) return;
+					ta.value = text;
+					ta.dispatchEvent(new Event('input', { bubbles: true }));
+					ta.focus();
+					ta.setSelectionRange(text.length, text.length);
+				};
 				window.renameFocus = () => setTimeout(() => {
 					const box = document.querySelector('form.rename input');
 					if (box) { box.focus(); box.select(); }

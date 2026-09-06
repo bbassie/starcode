@@ -44,6 +44,12 @@ type Server struct {
 	// the server down and re-execs it. Nil disables the restart button.
 	Update    *SelfUpdate
 	OnRestart func()
+	// Secure is whether the server speaks TLS: cookies get the Secure
+	// flag and plain HTTP requests are redirected. CA is the PEM of the
+	// instance's own certificate authority, served for devices to
+	// install; nil when the certificate came from elsewhere.
+	Secure bool
+	CA     []byte
 	mux       *http.ServeMux
 	cache     capsCache
 	providers providerCache
@@ -139,6 +145,15 @@ func (s *Server) Close() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.Secure && r.TLS == nil {
+		// Same port, other scheme: the listener took a plain connection.
+		http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+		return
+	}
+	if r.URL.Path == caPath {
+		s.caFile(w, r)
+		return
+	}
 	if s.Token != "" {
 		switch {
 		case r.URL.Path == "/login":
@@ -158,7 +173,22 @@ func (s *Server) tokenOK(t string) bool {
 }
 
 func (s *Server) setTokenCookie(w http.ResponseWriter, t string) {
-	http.SetCookie(w, &http.Cookie{Name: tokenCookie, Value: t, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
+	http.SetCookie(w, &http.Cookie{Name: tokenCookie, Value: t, Path: "/", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
+}
+
+const caPath = "/starcode-ca.crt"
+
+// caFile serves the CA certificate, without auth: it is public, and a
+// phone needs it before it can be trusted with the token page.
+func (s *Server) caFile(w http.ResponseWriter, r *http.Request) {
+	if s.CA == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", `attachment; filename="starcode-ca.crt"`)
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(s.CA)
 }
 
 // authed enforces the shared token. A cookie is the normal proof; ?token=
@@ -199,10 +229,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusUnauthorized)
-		views.Login(next, true, s.theme(r)).Render(r.Context(), w)
+		views.Login(next, true, s.theme(r), s.CA != nil).Render(r.Context(), w)
 		return
 	}
-	views.Login(next, false, s.theme(r)).Render(r.Context(), w)
+	views.Login(next, false, s.theme(r), s.CA != nil).Render(r.Context(), w)
 }
 
 // staticHash fingerprints the embedded assets. It feeds the ?v= parameter on

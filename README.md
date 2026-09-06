@@ -20,6 +20,9 @@ Flags (each also reads an env var):
 | `-token` | `STARCODE_TOKEN` | | shared secret; required for any non-loopback `-addr` |
 | `-claude` | `STARCODE_CLAUDE` | `claude` | Claude Code binary |
 | `-codex` | `STARCODE_CODEX` | `codex` | Codex binary |
+| `-tls` | `STARCODE_TLS` | `auto` | serve HTTPS: `auto` (on for any non-loopback `-addr`), `on`, `off` |
+| `-tls-cert`, `-tls-key` | `STARCODE_TLS_CERT`, `STARCODE_TLS_KEY` | | serve this certificate instead of a generated one |
+| `-tls-hosts` | `STARCODE_TLS_HOSTS` | | extra names for the generated certificate, comma separated |
 | `-fake` | | off | register a scripted agent for UI work without spending tokens |
 | `-debug` | | off | debug logging |
 
@@ -30,6 +33,14 @@ From a phone on the same network:
 ```
 
 Browsers get a login page asking for the token; `?token=...` on any URL also works for links. A cookie keeps you signed in for a year.
+
+### HTTPS
+
+Off loopback, starcode serves HTTPS. It needs no certificate from anyone: on first start it makes a certificate authority of its own in `<data>/tls/` and issues a certificate for the machine's hostname, `hostname.local`, `localhost` and every address on its interfaces (plus `-tls-hosts`). The leaf is re-issued when a host is missing or it is a month from expiry; the CA lasts ten years. Plain `http://` requests on the same port get a redirect, so old links keep working.
+
+The first visit from a device shows a certificate warning. The login page links to `/starcode-ca.crt`; install that once (Android: Settings, Security, Install a certificate, CA certificate; iOS: open the file, install the profile, then enable full trust under Settings, General, About, Certificate Trust Settings; desktop browsers take it in their certificate settings, Firefox in its own store) and every certificate the instance issues is trusted on that device. The warning can also just be clicked through; the page is a secure context either way.
+
+The point is not secrecy on a VPN you already trust. Browsers only give a secure context the clipboard (paste in the terminal, the copy buttons), notifications and service workers, so over plain HTTP those do not work. Behind a reverse proxy that does TLS already, run with `-tls off`; with a real certificate, pass `-tls-cert` and `-tls-key`.
 
 `./starcode replay` rebuilds the projection tables from the event log.
 
@@ -70,6 +81,8 @@ Any text file up to 1 MiB opens in the panel, from the tree, the changes list or
 The terminal button (or Ctrl+`) opens a shell in the project directory under the transcript. Split opens another one beside it; the restart and close buttons act on the pane that last had focus, and closing the last pane hides the panel. Shells run on the server and outlive the page: a reload gets its panes back with their scrollback (`GET /api/term/{id}/panes` lists them), and they end when the thread is deleted or starcode stops.
 
 ## Search, commands and keys
+
+Each sent prompt has a copy button and an "edit and resend" button that puts the text back in the composer; each finished reply has a copy button for its markdown. In the terminal, Ctrl+V pastes (xterm.js would otherwise send it to the shell as a control byte), and the paste button in the terminal head does the same for a phone. Copying falls back to a selection copy without a secure context; pasting has no fallback, which is one reason for HTTPS above.
 
 What is typed in a composer is kept in the browser (localStorage, per thread and for the home page) until it is sent, so leaving for another page and coming back finds the draft in place.
 

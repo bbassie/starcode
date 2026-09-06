@@ -77,6 +77,12 @@ templ Item(it store.Item) {
 			<div id={ "it-" + it.ID } class="item user">
 				<div class="user-msg">
 					if text != "" {
+						// Hover tools: copy the prompt, or put it back in the
+						// composer to send again with changes.
+						<div class="msg-tools">
+							<button type="button" class="btn icon ghost tiny" title="Copy this message" aria-label="Copy this message" onclick="copyText(this.closest('.user-msg').querySelector('.bubble').textContent, this)">@Icon("copy", "ui-icon")</button>
+							<button type="button" class="btn icon ghost tiny" title="Edit and resend: put this message in the composer" aria-label="Edit and resend" onclick="promptSet(this.closest('.user-msg').querySelector('.bubble').textContent)">@Icon("pencil-line", "ui-icon")</button>
+						</div>
 						<pre class="wrap bubble">{ text }</pre>
 					}
 					if len(atts) > 0 {
@@ -97,6 +103,11 @@ templ Item(it store.Item) {
 			</div>
 		case domain.KindAssistant:
 			<div id={ "it-" + it.ID } class={ "item", "assistant", "md", templ.KV("streaming", it.Status == domain.ItemRunning) }>
+				if it.Status != domain.ItemRunning {
+					<div class="msg-tools">
+						<button type="button" class="btn icon ghost tiny" title="Copy this reply as markdown" aria-label="Copy this reply" data-md={ it.Body } onclick="copyText(this.dataset.md, this)">@Icon("copy", "ui-icon")</button>
+					</div>
+				}
 				@templ.Raw(Markdown(it.Body))
 			</div>
 		case domain.KindThinking:
