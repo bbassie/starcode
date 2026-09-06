@@ -245,6 +245,10 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 			Hotkey{Combo: "mod+shift+f", Label: "Focus the prompt", Action: "promptFocus()", Term: true},
 		)
 	}
+	if parts.Thread == nil && len(parts.Projects) > 0 {
+		p := parts.Projects[0]
+		keys = append(keys, Hotkey{Combo: "mod+shift+o", Label: "New thread in " + p.Name, Action: "@post('/api/projects/" + p.ID + "/threads')"})
+	}
 	keys = append(keys, Hotkey{Combo: "mod+,", Label: "Settings", Action: "location.href = '/settings'"})
 	return keys
 }

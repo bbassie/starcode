@@ -1,6 +1,9 @@
 package views
 
-import "fmt"
+import (
+	"fmt"
+	"starcode/internal/store"
+)
 
 // Page identifies what the SSE stream should render.
 type Page struct {
@@ -47,6 +50,9 @@ type Parts struct {
 	Update  templ.Component
 	// Thread is the data behind Main on the thread view.
 	Thread *ThreadData
+	// Projects, in sidebar order, for the hotkeys of pages without a
+	// thread.
+	Projects []store.Project
 }
 
 templ Layout(title string, p Page, parts Parts) {

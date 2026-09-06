@@ -745,6 +745,10 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 			Hotkey{Combo: "mod+shift+f", Label: "Focus the prompt", Action: "promptFocus()", Term: true},
 		)
 	}
+	if parts.Thread == nil && len(parts.Projects) > 0 {
+		p := parts.Projects[0]
+		keys = append(keys, Hotkey{Combo: "mod+shift+o", Label: "New thread in " + p.Name, Action: "@post('/api/projects/" + p.ID + "/threads')"})
+	}
 	keys = append(keys, Hotkey{Combo: "mod+,", Label: "Settings", Action: "location.href = '/settings'"})
 	return keys
 }
@@ -783,7 +787,7 @@ func HotkeyButtons(keys []Hotkey) templ.Component {
 			var templ_7745c5c3_Var30 string
 			templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.ResolveAttributeValue(k.Combo)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 256, Col: 46}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 260, Col: 46}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var30)
 			if templ_7745c5c3_Err != nil {
@@ -806,7 +810,7 @@ func HotkeyButtons(keys []Hotkey) templ.Component {
 			var templ_7745c5c3_Var31 string
 			templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.ResolveAttributeValue(k.Action)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 256, Col: 95}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 260, Col: 95}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var31)
 			if templ_7745c5c3_Err != nil {
@@ -819,7 +823,7 @@ func HotkeyButtons(keys []Hotkey) templ.Component {
 			var templ_7745c5c3_Var32 string
 			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(k.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 256, Col: 107}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 260, Col: 107}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 			if templ_7745c5c3_Err != nil {
@@ -880,7 +884,7 @@ func ShortcutHelp(keys []Hotkey) templ.Component {
 			var templ_7745c5c3_Var34 string
 			templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(k.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 268, Col: 42}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 272, Col: 42}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 			if templ_7745c5c3_Err != nil {

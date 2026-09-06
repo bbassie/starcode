@@ -22,6 +22,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 		return pt, err
 	}
 	pt.Sidebar = views.Sidebar(side)
+	pt.Projects = side.Projects
 	pt.Git = views.GitPanel(views.GitData{})
 	pt.Update = views.UpdateBanner(s.Update.Changed(), s.runningThreads(ctx))
 	switch p.View {
