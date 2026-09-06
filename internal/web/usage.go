@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	usagex "starcode/internal/usage"
 	"starcode/internal/web/views"
 )
 
@@ -71,15 +72,17 @@ func (s *Server) usageData(ctx context.Context, days int, metric string) (views.
 					input: entry.Tokens.UncachedInput, cached: entry.Tokens.CachedInput, cacheCreated: entry.Tokens.CacheCreation, out: entry.Tokens.Output,
 				})
 				if entry.SessionID != "" {
-					seenSessions[entry.Agent+"\x00"+entry.SessionID] = true
+					seenSessions[entry.SessionID] = true
 				}
 			}
 		}
 	}
 	// The provider transcripts are authoritative. Keep Starcode events only
 	// when their session transcript is absent (or for agents without one).
+	// Session ids are UUIDs, so the match ignores which instance scanned
+	// the transcript: two instances may share a config dir.
 	for _, entry := range stored {
-		if entry.SessionID != "" && seenSessions[entry.Agent+"\x00"+entry.SessionID] {
+		if entry.SessionID != "" && seenSessions[entry.SessionID] {
 			continue
 		}
 		sessionID := entry.SessionID
@@ -140,7 +143,7 @@ func (s *Server) usageData(ctx context.Context, days int, metric string) (views.
 		series[agent][index].CachedInputTokens += entry.cached
 		series[agent][index].CacheCreationTokens += entry.cacheCreated
 		series[agent][index].OutputTokens += entry.out
-		addUsage(agents, agent, agentName(agent), agent, entry.sessionID, entry.costUSD, entry.input, entry.cached, entry.cacheCreated, entry.out)
+		addUsage(agents, agent, s.agentLabel(agent), agent, entry.sessionID, entry.costUSD, entry.input, entry.cached, entry.cacheCreated, entry.out)
 		model := entry.model
 		if model == "" {
 			model = "default"
@@ -149,11 +152,44 @@ func (s *Server) usageData(ctx context.Context, days int, metric string) (views.
 	}
 	d.Threads = len(threads)
 	d.Agents = finishUsageGroups(agents, metric)
-	for _, agent := range d.Agents {
-		d.Series = append(d.Series, views.UsageSeries{Name: agent.Name, Agent: agent.Agent, Points: series[agent.Agent]})
+	for i := range d.Agents {
+		d.Agents[i].Driver, d.Agents[i].Color = s.agentLook(d.Agents[i].Agent)
+		d.Series = append(d.Series, views.UsageSeries{Name: d.Agents[i].Name, Agent: d.Agents[i].Agent, Driver: d.Agents[i].Driver, Color: d.Agents[i].Color, Points: series[d.Agents[i].Agent]})
 	}
 	d.Models = finishUsageGroups(models, metric)
+	for i := range d.Models {
+		d.Models[i].Driver, d.Models[i].Color = s.agentLook(d.Models[i].Agent)
+	}
 	return d, nil
+}
+
+// usageRoots lists every instance's transcript directory for the scanner.
+func (s *Server) usageRoots() []usagex.Root {
+	var roots []usagex.Root
+	for _, in := range s.Providers.Instances() {
+		if dir := usagex.TranscriptDir(in.Driver, in.ConfigDir); dir != "" {
+			roots = append(roots, usagex.Root{Agent: in.Name, Driver: in.Driver, Dir: dir})
+		}
+	}
+	return roots
+}
+
+// agentLabel names an instance on the dashboard; usage from a name that
+// no longer has an instance keeps the name.
+func (s *Server) agentLabel(agent string) string {
+	if in, ok := s.Providers.Get(agent); ok {
+		return in.DisplayName()
+	}
+	return agentName(agent)
+}
+
+// agentLook is the driver (for the default colours) and the instance's own
+// tag colour, if any.
+func (s *Server) agentLook(agent string) (driver, color string) {
+	if in, ok := s.Providers.Get(agent); ok {
+		return in.Driver, in.Color
+	}
+	return agent, ""
 }
 
 func addUsage(groups map[string]*usageAccumulator, key, name, agent, sessionID string, cost float64, input, cached, cacheCreated, output int64) {

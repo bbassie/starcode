@@ -14,9 +14,23 @@ type SidebarData struct {
 	Current  string         // current thread id
 	Agents   []string
 	Settings bool
+	// Updates is how many agent CLIs have a newer release; shown as a
+	// badge on the settings link.
+	Updates int
+	// Looks maps agent instance names to their driver and tag colour
+	// (Settings > Providers) for the mark on thread rows.
+	Looks map[string]AgentLook
 }
 
-// ago renders a compact relative age: 9m, 2d, 3w.
+// AgentLook is what a row needs to draw an instance's mark.
+type AgentLook struct {
+	Driver string
+	Color  string
+	Label  string // display name, for the model picker's rail
+}
+
+// ago renders a compact relative age: 9m, 2d, 3w. The layout's clock
+// script keeps it current with the same rules (see [data-ago]).
 func ago(t time.Time) string {
 	d := time.Since(t)
 	switch {
@@ -60,7 +74,7 @@ templ Sidebar(d SidebarData) {
 			<span class="spacer"></span>
 			<button class="btn icon ghost" data-on:click="$addproj = !$addproj" title="Add project folder" aria-label="Add project folder">@Icon("folder-plus", "ui-icon")</button>
 		</div>
-		<form class="side-add" data-show="$addproj" data-on:submit="evt.preventDefault(); @post('/api/projects'); $addproj = false">
+		<form class="side-add" data-show="$addproj" data-preserve-attr="style" style="display: none" data-on:submit="evt.preventDefault(); @post('/api/projects'); $addproj = false">
 			<input class="in project-path" type="text" placeholder="~/project or /absolute/path" data-bind:path list="project-paths" spellcheck="false"/>
 			<button class="btn" type="submit">add</button>
 		</form>
@@ -76,7 +90,7 @@ templ Sidebar(d SidebarData) {
 				<ul class="threads">
 					for _, t := range d.Threads {
 						if active(t) {
-							@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true)
+							@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true, d.Looks[t.Agent])
 						}
 					}
 				</ul>
@@ -92,7 +106,7 @@ templ Sidebar(d SidebarData) {
 					<ul class="threads">
 						for _, t := range d.Threads {
 							if t.ProjectID == p.ID && !active(t) {
-								@ThreadRow(t, p, t.ID == d.Current, false)
+								@ThreadRow(t, p, t.ID == d.Current, false, d.Looks[t.Agent])
 							}
 						}
 					</ul>
@@ -106,12 +120,15 @@ templ Sidebar(d SidebarData) {
 			<a class={ "side-settings", templ.KV("current", d.Settings) } href="/settings" data-on:click="$nav = false">
 				@Icon("settings", "ui-icon")
 				<span>Settings</span>
+				if d.Updates > 0 {
+					<span class="badge" title={ fmt.Sprintf("%d %s with an update available", d.Updates, plural(d.Updates, "provider", "providers")) }>{ fmt.Sprintf("%d", d.Updates) }</span>
+				}
 			</a>
 		</div>
 	</aside>
 }
 
-templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool) {
+templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool, look AgentLook) {
 	<li
 		class={ "thread-row", "st-" + t.Status, templ.KV("current", current) }
 		data-k={ searchKey(t, p) }
@@ -125,7 +142,16 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool)
 				}
 				<span class="ellipsis">{ t.Title }</span>
 			</span>
-			<span class="dim tiny-text">@Icon("bot", "ui-icon") { ago(t.UpdatedAt) }</span>
+			<span class="dim tiny-text"><span class="agent-mark" style={ agentMarkStyle(look.Color) } title={ t.Agent }>@Brand(look.Driver, "ui-icon")</span> <span data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span></span>
 		</a>
 	</li>
+}
+
+// agentMarkStyle colours the agent glyph with the instance's tag colour;
+// untagged instances keep the dim text colour.
+func agentMarkStyle(color string) string {
+	if color == "" {
+		return ""
+	}
+	return "color: " + color
 }

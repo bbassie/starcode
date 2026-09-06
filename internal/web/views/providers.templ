@@ -1,0 +1,415 @@
+package views
+
+import (
+	"fmt"
+	"starcode/internal/agent"
+	"starcode/internal/providers"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type ProviderRow struct {
+	Inst            providers.Instance
+	Binary          string // resolved default when the instance sets none
+	Info            agent.ProviderInfo
+	Err             string
+	Latest          string
+	UpdateAvailable bool
+	Updating        bool
+	UpdateLog       string
+	UpdateErr       string
+	UpdatedAt       time.Time
+}
+
+type ProvidersData struct {
+	Rows      []ProviderRow
+	Sel       *ProviderRow // selected instance, nil while adding
+	Tab       string       // "config" | "models"
+	Adding    bool
+	Models    []agent.Model // catalog for the models tab
+	ModelsErr string
+	Interval  int
+	CheckedAt time.Time
+	Drivers   []string
+	Colors    []string
+	Updates   int
+}
+
+func providerURL(sel, tab string) string {
+	if tab == "" || tab == "config" {
+		return "/settings/providers?sel=" + sel
+	}
+	return "/settings/providers?sel=" + sel + "&tab=" + tab
+}
+
+func driverName(driver string) string { return providers.DriverName(driver) }
+
+// ProvidersPage is Settings > Providers: the instance list on the left,
+// the selected instance's configuration or model catalog on the right.
+templ ProvidersPage(d ProvidersData) {
+	<main id="main" class="settings-page">
+		<header id="mainhead" class="mainhead">
+			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
+			<nav class="crumbs"><span>Providers</span></nav>
+		</header>
+		<div class="settings-scroll">
+			<div class="settings-shell prov-shell-outer">
+				@SettingsNav("providers")
+				<div class="settings-content">
+					<section id="providers" class="settings-section">
+						<header class="prov-head">
+							<div>
+								<h1>Providers</h1>
+								<p class="dim">Each instance is one agent CLI with its own binary, config dir and environment. Threads name the instance they run on, so a second Claude signed into another account is just another row.</p>
+							</div>
+							<div class="prov-head-actions">
+								<span class="dim tiny-text">Checked { d.CheckedAt.Local().Format("15:04") }</span>
+								<button class="btn icon ghost tiny" data-on:click={ "@get('" + refreshURL(d) + "')" } title="Check versions and sign-in again" aria-label="Check again">@Icon("refresh-cw", "ui-icon")</button>
+								<a class="btn icon ghost tiny" href="/settings/providers?sel=new" title="Add an instance" aria-label="Add an instance">@Icon("plus", "ui-icon")</a>
+							</div>
+						</header>
+						<div class="settings-card prov-shell">
+							<ul class="prov-list">
+								for _, r := range d.Rows {
+									@ProviderListRow(r, d.Sel != nil && d.Sel.Inst.Name == r.Inst.Name)
+								}
+							</ul>
+							<div class="prov-detail">
+								if d.Adding {
+									@ProviderAddForm(d)
+								} else if d.Sel != nil {
+									@ProviderDetail(d, *d.Sel)
+								} else {
+									<p class="dim pad">No instances. Add one with the + above.</p>
+								}
+							</div>
+						</div>
+						<details class="prov-advanced">
+							<summary>Advanced</summary>
+							<div class="setting-row" data-signals={ fmt.Sprintf("{pvInterval: %q}", strconv.Itoa(d.Interval)) }>
+								<div>
+									<label for="pv-interval">Check interval</label>
+									<p class="dim">How often versions, sign-in state and catalogs are rechecked in the background, in seconds. 0 checks once at startup only.</p>
+								</div>
+								<div class="row">
+									<input id="pv-interval" class="in prov-interval" type="number" min="0" step="60" data-bind:pv-interval/>
+									<button class="btn" data-on:click="@post('/api/providers/interval')">save</button>
+								</div>
+							</div>
+						</details>
+					</section>
+				</div>
+			</div>
+		</div>
+	</main>
+}
+
+func refreshURL(d ProvidersData) string {
+	sel := ""
+	if d.Sel != nil {
+		sel = d.Sel.Inst.Name
+	}
+	return "/api/providers/refresh?sel=" + sel + "&tab=" + d.Tab
+}
+
+templ ProviderListRow(r ProviderRow, current bool) {
+	<li class={ "prov-row", templ.KV("current", current), templ.KV("off", !r.Inst.Enabled) }>
+		<a class="prov-row-main" href={ templ.SafeURL(providerURL(r.Inst.Name, "")) }>
+			<span class="prov-dot" style={ agentMarkStyle(r.Inst.Color) }>@Brand(r.Inst.Driver, "ui-icon")</span>
+			<span class="prov-row-text">
+				<span class="prov-row-title">
+					<span>{ r.Inst.DisplayName() }</span>
+					if r.Info.Version != "" {
+						<span class="mono dim tiny-text">v{ r.Info.Version }</span>
+					}
+					if r.UpdateAvailable {
+						<span class="prov-up" title={ r.Latest + " available" }>@Icon("circle-arrow-up", "ui-icon")</span>
+					}
+				</span>
+				<span class="dim tiny-text ellipsis">
+					if !r.Inst.Enabled {
+						Disabled
+					} else if r.Err != "" {
+						<span class="err">{ firstLine(r.Err) }</span>
+					} else if r.Info.LoggedIn == nil {
+						{ driverName(r.Inst.Driver) }
+					} else if *r.Info.LoggedIn {
+						Signed in
+						if r.Info.Account != "" {
+							· { r.Info.Account }
+						}
+					} else {
+						<span class="err">Not signed in</span>
+					}
+				</span>
+			</span>
+		</a>
+		<button class={ "switch", templ.KV("on", r.Inst.Enabled) } role="switch" aria-checked?={ r.Inst.Enabled } title={ switchTitle(r.Inst.Enabled) } data-on:click={ "@post('/api/providers/" + r.Inst.Name + "/toggle')" }><span></span></button>
+	</li>
+}
+
+func switchTitle(on bool) string {
+	if on {
+		return "Enabled: click to disable"
+	}
+	return "Disabled: click to enable"
+}
+
+templ ProviderDetail(d ProvidersData, r ProviderRow) {
+	<div class="prov-detail-head">
+		<span class="prov-dot big" style={ agentMarkStyle(r.Inst.Color) }>@Brand(r.Inst.Driver, "ui-icon")</span>
+		<div class="prov-detail-title">
+			<span class="row">
+				<strong>{ r.Inst.DisplayName() }</strong>
+				if r.Info.Version != "" {
+					<span class="mono dim">v{ r.Info.Version }</span>
+				}
+				if r.Inst.Name != r.Inst.DisplayName() {
+					<span class="dim tiny-text mono">{ r.Inst.Name }</span>
+				}
+			</span>
+			<span class="dim tiny-text">
+				if r.Err != "" {
+					<span class="err">{ r.Err }</span>
+				} else if r.Info.LoggedIn == nil {
+					{ r.Info.Account }
+				} else if *r.Info.LoggedIn {
+					Authenticated
+					if r.Info.Account != "" {
+						· { r.Info.Account }
+					}
+				} else {
+					<span class="err">Not signed in.</span> Run <code>{ r.Binary } /login</code> in a terminal, then check again.
+				}
+			</span>
+		</div>
+		<span class="spacer"></span>
+		if r.Updating {
+			<span class="dim tiny-text">@Icon("loader-circle", "ui-icon spin-icon") updating…</span>
+		} else if r.UpdateAvailable {
+			<button class="btn primary tiny" data-on:click={ "@post('/api/providers/" + r.Inst.Name + "/update')" } title={ "Runs " + r.Info.UpdateCommand }>@Icon("circle-arrow-up", "ui-icon") update to { r.Latest }</button>
+		} else if r.Latest != "" && r.Info.Version != "" {
+			<span class="dim tiny-text" title={ "latest release is " + r.Latest }>up to date</span>
+		}
+		if !r.Inst.BuiltIn() {
+			<button class="btn ghost tiny dim" data-on:click={ "confirm('Remove instance " + r.Inst.DisplayName() + "? Its threads stay but cannot run until an instance with the same name exists.') && @post('/api/providers/" + r.Inst.Name + "/delete')" } title="Remove this instance">@Icon("trash-2", "ui-icon")</button>
+		}
+	</div>
+	if r.UpdateLog != "" || r.UpdateErr != "" {
+		<div class={ "prov-update-log", templ.KV("failed", r.UpdateErr != "") }>
+			<div class="dim tiny-text">
+				if r.UpdateErr != "" {
+					update failed at { r.UpdatedAt.Local().Format("15:04") }: { r.UpdateErr }
+				} else {
+					update finished at { r.UpdatedAt.Local().Format("15:04") }
+				}
+			</div>
+			if r.UpdateLog != "" {
+				<pre class="block">{ r.UpdateLog }</pre>
+			}
+		</div>
+	}
+	<nav class="prov-tabs">
+		<a class={ templ.KV("current", d.Tab == "config") } href={ templ.SafeURL(providerURL(r.Inst.Name, "config")) }>Configuration</a>
+		<a class={ templ.KV("current", d.Tab == "models") } href={ templ.SafeURL(providerURL(r.Inst.Name, "models")) }>Models</a>
+	</nav>
+	if d.Tab == "models" {
+		@ProviderModels(d, r)
+	} else {
+		@ProviderConfig(d, r)
+	}
+}
+
+// ProviderConfig is the settings form; the signals carry the current values
+// and save posts them back.
+templ ProviderConfig(d ProvidersData, r ProviderRow) {
+	<form class="prov-form" data-signals={ providerSignals(r.Inst) } data-on:submit={ "evt.preventDefault(); @post('/api/providers/" + r.Inst.Name + "')" }>
+		if r.Inst.Driver != "fake" {
+			@ProviderFields(d, r.Inst, r.Binary, false)
+			<div class="prov-form-actions">
+				<button class="btn primary" type="submit">save</button>
+				<span class="dim tiny-text">Saving closes this instance's idle sessions; their next prompt runs with the new settings. Running turns finish on the old ones.</span>
+			</div>
+		} else {
+			<p class="dim">The fake agent is a scripted stand-in for UI work and has nothing to configure.</p>
+		}
+	</form>
+}
+
+// ProviderFields are shared by the edit form and the add form.
+templ ProviderFields(d ProvidersData, in providers.Instance, defaultBinary string, adding bool) {
+	<label class="prov-field">
+		<span>Display name</span>
+		<input class="in" type="text" data-bind:pv-label placeholder={ driverName(in.Driver) }/>
+		<small class="dim">Shown in the picker and the thread list.</small>
+	</label>
+	if adding {
+		<label class="prov-field">
+			<span>Instance name</span>
+			<input class="in mono" type="text" data-bind:pv-name placeholder="from the display name when empty" spellcheck="false"/>
+			<small class="dim">Lowercase letters, digits, - and _. Threads store it, so it cannot change later.</small>
+		</label>
+	}
+	<div class="prov-field">
+		<span>Accent colour</span>
+		<div class="prov-colors">
+			<button type="button" class={ "prov-color none", templ.KV("sel", in.Color == "") } data-class:sel="$pvColor === ''" data-on:click="$pvColor = ''" title="None">@Icon("x", "ui-icon")</button>
+			for _, c := range d.Colors {
+				<button type="button" class={ "prov-color", templ.KV("sel", in.Color == c) } style={ "background:" + c } data-class:sel={ "$pvColor === '" + c + "'" } data-on:click={ "$pvColor = '" + c + "'" } title={ c }></button>
+			}
+		</div>
+		<small class="dim">Tags this instance's threads in the sidebar.</small>
+	</div>
+	<label class="prov-field">
+		<span>Binary path</span>
+		<input class="in mono" type="text" data-bind:pv-binary placeholder={ defaultBinary } spellcheck="false"/>
+		<small class="dim">Empty runs the default ({ defaultBinary }, from the -{ in.Driver } flag or PATH).</small>
+	</label>
+	<label class="prov-field">
+		<span>{ configDirLabel(in.Driver) }</span>
+		<input class="in mono" type="text" data-bind:pv-config-dir placeholder={ configDirPlaceholder(in.Driver) } spellcheck="false"/>
+		<small class="dim">A separate directory gives this instance its own sign-in, settings and transcripts. Absolute path; empty inherits.</small>
+	</label>
+	<label class="prov-field">
+		<span>Environment variables</span>
+		<textarea class="in mono" rows="3" data-bind:pv-env placeholder="ANTHROPIC_BASE_URL=https://…&#10;ONE=per line" spellcheck="false"></textarea>
+		<small class="dim">KEY=value, one per line, added to every process of this instance. Stored in providers.json (owner-readable only) and shown here as typed.</small>
+	</label>
+}
+
+func configDirLabel(driver string) string {
+	if driver == "codex" {
+		return "CODEX_HOME"
+	}
+	return "CLAUDE_CONFIG_DIR"
+}
+
+func configDirPlaceholder(driver string) string {
+	if driver == "codex" {
+		return "~/.codex"
+	}
+	return "~/.claude"
+}
+
+func providerSignals(in providers.Instance) string {
+	return fmt.Sprintf("{pvLabel: %q, pvBinary: %q, pvConfigDir: %q, pvEnv: %q, pvColor: %q, pvName: %q, pvDriver: %q, pvModel: ''}",
+		in.Label, in.Binary, in.ConfigDir, strings.Join(in.Env, "\n"), in.Color, in.Name, in.Driver)
+}
+
+templ ProviderAddForm(d ProvidersData) {
+	<div class="prov-detail-head">
+		<div class="prov-detail-title">
+			<strong>Add an instance</strong>
+			<span class="dim tiny-text">A second copy of a CLI: another account, another binary, or extra environment.</span>
+		</div>
+		<span class="spacer"></span>
+		<a class="btn ghost tiny" href="/settings/providers">cancel</a>
+	</div>
+	<form class="prov-form" data-signals={ providerSignals(providers.Instance{Driver: d.Drivers[0]}) } data-on:submit="evt.preventDefault(); @post('/api/providers')">
+		<div class="prov-field">
+			<span>Driver</span>
+			<div class="prov-drivers">
+				for _, dr := range d.Drivers {
+					<button type="button" class={ "prov-driver", templ.KV("sel", dr == d.Drivers[0]) } data-class:sel={ "$pvDriver === '" + dr + "'" } data-on:click={ "$pvDriver = '" + dr + "'" }>@Brand(dr, "ui-icon") <span>{ driverName(dr) }</span></button>
+				}
+			</div>
+		</div>
+		@ProviderFields(d, providers.Instance{Driver: "claude"}, "the driver's default", true)
+		<div class="prov-form-actions">
+			<button class="btn primary" type="submit">add instance</button>
+		</div>
+	</form>
+}
+
+// ProviderModels lists the instance's catalog. Hidden ids leave the
+// composer picker; added ids join it under an "Added" heading.
+templ ProviderModels(d ProvidersData, r ProviderRow) {
+	<div class="prov-models" data-signals="{pvModel: ''}">
+		if d.ModelsErr != "" {
+			<p class="err">{ d.ModelsErr }</p>
+		} else {
+			<p class="dim">{ fmt.Sprintf("%d %s in the catalog.", len(d.Models), plural(len(d.Models), "model", "models")) } Hidden ones stay out of the composer's picker.</p>
+			<ul class="prov-model-list">
+				for _, m := range d.Models {
+					{{ hidden := contains(r.Inst.HiddenModels, m.ID) }}
+					<li class={ templ.KV("hidden", hidden) }>
+						<span class="prov-model-name" title={ m.Description }>
+							<span>{ m.DisplayName }</span>
+							if m.ID != m.DisplayName {
+								<span class="dim mono tiny-text">{ m.ID }</span>
+							}
+							if m.Group != "" {
+								<span class="tag">{ m.Group }</span>
+							}
+						</span>
+						<span class="spacer"></span>
+						<button class="btn icon ghost tiny" data-on:click={ "@post('/api/providers/" + r.Inst.Name + "/models/toggle?id=" + urlQuery(m.ID) + "')" } title={ modelToggleTitle(hidden) }>
+							if hidden {
+								@Icon("eye", "ui-icon")
+							} else {
+								@Icon("eye-off", "ui-icon")
+							}
+						</button>
+					</li>
+				}
+				for _, id := range r.Inst.ExtraModels {
+					<li>
+						<span class="prov-model-name"><span class="mono">{ id }</span> <span class="tag">added</span></span>
+						<span class="spacer"></span>
+						<button class="btn icon ghost tiny" data-on:click={ "@post('/api/providers/" + r.Inst.Name + "/models/toggle?id=" + urlQuery(id) + "')" } title="Remove from the picker">@Icon("x", "ui-icon")</button>
+					</li>
+				}
+			</ul>
+			<form class="row prov-model-add" data-on:submit={ "evt.preventDefault(); @post('/api/providers/" + r.Inst.Name + "/models/add')" }>
+				<input class="in mono" type="text" data-bind:pv-model placeholder="model id the CLI accepts, e.g. claude-opus-4-6" spellcheck="false"/>
+				<button class="btn" type="submit">@Icon("plus", "ui-icon") add</button>
+			</form>
+		}
+	</div>
+}
+
+func modelToggleTitle(hidden bool) string {
+	if hidden {
+		return "Show in the picker again"
+	}
+	return "Hide from the picker"
+}
+
+func contains(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateBanner is patched into #update (in the layout, above the page)
+// once a rebuilt starcode binary is on disk, and patched back to empty on
+// every connect so a page that rode through the restart loses it. Threads
+// survive a restart: their sessions resume and queued prompts continue,
+// but a turn that is running when the process goes is lost, hence the
+// count.
+templ UpdateBanner(show bool, running int) {
+	if show {
+		<div id="update" class="update">
+			<span>@Icon("rotate-cw", "ui-icon") starcode was rebuilt. Restart to run the new version.</span>
+			if running > 0 {
+				<span class="dim">{ fmt.Sprintf("%d running %s would be cut off.", running, plural(running, "turn", "turns")) }</span>
+			}
+			<span class="spacer"></span>
+			<button class="btn primary tiny" data-on:click={ restartClick(running) }>restart now</button>
+			<button class="btn ghost tiny" data-on:click="document.getElementById('update').replaceChildren()" title="Hide until the next page load">later</button>
+		</div>
+	} else {
+		<div id="update"></div>
+	}
+}
+
+func restartClick(running int) string {
+	if running > 0 {
+		return fmt.Sprintf("confirm('%d running %s will be interrupted. Restart now?') && @post('/api/restart')", running, plural(running, "turn", "turns"))
+	}
+	return "@post('/api/restart')"
+}

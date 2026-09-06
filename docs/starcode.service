@@ -1,0 +1,17 @@
+[Unit]
+Description=starcode
+After=network.target
+
+[Service]
+# The binary in the repo: `make build` replaces it, the running instance
+# shows a restart banner, and "restart now" re-execs in place (same pid).
+ExecStart=%h/starcode/starcode -addr 0.0.0.0:4000
+WorkingDirectory=%h/starcode
+EnvironmentFile=%h/.config/starcode.env
+Environment=PATH=%h/.local/bin:%h/.local/share/fnm/aliases/default/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+Environment=SHELL=/bin/bash
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

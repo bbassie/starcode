@@ -14,6 +14,9 @@ type GitData struct {
 	Selected string // path whose diff is shown
 	Diff     string
 	ThreadID string
+	// Editing is whether the detail opens in the editor; it matches the
+	// gitEdit signal the same response patches.
+	Editing bool
 }
 
 type ProjectFile struct {
@@ -26,13 +29,19 @@ type ExplorerData struct {
 	Project store.Project
 	Dir     string
 	Files   []ProjectFile
+	// Hidden is the initial state: the panel opens on the changes tab.
+	Hidden bool
 }
 
+// GitPanel is the whole side panel. On a wide screen it shows unless
+// closed, on a narrow one only when opened as a slide-over; the server
+// renders neither class on thread pages, which is right for both before
+// the signals exist, and "closed" elsewhere.
 templ GitPanel(d GitData) {
-	<aside id="gitpanel" data-class:open="$git">
+	<aside id="gitpanel" class={ templ.KV("closed", d.ThreadID == "") } data-class:open="$git" data-class:closed="!$git">
 		@GitHeader(d)
 		@GitFiles(d)
-		@FileExplorer(ExplorerData{Project: d.Project})
+		@FileExplorer(ExplorerData{Project: d.Project, Hidden: true})
 		@GitDetail(d)
 	</aside>
 }
@@ -42,14 +51,14 @@ templ GitHeader(d GitData) {
 		if d.Project.ID != "" {
 			<div class="panel-tabs">
 				<button class="panel-tab" data-class:active="$panelTab === 'files'" data-on:click={ "$panelTab = 'files'; @get('/api/projects/" + d.Project.ID + "/files')" }>@Icon("folder", "ui-icon") files</button>
-				<button class="panel-tab" data-class:active="$panelTab === 'changes'" data-on:click="$panelTab = 'changes'">@Icon("git-compare-arrows", "ui-icon") changes</button>
+				<button class="panel-tab active" data-class:active="$panelTab === 'changes'" data-on:click="$panelTab = 'changes'">@Icon("git-compare-arrows", "ui-icon") changes</button>
 			</div>
 		} else {
 			<span>Project</span>
 		}
 		<span class="spacer"></span>
 		if d.Status.IsRepo {
-			<span class="dim">@Icon("git-branch", "ui-icon") { d.Status.Branch }</span>
+			<span class="dim">@Icon("git-branch", "ui-icon") <span>{ d.Status.Branch }</span></span>
 			if d.Status.Summary != "" {
 				<span class="mono">{ d.Status.Summary }</span>
 			}
@@ -85,7 +94,7 @@ templ GitFiles(d GitData) {
 }
 
 templ FileExplorer(d ExplorerData) {
-	<div id="file-explorer" data-show="$panelTab === 'files'">
+	<div id="file-explorer" data-show="$panelTab === 'files'" data-preserve-attr="style" style={ hiddenUnless(!d.Hidden) }>
 		<div class="explorer-head">
 			if d.Dir != "" {
 				<button class="btn icon ghost tiny" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(explorerParent(d.Dir)) + "')" } title="Parent directory" aria-label="Parent directory">@Icon("arrow-up", "ui-icon")</button>
@@ -131,9 +140,9 @@ templ GitDetail(d GitData) {
 		if d.Selected != "" {
 			<div class="diff-head mono ellipsis">{ d.Selected }</div>
 			<div class="git-detail-actions">
-				<button class="btn tiny" data-show="!$gitEdit" data-on:click={ "@get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
+				<button class="btn tiny" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) } data-on:click={ "@get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
 			</div>
-			<form class="git-editor" data-show="$gitEdit" data-on:submit={ "evt.preventDefault(); @post('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>
+			<form class="git-editor" data-show="$gitEdit" data-preserve-attr="style" style={ hiddenUnless(d.Editing) } data-on:submit={ "evt.preventDefault(); @post('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>
 				<textarea class="file-editor" data-bind:file spellcheck="false"></textarea>
 				<div class="git-editor-actions">
 					<button class="btn primary" type="submit">@Icon("save", "ui-icon") save</button>
@@ -141,14 +150,14 @@ templ GitDetail(d GitData) {
 				</div>
 			</form>
 			if d.Diff != "" {
-				<pre class="diff" data-show="!$gitEdit">
+				<pre class="diff" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) }>
 					for _, line := range strings.Split(strings.TrimRight(d.Diff, "\n"), "\n") {
 						<span class={ diffClass(line) }>{ line }</span>
 						{ "\n" }
 					}
 				</pre>
 			} else {
-				<p class="dim pad" data-show="!$gitEdit">no diff to show.</p>
+				<p class="dim pad" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) }>no diff to show.</p>
 			}
 		}
 	</div>

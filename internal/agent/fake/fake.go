@@ -31,6 +31,11 @@ func (a *Agent) Capabilities(ctx context.Context) (agent.Capabilities, error) {
 	}, nil
 }
 
+func (a *Agent) Provider(ctx context.Context) (agent.ProviderInfo, error) {
+	yes := true
+	return agent.ProviderInfo{Binary: "built in", Version: "0.0.0", LoggedIn: &yes, Account: "no account needed"}, nil
+}
+
 func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	s := &session{

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/starfederation/datastar-go/datastar"
 
 	"starcode/internal/bus"
@@ -21,16 +22,26 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	view := r.URL.Query().Get("view")
 	threadID := r.URL.Query().Get("id")
 	usageDays, usageMetric := usageParams(r)
+	provSel, provTab := providerParams(r)
 	theme := s.theme(r)
 	ctx := r.Context()
 
 	// Subscribe before the initial render so nothing slips between them.
 	ch := s.App.Bus.Subscribe(ctx)
 	sse := datastar.NewSSE(w, r)
-	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, usageDays: usageDays, usageMetric: usageMetric, dirty: map[string]bool{}}
+	// A page served by an older build of starcode has stale CSS and
+	// scripts; only a reload can fix that.
+	if v := r.URL.Query().Get("v"); v != "" && v != s.assets {
+		sse.ExecuteScript("location.reload()")
+		return
+	}
+	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, usageDays: usageDays, usageMetric: usageMetric, provSel: provSel, provTab: provTab, dirty: map[string]bool{}}
 
 	if err := c.renderAll(ctx); err != nil {
 		s.Log.Warn("initial render", "err", err)
+		return
+	}
+	if err := c.renderUpdateBanner(ctx); err != nil {
 		return
 	}
 
@@ -63,6 +74,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				err = c.handle(ctx, m)
 			case domain.GitChanged:
 				c.gitDirty = true
+			case domain.ProvidersChanged:
+				c.sideDirty = true
+				if view == "providers" {
+					err = c.renderProviders(ctx)
+				}
+			case domain.BinaryUpdated:
+				err = c.renderUpdateBanner(ctx)
 			}
 			if err != nil {
 				s.Log.Debug("sse", "err", err)
@@ -80,11 +98,14 @@ type conn struct {
 	theme       string
 	usageDays   int
 	usageMetric string
+	provSel     string
+	provTab     string
 	// dirty items get re-rendered on the next flush tick so a burst of
 	// deltas costs one morph instead of one per token.
 	dirty     map[string]bool
 	gitDirty  bool
 	sideDirty bool
+	homeDirty bool
 	projectID string
 	lastGit   time.Time
 	// work is the id of the first item of the open "worked for" block, or
@@ -93,62 +114,71 @@ type conn struct {
 	work string
 }
 
+// renderAll redraws the whole page from the store: on connect (a no-op
+// morph over what the page handler already served) and after a bus resync.
 func (c *conn) renderAll(ctx context.Context) error {
-	if err := c.renderSidebar(ctx); err != nil {
+	pt, err := c.s.parts(ctx, c.page())
+	if err == store.ErrNotFound {
+		return c.sse.Redirect("/")
+	}
+	if err != nil {
 		return err
 	}
-	switch c.view {
-	case "thread":
-		d, err := c.s.threadData(ctx, c.threadID)
-		if err == store.ErrNotFound {
-			return c.sse.Redirect("/")
-		}
-		if err != nil {
-			return err
-		}
-		c.projectID = d.Project.ID
+	c.sideDirty, c.homeDirty = false, false
+	if pt.Thread != nil {
+		c.projectID = pt.Thread.Project.ID
 		c.work = ""
-		if blocks := views.GroupItems(d.Items); len(blocks) > 0 && blocks[len(blocks)-1].Item == nil {
+		if blocks := views.GroupItems(pt.Thread.Items); len(blocks) > 0 && blocks[len(blocks)-1].Item == nil {
 			c.work = blocks[len(blocks)-1].Work[0].ID
 		}
-		if err := c.sse.PatchElementTempl(views.Thread(d)); err != nil {
-			return err
-		}
-		return c.renderGitPanel(ctx)
-	case "settings":
-		if err := c.sse.PatchElementTempl(views.SettingsPage(views.SettingsPageData{Theme: c.theme, Themes: Themes})); err != nil {
-			return err
-		}
-		return c.sse.PatchElementTempl(views.GitPanel(views.GitData{}))
-	case "usage":
-		d, err := c.s.usageData(ctx, c.usageDays, c.usageMetric)
-		if err != nil {
-			return err
-		}
-		if err := c.sse.PatchElementTempl(views.UsagePage(d)); err != nil {
-			return err
-		}
-		return c.sse.PatchElementTempl(views.GitPanel(views.GitData{}))
-	default:
-		ps, err := c.s.App.Store.Projects(ctx)
-		if err != nil {
-			return err
-		}
-		ts, err := c.s.App.Store.Threads(ctx)
-		if err != nil {
-			return err
-		}
-		caps, capsErrs := c.s.capabilities(ctx)
-		home := views.HomeData{Projects: ps, Threads: ts, Settings: views.SettingsData{Agents: c.s.agentNames(), Caps: caps, CapsErrs: capsErrs, Agent: views.FirstOr(c.s.agentNames(), "claude")}}
-		if err := c.sse.PatchElementTempl(views.Home(home)); err != nil {
-			return err
-		}
-		return c.sse.PatchElementTempl(views.GitPanel(views.GitData{}))
+		c.gitDirty = false
+		c.lastGit = time.Now()
 	}
+	for _, part := range []templ.Component{pt.Sidebar, pt.Main, pt.Git} {
+		if err := c.sse.PatchElementTempl(part); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *conn) page() views.Page {
+	return views.Page{View: c.view, ThreadID: c.threadID, Theme: c.theme, UsageDays: c.usageDays, UsageMetric: c.usageMetric, ProviderSel: c.provSel, ProviderTab: c.provTab}
+}
+
+// renderHome redraws the projects overview. The composer in it keeps what
+// the reader typed: the morph leaves the textarea alone and the prompt
+// lives in a signal anyway.
+func (c *conn) renderHome(ctx context.Context) error {
+	c.homeDirty = false
+	ps, err := c.s.App.Store.Projects(ctx)
+	if err != nil {
+		return err
+	}
+	ts, err := c.s.App.Store.Threads(ctx)
+	if err != nil {
+		return err
+	}
+	caps, capsErrs := c.s.capabilities(ctx)
+	home := views.HomeData{Projects: ps, Threads: ts, Looks: c.s.agentLooks(), Settings: views.SettingsData{Agents: c.s.agentNames(), Looks: c.s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: views.FirstOr(c.s.agentNames(), "claude")}}
+	return c.sse.PatchElementTempl(views.Home(home))
+}
+
+func (c *conn) renderProviders(ctx context.Context) error {
+	return c.sse.PatchElementTempl(views.ProvidersPage(c.s.providersData(ctx, c.provSel, c.provTab, false)))
+}
+
+func (c *conn) renderUpdateBanner(ctx context.Context) error {
+	show := c.s.Update.Changed()
+	running := 0
+	if show {
+		running = c.s.runningThreads(ctx)
+	}
+	return c.sse.PatchElementTempl(views.UpdateBanner(show, running))
 }
 
 func (c *conn) renderSidebar(ctx context.Context) error {
-	d, err := c.s.sidebarData(ctx, c.threadID, c.view == "settings" || c.view == "usage")
+	d, err := c.s.sidebarData(ctx, c.threadID, c.view == "settings" || c.view == "usage" || c.view == "providers")
 	if err != nil {
 		return err
 	}
@@ -168,7 +198,10 @@ func (c *conn) renderHead(ctx context.Context) error {
 	if err := c.sse.PatchElementTempl(views.Composer(d)); err != nil {
 		return err
 	}
-	return c.sse.PatchElementTempl(views.PageTitle(d.Thread.Title))
+	if err := c.sse.PatchElementTempl(views.BusyBar(d)); err != nil {
+		return err
+	}
+	return c.sse.PatchElementTempl(views.PageTitle(views.TabTitle(d.Thread)))
 }
 
 func (c *conn) renderGit(ctx context.Context) error {
@@ -186,21 +219,6 @@ func (c *conn) renderGit(ctx context.Context) error {
 		return err
 	}
 	return c.sse.PatchElementTempl(views.GitFiles(d))
-}
-
-// renderGitPanel mounts the panel on the first thread-page render. Later
-// refreshes use renderGit so the selected diff or editor is not replaced.
-func (c *conn) renderGitPanel(ctx context.Context) error {
-	c.gitDirty = false
-	c.lastGit = time.Now()
-	if c.projectID == "" {
-		return nil
-	}
-	p, err := c.s.App.Store.Project(ctx, c.projectID)
-	if err != nil {
-		return nil
-	}
-	return c.sse.PatchElementTempl(views.GitPanel(views.GitData{Project: p, Status: gitx.Read(ctx, p.Path), ThreadID: c.threadID}))
 }
 
 func (c *conn) flushDirty(ctx context.Context) error {
@@ -226,6 +244,11 @@ func (c *conn) flushDirty(ctx context.Context) error {
 	if c.sideDirty {
 		c.sideDirty = false
 		if err := c.renderSidebar(ctx); err != nil {
+			return err
+		}
+	}
+	if c.homeDirty {
+		if err := c.renderHome(ctx); err != nil {
 			return err
 		}
 	}
@@ -285,6 +308,9 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		}
 	case domain.ThreadRenamed, domain.ThreadStatusChanged, domain.ThreadSettingsChanged, domain.AgentSessionBound:
 		c.sideDirty = true
+		// The project cards on the home page show the same glyphs and
+		// titles as the sidebar; a burst of changes costs one redraw.
+		c.homeDirty = c.view == "home"
 		if mine {
 			if _, ok := p.(domain.ThreadStatusChanged); ok && c.work != "" {
 				// Idle again: the open work block gets its final header.
@@ -296,6 +322,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		}
 	case domain.ThreadDeleted:
 		c.sideDirty = true
+		c.homeDirty = c.view == "home"
 		if mine {
 			return c.sse.Redirect("/")
 		}

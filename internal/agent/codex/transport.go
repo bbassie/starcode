@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -32,8 +33,9 @@ type procTransport struct {
 }
 
 // startProcess launches the app-server with stdio transport.
-func startProcess(binary string, args []string, log *slog.Logger) (transport, error) {
+func startProcess(binary string, args []string, env []string, log *slog.Logger) (transport, error) {
 	cmd := exec.Command(binary, args...)
+	cmd.Env = childEnv(env)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -89,4 +91,12 @@ func (w *lineLogger) Write(p []byte) (int, error) {
 		}
 	}
 	return len(p), nil
+}
+
+// childEnv is the inherited environment plus extra; a later pair wins.
+func childEnv(extra []string) []string {
+	if len(extra) == 0 {
+		return nil // exec's default: inherit
+	}
+	return append(os.Environ(), extra...)
 }

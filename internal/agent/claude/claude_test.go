@@ -517,7 +517,7 @@ func TestChildEnvDropsNestedLaunchGuard(t *testing.T) {
 	t.Setenv("PATH", os.Getenv("PATH"))
 
 	var kept []string
-	for _, kv := range childEnv() {
+	for _, kv := range childEnv(nil) {
 		name, _, _ := strings.Cut(kv, "=")
 		switch {
 		case name == "CLAUDECODE", strings.HasPrefix(name, "CLAUDE_CODE_"):
@@ -553,6 +553,50 @@ func TestPersistedTitle(t *testing.T) {
 		if got := persistedTitle(config, invalid); got != "" {
 			t.Fatalf("persistedTitle(%q) = %q", invalid, got)
 		}
+	}
+}
+
+func TestTitleReaderReadsOnlyNewBytes(t *testing.T) {
+	config := t.TempDir()
+	sessionID := "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+	dir := filepath.Join(config, "projects", "-tmp-work")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, sessionID+".jsonl")
+	write := func(s string) {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		f.WriteString(s)
+	}
+	write(`{"type":"user","sessionId":"` + sessionID + `"}` + "\n")
+	var r titleReader
+	if got := r.read(config, sessionID); got != "" {
+		t.Fatalf("title before any record = %q", got)
+	}
+	// A half-written line stays unread until its newline arrives.
+	write(`{"type":"ai-title","aiTitle":"Half`)
+	if got := r.read(config, sessionID); got != "" {
+		t.Fatalf("title from a partial line = %q", got)
+	}
+	write(` done","sessionId":"` + sessionID + `"}` + "\n")
+	if got := r.read(config, sessionID); got != "Half done" {
+		t.Fatalf("title after completing the line = %q", got)
+	}
+	size, _ := os.Stat(path)
+	if r.offset != size.Size() {
+		t.Fatalf("offset %d, want %d (everything consumed)", r.offset, size.Size())
+	}
+	// Nothing new: same answer, no re-read of earlier bytes.
+	if got := r.read(config, sessionID); got != "Half done" || r.offset != size.Size() {
+		t.Fatalf("idle read = %q at %d", got, r.offset)
+	}
+	write(`{"type":"ai-title","aiTitle":"Renamed","sessionId":"` + sessionID + `"}`)
+	if got := r.read(config, sessionID); got != "Renamed" {
+		t.Fatalf("title after an unterminated but complete record = %q", got)
 	}
 }
 

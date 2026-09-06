@@ -8,16 +8,17 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"starcode/internal/app"
 	"starcode/internal/gitx"
+	"starcode/internal/providers"
 	"starcode/internal/store"
 	"starcode/internal/term"
 	usagex "starcode/internal/usage"
@@ -38,23 +39,48 @@ type Server struct {
 	Term      *term.Manager
 	AttachDir string // where prompt attachments are saved, per thread
 	Usage     *usagex.Scanner
+	Providers *providers.Store
+	// Update watches the executable; OnRestart is main's hook that shuts
+	// the server down and re-execs it. Nil disables the restart button.
+	Update    *SelfUpdate
+	OnRestart func()
 	mux       *http.ServeMux
 	cache     capsCache
+	providers providerCache
+	assets    string
 }
 
-func New(a *app.App, log *slog.Logger, token, attachDir string) *Server {
+var errRestartUnavailable = errors.New("restart is not available in this build")
+
+func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.Store) *Server {
 	usageCacheDir := ""
 	if attachDir != "" {
 		usageCacheDir = filepath.Dir(attachDir)
 	}
-	s := &Server{App: a, Log: log, Token: token, Term: term.NewManager(log), AttachDir: attachDir, Usage: usagex.New(usageCacheDir), mux: http.NewServeMux()}
-	views.SetAssetVersion(staticHash())
+	s := &Server{App: a, Log: log, Token: token, Term: term.NewManager(log), AttachDir: attachDir, Usage: usagex.New(usageCacheDir), Providers: prov, mux: http.NewServeMux()}
+	if usageCacheDir != "" {
+		s.cache.path = filepath.Join(usageCacheDir, "capabilities.json")
+		s.cache.load()
+	}
+	s.assets = staticHash()
+	views.SetAssetVersion(s.assets)
 	static, _ := fs.Sub(staticFS, "static")
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", cacheStatic(http.FileServerFS(static))))
 
 	s.mux.HandleFunc("GET /{$}", s.home)
 	s.mux.HandleFunc("GET /settings", s.settings)
 	s.mux.HandleFunc("GET /settings/usage", s.usage)
+	s.mux.HandleFunc("GET /settings/providers", s.providersPage)
+	s.mux.HandleFunc("GET /api/providers/refresh", s.refreshProviders)
+	s.mux.HandleFunc("POST /api/providers", s.addProvider)
+	s.mux.HandleFunc("POST /api/providers/interval", s.setCheckInterval)
+	s.mux.HandleFunc("POST /api/providers/{name}", s.saveProvider)
+	s.mux.HandleFunc("POST /api/providers/{name}/toggle", s.toggleProvider)
+	s.mux.HandleFunc("POST /api/providers/{name}/delete", s.deleteProvider)
+	s.mux.HandleFunc("POST /api/providers/{name}/update", s.updateProvider)
+	s.mux.HandleFunc("POST /api/providers/{name}/models/toggle", s.toggleModel)
+	s.mux.HandleFunc("POST /api/providers/{name}/models/add", s.addModel)
+	s.mux.HandleFunc("POST /api/restart", s.restart)
 	s.mux.HandleFunc("GET /threads/{id}", s.thread)
 	s.mux.HandleFunc("GET /events", s.events)
 
@@ -81,8 +107,18 @@ func New(a *app.App, log *slog.Logger, token, attachDir string) *Server {
 	s.mux.HandleFunc("POST /api/term/{id}/input", s.termInput)
 	s.mux.HandleFunc("POST /api/term/{id}/resize", s.termResize)
 	s.mux.HandleFunc("POST /api/term/{id}/kill", s.termKill)
+	s.Usage.SetRoots(s.usageRoots())
 	s.warm()
 	return s
+}
+
+// Watch runs the background checks (provider versions, a rebuilt binary)
+// until ctx ends.
+func (s *Server) Watch(ctx context.Context) {
+	go s.watchProviders(ctx)
+	if s.Update != nil {
+		go s.Update.Watch(ctx, s.App.Bus.Publish)
+	}
 }
 
 // Close ends every terminal shell; their ptys give them their own process
@@ -140,7 +176,9 @@ func (s *Server) authed(w http.ResponseWriter, r *http.Request) bool {
 // login serves the form (GET) and checks it (POST).
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	next := r.FormValue("next")
-	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+	// Only a local path may follow: "//host" is protocol-relative and
+	// browsers read "/\host" the same way.
+	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
 		next = "/"
 	}
 	if r.Method == http.MethodPost {
@@ -196,28 +234,21 @@ func (s *Server) theme(r *http.Request) string {
 	return Themes[0]
 }
 
-func (s *Server) agentNames() []string {
-	names := make([]string, 0, len(s.App.Agents))
-	for n := range s.App.Agents {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
-}
+func (s *Server) agentNames() []string { return s.App.AgentNames() }
 
 // ---- pages ----
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
-	views.Layout("home", views.Page{View: "home", Theme: s.theme(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "home", views.Page{View: "home", Theme: s.theme(r)}).Render(r.Context(), w)
 }
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
-	views.Layout("settings", views.Page{View: "settings", Theme: s.theme(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "settings", views.Page{View: "settings", Theme: s.theme(r)}).Render(r.Context(), w)
 }
 
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	days, metric := usageParams(r)
-	views.Layout("usage", views.Page{View: "usage", Theme: s.theme(r), UsageDays: days, UsageMetric: metric}).Render(r.Context(), w)
+	s.page(r.Context(), "usage", views.Page{View: "usage", Theme: s.theme(r), UsageDays: days, UsageMetric: metric}).Render(r.Context(), w)
 }
 
 func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +258,7 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	views.Layout(t.Title, views.Page{View: "thread", ThreadID: id, Theme: s.theme(r)}).Render(r.Context(), w)
+	s.page(r.Context(), views.TabTitle(t), views.Page{View: "thread", ThreadID: id, Theme: s.theme(r)}).Render(r.Context(), w)
 }
 
 // ---- helpers shared by events and commands ----
@@ -241,7 +272,7 @@ func (s *Server) sidebarData(ctx context.Context, current string, settings bool)
 	if err != nil {
 		return views.SidebarData{}, err
 	}
-	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), Settings: settings}, nil
+	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), Settings: settings, Updates: s.updateCount(), Looks: s.agentLooks()}, nil
 }
 
 func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, error) {
@@ -271,5 +302,5 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 		branch = gitx.Read(ctx, p.Path).Branch
 	}
 	return views.ThreadData{Thread: t, Project: p, Items: items, Queued: queued, Approvals: aps, Rules: s.App.SessionRules(id), Branch: branch,
-		Settings: views.SettingsData{Agents: s.agentNames(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
+		Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }

@@ -108,7 +108,7 @@ templ Item(it store.Item) {
 			@Tool(it)
 		case domain.KindResult:
 			<div id={ "it-" + it.ID } class={ "item", "result", "st-" + it.Status }>
-				<span class="tag">@ItemIcon(it.Status) { it.Status }</span>
+				<span class="tag">@ItemIcon(it.Status) <span>{ it.Status }</span></span>
 				<pre class="wrap dim">{ it.Body }</pre>
 			</div>
 		case domain.KindError:

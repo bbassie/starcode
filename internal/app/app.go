@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,10 +26,14 @@ import (
 )
 
 type App struct {
-	Store  *store.Store
-	Bus    *bus.Bus
-	Agents map[string]agent.Agent
-	Log    *slog.Logger
+	Store *store.Store
+	Bus   *bus.Bus
+	Log   *slog.Logger
+
+	// agents is the live registry, keyed by the name threads store in
+	// their Agent field. Provider settings swap entries at runtime.
+	agentsMu sync.RWMutex
+	agents   map[string]agent.Agent
 
 	mu       sync.Mutex
 	sessions map[string]*live
@@ -39,7 +44,10 @@ type App struct {
 }
 
 func New(st *store.Store, b *bus.Bus, agents map[string]agent.Agent, log *slog.Logger) *App {
-	a := &App{Store: st, Bus: b, Agents: agents, Log: log, sessions: map[string]*live{}, rules: map[string]map[string]bool{}}
+	if agents == nil {
+		agents = map[string]agent.Agent{}
+	}
+	a := &App{Store: st, Bus: b, agents: agents, Log: log, sessions: map[string]*live{}, rules: map[string]map[string]bool{}}
 	st.Published = func(events []domain.Event) {
 		msgs := make([]any, len(events))
 		for i, e := range events {
@@ -98,7 +106,82 @@ func (a *App) Recover(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown closes every live session.
+// Agent looks up a registered agent by name.
+func (a *App) Agent(name string) (agent.Agent, bool) {
+	a.agentsMu.RLock()
+	defer a.agentsMu.RUnlock()
+	ag, ok := a.agents[name]
+	return ag, ok
+}
+
+// AgentNames lists the registered agents, sorted.
+func (a *App) AgentNames() []string {
+	a.agentsMu.RLock()
+	defer a.agentsMu.RUnlock()
+	names := make([]string, 0, len(a.agents))
+	for n := range a.agents {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// shutdowner is what the Codex adapter implements to stop its shared
+// app-server; the Claude adapter has no process of its own.
+type shutdowner interface{ Shutdown() error }
+
+// SetAgent registers (or replaces) the agent behind name. Idle sessions on
+// that name are closed so their next prompt runs on the new configuration;
+// a running turn keeps its process. A replaced agent with nothing left
+// running is shut down.
+func (a *App) SetAgent(name string, ag agent.Agent) {
+	a.agentsMu.Lock()
+	old := a.agents[name]
+	a.agents[name] = ag
+	a.agentsMu.Unlock()
+	a.retireAgent(name, old)
+}
+
+// RemoveAgent unregisters name; see SetAgent for what happens to sessions.
+func (a *App) RemoveAgent(name string) {
+	a.agentsMu.Lock()
+	old := a.agents[name]
+	delete(a.agents, name)
+	a.agentsMu.Unlock()
+	a.retireAgent(name, old)
+}
+
+func (a *App) retireAgent(name string, old agent.Agent) {
+	if old == nil {
+		return
+	}
+	ctx := context.Background()
+	a.mu.Lock()
+	var idle []string
+	busy := 0
+	for tid, l := range a.sessions {
+		if l.agentName != name {
+			continue
+		}
+		if t, err := a.Store.Thread(ctx, tid); err == nil && (t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval) {
+			busy++
+			continue
+		}
+		idle = append(idle, tid)
+	}
+	a.mu.Unlock()
+	for _, tid := range idle {
+		a.closeSession(tid)
+	}
+	if sd, ok := old.(shutdowner); ok && busy == 0 {
+		if err := sd.Shutdown(); err != nil {
+			a.Log.Warn("shut down replaced agent", "agent", name, "err", err)
+		}
+	}
+}
+
+// Shutdown closes every live session and stops agents that run a shared
+// process.
 func (a *App) Shutdown() {
 	a.mu.Lock()
 	ls := make([]*live, 0, len(a.sessions))
@@ -108,6 +191,15 @@ func (a *App) Shutdown() {
 	a.mu.Unlock()
 	for _, l := range ls {
 		l.sess.Close()
+	}
+	a.agentsMu.RLock()
+	defer a.agentsMu.RUnlock()
+	for name, ag := range a.agents {
+		if sd, ok := ag.(shutdowner); ok {
+			if err := sd.Shutdown(); err != nil {
+				a.Log.Warn("shut down agent", "agent", name, "err", err)
+			}
+		}
 	}
 }
 
@@ -140,7 +232,11 @@ func (a *App) AddProject(ctx context.Context, path string) (string, error) {
 	if !fi.IsDir() {
 		return "", errors.New("path is not a directory")
 	}
-	for _, p := range must(a.Store.Projects(ctx)) {
+	existing, err := a.Store.Projects(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range existing {
 		if p.Path == path {
 			return p.ID, nil
 		}
@@ -186,7 +282,7 @@ func (a *App) CreateThread(ctx context.Context, projectID, agentName, model stri
 	if _, err := a.Store.Project(ctx, projectID); err != nil {
 		return "", fmt.Errorf("project: %w", err)
 	}
-	if _, ok := a.Agents[agentName]; !ok {
+	if _, ok := a.Agent(agentName); !ok {
 		return "", fmt.Errorf("unknown agent %q", agentName)
 	}
 	id := newID()
@@ -214,7 +310,7 @@ type ThreadSettings struct {
 // turn, which is why the idle session is closed and later resumed with the
 // new flags.
 func (a *App) SetThreadSettings(ctx context.Context, id string, st ThreadSettings) error {
-	if _, ok := a.Agents[st.Agent]; !ok {
+	if _, ok := a.Agent(st.Agent); !ok {
 		return fmt.Errorf("unknown agent %q", st.Agent)
 	}
 	t, err := a.Store.Thread(ctx, id)
@@ -378,9 +474,17 @@ func (a *App) ResolveApproval(ctx context.Context, threadID, approvalID, decisio
 	if err := l.sess.Resolve(ctx, approvalID, d); err != nil {
 		return err
 	}
-	_, err = a.Store.Append(ctx, threadID,
-		domain.ApprovalResolved{ID: approvalID, Decision: decision},
-		domain.ThreadStatusChanged{Status: domain.StatusRunning})
+	t, err := a.Store.Thread(ctx, threadID)
+	if err != nil {
+		return err
+	}
+	evs := []any{domain.ApprovalResolved{ID: approvalID, Decision: decision}}
+	// Only a thread that is really waiting goes back to running; answering
+	// a card whose turn has already ended must not fake a live turn.
+	if t.Status == domain.StatusAwaitingApproval {
+		evs = append(evs, domain.ThreadStatusChanged{Status: domain.StatusRunning})
+	}
+	_, err = a.Store.Append(ctx, threadID, evs...)
 	return err
 }
 
@@ -413,9 +517,10 @@ func ruleKey(tool string, input json.RawMessage) string {
 // ---- sessions ----
 
 type live struct {
-	threadID string
-	sess     agent.Session
-	mu       sync.Mutex
+	threadID  string
+	agentName string
+	sess      agent.Session
+	mu        sync.Mutex
 	// turn-scoped bookkeeping
 	interrupted bool
 	turnID      string
@@ -434,9 +539,9 @@ func (a *App) session(ctx context.Context, t store.Thread) (*live, error) {
 	}
 	a.mu.Unlock()
 
-	ag, ok := a.Agents[t.Agent]
+	ag, ok := a.Agent(t.Agent)
 	if !ok {
-		return nil, fmt.Errorf("agent %q is not configured", t.Agent)
+		return nil, fmt.Errorf("agent %q is not configured (see Settings > Providers)", t.Agent)
 	}
 	p, err := a.Store.Project(ctx, t.ProjectID)
 	if err != nil {
@@ -447,7 +552,7 @@ func (a *App) session(ctx context.Context, t store.Thread) (*live, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &live{threadID: t.ID, sess: sess, seenMsgs: map[string]string{}, seenTools: map[string]bool{}, toolOutput: map[string]bool{}, pending: map[string]agent.ApprovalRequested{}}
+	l := &live{threadID: t.ID, agentName: t.Agent, sess: sess, seenMsgs: map[string]string{}, seenTools: map[string]bool{}, toolOutput: map[string]bool{}, pending: map[string]agent.ApprovalRequested{}}
 	a.mu.Lock()
 	if existing := a.sessions[t.ID]; existing != nil {
 		a.mu.Unlock()
@@ -602,10 +707,20 @@ func (a *App) pump(l *live) {
 			if queueErr != nil {
 				log.Error("read prompt queue", "err", queueErr)
 			}
-			completed := []any{
+			// An approval the turn never got an answer for (Stop was pressed,
+			// or the agent gave up) is over with the turn. Left pending, its
+			// card would come back on every reload and answering it would
+			// resolve a request nobody is waiting on.
+			var completed []any
+			if aps, err := a.Store.PendingApprovals(ctx, tid); err == nil {
+				for _, ap := range aps {
+					completed = append(completed, domain.ApprovalResolved{ID: ap.ID, Decision: domain.DecisionDeny, Auto: true})
+				}
+			}
+			completed = append(completed,
 				domain.ItemStarted{ID: newID(), Kind: domain.KindResult, Status: tc.Status, Body: body},
 				domain.TurnCompleted{TurnID: tc.TurnID, Status: tc.Status, DurationMS: tc.DurationMS, CostUSD: tc.CostUSD, InputTok: tc.InputTokens, OutputTok: tc.OutputTokens, Error: tc.Error},
-			}
+			)
 			if len(queued) == 0 {
 				completed = append(completed, domain.ThreadStatusChanged{Status: status, Detail: detail})
 			}

@@ -9,13 +9,16 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"starcode/internal/agent"
 )
@@ -37,6 +40,7 @@ var (
 type Agent struct {
 	binary string
 	args   []string
+	env    []string // extra KEY=VALUE pairs for the app-server and probes
 	log    *slog.Logger
 	dial   func() (transport, error)
 
@@ -54,6 +58,12 @@ func WithBinary(path string) Option {
 // WithArgs appends extra arguments after "app-server".
 func WithArgs(extra ...string) Option {
 	return func(a *Agent) { a.args = append(a.args, extra...) }
+}
+
+// WithEnv adds KEY=VALUE pairs (CODEX_HOME, say) to the app-server's
+// environment and to the version and login probes.
+func WithEnv(kv []string) Option {
+	return func(a *Agent) { a.env = append(a.env, kv...) }
 }
 
 // WithLogger sets the logger; the default is slog.Default().
@@ -79,7 +89,7 @@ func New(opts ...Option) *Agent {
 	if a.dial == nil {
 		a.dial = func() (transport, error) {
 			args := append([]string{"app-server"}, a.args...)
-			return startProcess(a.binary, args, a.log)
+			return startProcess(a.binary, args, a.env, a.log)
 		}
 	}
 	return a
@@ -153,6 +163,42 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 		}
 	}
 	return s, nil
+}
+
+// Provider reports the installed CLI: path, version and sign-in state,
+// from `codex --version` and `codex login status`.
+func (a *Agent) Provider(ctx context.Context) (agent.ProviderInfo, error) {
+	info := agent.ProviderInfo{Package: "@openai/codex", UpdateCommand: "codex update"}
+	path, err := exec.LookPath(a.binary)
+	if err != nil {
+		return info, err
+	}
+	info.Binary = path
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	version := exec.CommandContext(ctx, a.binary, "--version")
+	version.Env = childEnv(a.env)
+	out, err := version.Output()
+	if err != nil {
+		return info, fmt.Errorf("codex --version: %w", err)
+	}
+	// "codex-cli 0.153.3"
+	if f := strings.Fields(string(out)); len(f) > 0 {
+		info.Version = f[len(f)-1]
+	}
+	status := exec.CommandContext(ctx, a.binary, "login", "status")
+	status.Env = childEnv(a.env)
+	var combined bytes.Buffer
+	status.Stdout, status.Stderr = &combined, &combined
+	statusErr := status.Run()
+	line := strings.TrimSpace(combined.String())
+	if first, _, ok := strings.Cut(line, "\n"); ok {
+		line = first
+	}
+	loggedIn := statusErr == nil && !strings.Contains(strings.ToLower(line), "not logged in")
+	info.LoggedIn = &loggedIn
+	info.Account = line
+	return info, nil
 }
 
 // Shutdown stops the shared app-server. Sessions still open are closed with an

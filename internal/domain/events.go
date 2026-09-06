@@ -177,6 +177,14 @@ type GitChanged struct {
 	ProjectID string `json:"project_id"`
 }
 
+// ProvidersChanged is bus-only: an agent CLI's version, sign-in state or
+// available update changed, so sidebars and the providers page refresh.
+type ProvidersChanged struct{}
+
+// BinaryUpdated is bus-only: the starcode executable on disk is newer than
+// the running one, so every open page shows the restart banner.
+type BinaryUpdated struct{}
+
 // TypeOf returns the wire name for a payload.
 func TypeOf(p any) string {
 	switch p.(type) {
@@ -216,6 +224,10 @@ func TypeOf(p any) string {
 		return "approval.resolved"
 	case GitChanged, *GitChanged:
 		return "git.changed"
+	case ProvidersChanged, *ProvidersChanged:
+		return "providers.changed"
+	case BinaryUpdated, *BinaryUpdated:
+		return "binary.updated"
 	}
 	panic(fmt.Sprintf("domain: unknown event payload %T", p))
 }

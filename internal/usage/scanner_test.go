@@ -2,6 +2,7 @@ package usage
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -86,6 +87,38 @@ func TestScannerDeduplicatesClaudeTranscripts(t *testing.T) {
 	}
 	if len(result.Entries) != 1 || result.Entries[0].CostUSD != 0.18 {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestScannerAttributesRootsToInstances(t *testing.T) {
+	root := t.TempDir()
+	line := `{"type":"assistant","timestamp":"2026-09-04T12:00:00Z","sessionId":"%s","requestId":"r1","message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":10,"output_tokens":4}}}`
+	dirs := map[string]string{"claude": filepath.Join(root, "home", "projects"), "work-claude": filepath.Join(root, "work", "projects")}
+	for name, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "one.jsonl"), []byte(fmt.Sprintf(line, name)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := New("")
+	s.rates, s.ratesAt, s.status = rateTable{}, time.Now(), "test"
+	s.SetRoots([]Root{
+		{Agent: "claude", Driver: "claude", Dir: dirs["claude"]},
+		{Agent: "work-claude", Driver: "claude", Dir: dirs["work-claude"]},
+		{Agent: "claude-again", Driver: "claude", Dir: dirs["claude"]}, // shares a dir: counted once
+	})
+	result, err := s.Read(t.Context(), time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range result.Entries {
+		got[e.Agent] = e.SessionID
+	}
+	if len(result.Entries) != 2 || got["claude"] != "claude" || got["work-claude"] != "work-claude" {
+		t.Fatalf("entries = %+v", result.Entries)
 	}
 }
 

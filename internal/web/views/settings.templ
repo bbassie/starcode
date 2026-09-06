@@ -2,88 +2,253 @@ package views
 
 import (
 	"fmt"
+	"slices"
 	"starcode/internal/agent"
 	"strings"
 )
 
-// SettingsData feeds the agent/model/effort/mode chips. Caps is keyed by
-// agent name; chips for every agent are rendered and the ones for the
-// selected agent are shown, so switching agents needs no round trip.
+// SettingsData feeds the model, effort and mode pickers. Caps is keyed by
+// agent name; pickers for every agent are rendered (in Agents order, so a
+// morph never swaps two agents' menus) and the ones for the selected agent
+// are shown, so switching agents needs no round trip.
 type SettingsData struct {
 	Agents   []string
+	Looks    map[string]AgentLook // driver, colour and name per agent, for the model picker
 	Caps     map[string]agent.Capabilities
 	CapsErrs map[string]error
 	// Current values. They are rendered as the selected options so a morph
-	// of the composer keeps the selects in sync, and a model outside the
+	// of the composer keeps the pickers in sync, and a model outside the
 	// catalog still shows up.
 	Agent, Model, Effort, Mode string
 }
 
-// Chips renders the setting selects as a row of pill dropdowns. onChange is
-// a Datastar action run when any of them changes (empty for none). The
-// surrounding form owns the signals: agent, model, effort, mode.
+// Chips renders the setting pickers as a row of pills: model (with the
+// agent rail inside its menu), reasoning effort and permission mode. Each
+// is a button that opens a menu drawn in the page's own style; the page
+// signal pick names the open menu and pickq holds the model search text
+// (see pickKey and pickLabel in layout.templ). onChange is a Datastar
+// action run after a choice (empty for none). The surrounding form owns
+// the signals agent, model, effort and mode.
 templ Chips(d SettingsData, onChange string, disabled bool, agentLocked bool) {
 	<div class="chips">
-		if !agentLocked {
-			<label class="chip" title="Agent">
-				<select data-bind:agent disabled?={ disabled }
-					if onChange != "" {
-						data-on:change={ onChange }
-					}
-				>
-					for _, a := range d.Agents {
-						<option value={ a } selected?={ a == d.Agent }>{ a }</option>
-					}
-				</select>
-			</label>
-		}
-		for name, c := range d.Caps {
-			<label class="chip" title="Model" data-show={ "$agent == '" + name + "'" }>
-				<span class="chip-icon">@Icon("bot", "ui-icon")</span>
-				<select data-bind:model disabled?={ disabled }
-					if onChange != "" {
-						data-on:change={ onChange }
-					}
-				>
-					<option value="" selected?={ d.Model == "" }>{ defaultModelLabel(c) }</option>
-					for _, m := range c.Models {
-						if m.ID != "" && m.ID != "default" {
-							<option value={ m.ID } title={ m.Description } selected?={ m.ID == d.Model }>{ m.DisplayName }</option>
-						}
-					}
-					if d.Model != "" && !hasModel(c, d.Model) {
-						<option value={ d.Model } selected>{ d.Model }</option>
-					}
-				</select>
-			</label>
-			<label class="chip" title="Reasoning effort" data-show={ "$agent == '" + name + "'" }>
-				<select data-bind:effort disabled?={ disabled }
-					if onChange != "" {
-						data-on:change={ onChange }
-					}
-				>
-					for _, e := range c.Efforts {
-						<option value={ e.ID } selected?={ e.ID == d.Effort }>{ effortLabel(e) }</option>
-					}
-				</select>
-			</label>
-			<label class="chip" title="Permission mode" data-show={ "$agent == '" + name + "'" }>
-				<span class="chip-icon">@Icon("shield-check", "ui-icon")</span>
-				<select data-bind:mode disabled?={ disabled }
-					if onChange != "" {
-						data-on:change={ onChange }
-					}
-				>
-					for _, m := range c.PermissionModes {
-						<option value={ m.ID } title={ m.Label } selected?={ m.ID == d.Mode }>{ modeLabel(m) }</option>
-					}
-				</select>
-			</label>
-		}
-		for name, err := range d.CapsErrs {
-			<span class="chip err" data-show={ "$agent == '" + name + "'" } title={ err.Error() }>catalog unavailable</span>
+		for _, name := range d.Agents {
+			{{ c, ok := d.Caps[name] }}
+			@ModelPick(d, name, c, d.CapsErrs[name], onChange, disabled, agentLocked)
+			if ok {
+				@EffortPick(d, name, c, onChange, disabled)
+				@ModePick(d, name, c, onChange, disabled)
+			}
 		}
 	</div>
+}
+
+// pickAttrs are shared by every picker: shown for its agent, closed by a
+// click elsewhere or Escape. A click inside any picker is left alone: the
+// hidden pickers of the other agents see every click as outside, and the
+// rail switches agents by making one of them the visible one.
+func pickAttrs(d SettingsData, name, kind string) templ.Attributes {
+	return templ.Attributes{
+		"class":                 "pick",
+		"data-show":             "$agent == " + jsq(name),
+		"data-preserve-attr":    "style",
+		"style":                 hiddenUnless(name == d.Agent),
+		"data-on:click__outside": "$pick == '" + kind + "' && !evt.target.closest('.pick') && ($pick = '')",
+		"data-on:keydown":       "pickKey(evt, el) && ($pick = '')",
+	}
+}
+
+// pickToggle opens a menu (closing any other) and focuses its search box
+// or selected entry; a second click closes it.
+func pickToggle(kind string) string {
+	return "$pickq = ''; $pick = $pick == '" + kind + "' ? '' : '" + kind + "'; $pick && pickFocus(el)"
+}
+
+// pickSet is an option's click: set the signal, close the menu, then run
+// the form's action.
+func pickSet(signal, value, onChange string) string {
+	expr := "$" + signal + " = " + jsq(value) + "; $pick = ''"
+	if onChange != "" {
+		expr += "; " + onChange
+	}
+	return expr
+}
+
+// jsq quotes s for use inside a Datastar expression.
+func jsq(s string) string { return fmt.Sprintf("%q", s) }
+
+// ModelPick is the model chip and its menu: a search box, the agent rail
+// (when there is a choice to make) and the catalog of the agent shown,
+// with the default first, the groups after, and a row that takes the
+// typed text as a model id for anything outside the catalog.
+templ ModelPick(d SettingsData, name string, c agent.Capabilities, capsErr error, onChange string, disabled bool, agentLocked bool) {
+	{{ look := d.Looks[name] }}
+	<div { pickAttrs(d, name, "model")... }>
+		<button type="button" class="chip" title="Model" disabled?={ disabled } data-on:click={ pickToggle("model") } data-class:open="$pick == 'model'">
+			<span class="chip-icon" style={ agentMarkStyle(look.Color) }>@Brand(look.Driver, "ui-icon")</span>
+			<span class="chip-label" data-text="pickLabel(el, $model)">{ modelLabel(c, d.Model, capsErr) }</span>
+			@Icon("chevron-down", "ui-icon chip-caret")
+		</button>
+		<div class="pick-menu pick-models" data-show="$pick == 'model'" data-preserve-attr="style" style="display: none">
+			<label class="pick-search">
+				@Icon("search", "ui-icon")
+				<input type="text" placeholder="Search models…" data-bind:pickq autocomplete="off" spellcheck="false"/>
+			</label>
+			<div class="pick-body">
+				if !agentLocked && len(d.Agents) > 1 {
+					<div class="pick-rail">
+						for _, a := range d.Agents {
+							<button type="button" class={ "pick-agent", templ.KV("sel", a == name) } title={ d.Looks[a].Label } style={ agentMarkStyle(d.Looks[a].Color) } data-on:click={ agentSet(a, onChange) }>@Brand(d.Looks[a].Driver, "ui-icon")</button>
+						}
+					</div>
+				}
+				<div class="pick-list" role="listbox">
+					<div class="pick-head" data-show="$pickq == ''" data-preserve-attr="style">{ look.Label }</div>
+					if capsErr != nil {
+						<p class="pick-err">Catalog unavailable: { capsErr.Error() }</p>
+					} else {
+						@ModelOption(agent.Model{ID: "", DisplayName: "Default", Description: defaultModelDesc(c)}, defaultModelLabel(c), d.Model == "", onChange)
+						for _, m := range c.Models {
+							if m.ID != "" && m.ID != "default" && m.Group == "" {
+								@ModelOption(m, "", m.ID == d.Model, onChange)
+							}
+						}
+						if d.Model != "" && !hasModel(c, d.Model) {
+							@ModelOption(agent.Model{ID: d.Model, DisplayName: d.Model, Description: "Typed in by hand"}, "", true, onChange)
+						}
+						for _, g := range modelGroups(c) {
+							<div class="pick-group" data-show="$pickq == ''" data-preserve-attr="style">{ g }</div>
+							for _, m := range c.Models {
+								if m.Group == g {
+									@ModelOption(m, "", m.ID == d.Model, onChange)
+								}
+							}
+						}
+					}
+					<button type="button" class="opt opt-custom" data-show="$pickq.trim() != ''" data-preserve-attr="style" style="display: none" data-on:click={ customModelSet(onChange) }>
+						@Icon("pencil", "ui-icon opt-icon")
+						<span class="opt-text">
+							<span class="opt-name"><span class="ellipsis">Use &quot;<span data-text="$pickq.trim()"></span>&quot; as the model id</span></span>
+							<span class="opt-desc">Anything the CLI accepts, for example claude-fable-5</span>
+						</span>
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+// agentSet switches the rail: the other agent's menu takes over (it is
+// shown for the same pick signal) with its own defaults, and the focus
+// moves into it.
+func agentSet(name, onChange string) string {
+	expr := "$agent = " + jsq(name) + "; $model = ''; $effort = ''; $mode = ''; $pickq = ''; pickFocus(el)"
+	if onChange != "" {
+		expr += "; " + onChange
+	}
+	return expr
+}
+
+func customModelSet(onChange string) string {
+	expr := "$model = $pickq.trim(); $pick = ''"
+	if onChange != "" {
+		expr += "; " + onChange
+	}
+	return expr
+}
+
+// ModelOption is one catalog row. short, when set, is what the chip shows
+// for it instead of the name. The row hides while the search text matches
+// neither name, id nor description.
+templ ModelOption(m agent.Model, short string, selected bool, onChange string) {
+	<button
+		type="button"
+		class={ "opt", templ.KV("sel", selected) }
+		role="option"
+		data-value={ m.ID }
+		if short != "" {
+			data-short={ short }
+		}
+		data-k={ strings.ToLower(m.DisplayName + " " + m.ID + " " + m.Description) }
+		data-show="$pickq == '' || el.dataset.k.includes($pickq.toLowerCase())"
+		data-preserve-attr="style"
+		data-class:sel={ "$model == " + jsq(m.ID) }
+		data-on:click={ pickSet("model", m.ID, onChange) }
+	>
+		<span class="opt-text">
+			<span class="opt-name">
+				<span class="ellipsis">{ m.DisplayName }</span>
+				if m.Default && m.ID != "" {
+					<span class="opt-badge">default</span>
+				}
+			</span>
+			if m.Description != "" {
+				<span class="opt-desc" title={ m.Description }>{ m.Description }</span>
+			}
+		</span>
+		@Icon("check", "ui-icon opt-check")
+	</button>
+}
+
+// EffortPick is the reasoning effort chip and its menu.
+templ EffortPick(d SettingsData, name string, c agent.Capabilities, onChange string, disabled bool) {
+	<div { pickAttrs(d, name, "effort")... }>
+		<button type="button" class="chip" title="Reasoning effort" disabled?={ disabled } data-on:click={ pickToggle("effort") } data-class:open="$pick == 'effort'">
+			<span class="chip-icon">@Icon("brain", "ui-icon")</span>
+			<span class="chip-label" data-text="pickLabel(el, $effort)">{ effortShort(d.Effort) }</span>
+			@Icon("chevron-down", "ui-icon chip-caret")
+		</button>
+		<div class="pick-menu" data-show="$pick == 'effort'" data-preserve-attr="style" style="display: none">
+			<div class="pick-list" role="listbox">
+				<div class="pick-head">Reasoning effort</div>
+				for _, e := range c.Efforts {
+					<button type="button" class={ "opt", templ.KV("sel", e.ID == d.Effort) } role="option" data-value={ e.ID } data-short={ effortShort(e.ID) } data-class:sel={ "$effort == " + jsq(e.ID) } data-on:click={ pickSet("effort", e.ID, onChange) }>
+						<span class="opt-text"><span class="opt-name"><span>{ effortName(e) }</span></span></span>
+						@Icon("check", "ui-icon opt-check")
+					</button>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// ModePick is the permission mode chip and its menu; each row carries the
+// agent's own explanation of the mode.
+templ ModePick(d SettingsData, name string, c agent.Capabilities, onChange string, disabled bool) {
+	<div { pickAttrs(d, name, "mode")... }>
+		<button type="button" class="chip" title="Permission mode" disabled?={ disabled } data-on:click={ pickToggle("mode") } data-class:open="$pick == 'mode'" data-class:loose={ looseModes(c) }>
+			<span class="chip-icon">@Icon("shield-check", "ui-icon")</span>
+			<span class="chip-label" data-text="pickLabel(el, $mode)">{ modeShort(d.Mode) }</span>
+			@Icon("chevron-down", "ui-icon chip-caret")
+		</button>
+		<div class="pick-menu pick-modes" data-show="$pick == 'mode'" data-preserve-attr="style" style="display: none">
+			<div class="pick-list" role="listbox">
+				<div class="pick-head">Permission mode</div>
+				for _, m := range c.PermissionModes {
+					<button type="button" class={ "opt", templ.KV("sel", m.ID == d.Mode) } role="option" data-value={ m.ID } data-short={ modeShort(m.ID) } data-class:sel={ "$mode == " + jsq(m.ID) } data-on:click={ pickSet("mode", m.ID, onChange) }>
+						@Icon(modeIcon(m.ID), "ui-icon opt-icon")
+						<span class="opt-text">
+							<span class="opt-name"><span>{ modeName(m.ID) }</span></span>
+							if desc := modeDesc(m); desc != "" {
+								<span class="opt-desc">{ desc }</span>
+							}
+						</span>
+						@Icon("check", "ui-icon opt-check")
+					</button>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// hiddenUnless is the initial inline style for a data-show element: the
+// server paints the state the signals will have, so Datastar finds nothing
+// to change when it loads and the page does not jump. data-preserve-attr
+// keeps the client's later decisions across morphs.
+func hiddenUnless(shown bool) string {
+	if shown {
+		return ""
+	}
+	return "display: none"
 }
 
 func hasModel(c agent.Capabilities, id string) bool {
@@ -95,31 +260,166 @@ func hasModel(c agent.Capabilities, id string) bool {
 	return false
 }
 
-func defaultModelLabel(c agent.Capabilities) string {
+// modelGroups lists the picker headings in first-seen order.
+func modelGroups(c agent.Capabilities) []string {
+	var groups []string
 	for _, m := range c.Models {
-		if m.Default {
-			if m.ID == "default" || m.ID == "" {
-				return "Default (" + firstSentence(m.Description) + ")"
-			}
-			return "Default (" + m.DisplayName + ")"
+		if m.Group != "" && !slices.Contains(groups, m.Group) {
+			groups = append(groups, m.Group)
 		}
 	}
-	return "Default model"
+	return groups
 }
 
-func effortLabel(e agent.Choice) string {
-	if e.ID == "" {
-		return "Reasoning: default"
+// modelLabel is the chip text for the current model: its catalog name,
+// the id itself for one typed in, or the default with what it resolves to.
+func modelLabel(c agent.Capabilities, id string, capsErr error) string {
+	if capsErr != nil {
+		return "Catalog unavailable"
 	}
-	return "Reasoning: " + e.Label
+	if id == "" {
+		return defaultModelLabel(c)
+	}
+	for _, m := range c.Models {
+		if m.ID == id {
+			return m.DisplayName
+		}
+	}
+	return id
 }
 
-// modeLabel keeps the chip short; the full explanation is in the title.
-func modeLabel(m agent.Choice) string {
-	if m.ID == "" {
-		return "Mode: default"
+func defaultModel(c agent.Capabilities) (agent.Model, bool) {
+	for _, m := range c.Models {
+		if m.Default {
+			return m, true
+		}
 	}
-	return "Mode: " + m.ID
+	return agent.Model{}, false
+}
+
+func defaultModelLabel(c agent.Capabilities) string {
+	m, ok := defaultModel(c)
+	if !ok {
+		return "Default model"
+	}
+	if m.ID == "default" || m.ID == "" {
+		return "Default (" + firstSentence(m.Description) + ")"
+	}
+	return "Default (" + m.DisplayName + ")"
+}
+
+// defaultModelDesc explains the default row: what the agent picks when no
+// model is set.
+func defaultModelDesc(c agent.Capabilities) string {
+	m, ok := defaultModel(c)
+	if !ok {
+		return "Whatever the agent picks when no model is set"
+	}
+	if m.ID == "default" || m.ID == "" {
+		return m.Description
+	}
+	if m.Description == "" {
+		return m.DisplayName
+	}
+	return m.DisplayName + " · " + m.Description
+}
+
+// effortName is the menu row for an effort level; effortShort the chip.
+func effortName(e agent.Choice) string {
+	switch e.ID {
+	case "":
+		return "Default"
+	case "xhigh":
+		return "Extra high"
+	}
+	return capitalize(e.Label)
+}
+
+func effortShort(id string) string {
+	if id == "" {
+		return "Default effort"
+	}
+	return effortName(agent.Choice{ID: id, Label: id})
+}
+
+// Permission modes come from the agents as ids with a one-line label of
+// the form "id (explanation)". The rows show a readable name and the
+// explanation; the chip shows the name.
+func modeName(id string) string {
+	switch id {
+	case "":
+		return "Default"
+	case "acceptEdits":
+		return "Accept edits"
+	case "plan":
+		return "Plan"
+	case "dontAsk":
+		return "Don't ask"
+	case "bypassPermissions":
+		return "Bypass permissions"
+	case "untrusted":
+		return "Untrusted"
+	case "read-only":
+		return "Read only"
+	case "full-access":
+		return "Full access"
+	}
+	return id
+}
+
+func modeShort(id string) string {
+	if id == "" {
+		return "Default mode"
+	}
+	return modeName(id)
+}
+
+func modeDesc(m agent.Choice) string {
+	if i := strings.Index(m.Label, "("); i >= 0 {
+		return capitalize(strings.TrimSuffix(strings.TrimSpace(m.Label[i+1:]), ")"))
+	}
+	if m.Label != m.ID && m.Label != "" && m.ID != "" {
+		return m.Label
+	}
+	return ""
+}
+
+func modeIcon(id string) string {
+	switch id {
+	case "acceptEdits":
+		return "file-pen"
+	case "plan", "read-only":
+		return "eye"
+	case "dontAsk":
+		return "shield-off"
+	case "bypassPermissions", "full-access":
+		return "lock-open"
+	case "untrusted":
+		return "shield-question"
+	}
+	return "shield-check"
+}
+
+// looseModes is the chip's expression for the modes that never ask; the
+// chip's icon takes the warning colour on them.
+func looseModes(c agent.Capabilities) string {
+	var parts []string
+	for _, m := range c.PermissionModes {
+		if m.ID == "bypassPermissions" || m.ID == "full-access" {
+			parts = append(parts, "$mode == "+jsq(m.ID))
+		}
+	}
+	if len(parts) == 0 {
+		return "false"
+	}
+	return strings.Join(parts, " || ")
+}
+
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // firstSentence shortens "Opus 5 with 1M context · Best for…" to "Opus 5 1M".
@@ -209,10 +509,41 @@ templ SettingsPage(d SettingsPageData) {
 	</main>
 }
 
+// SettingsSidebar is the settings section list as a column of its own,
+// next to the thread list. It sits outside the page content so it stays
+// in place when one settings page is wider than the next. Narrow windows
+// get SettingsNav instead, inside the content.
+templ SettingsSidebar(current string) {
+	<aside id="settingsnav">
+		<div class="settingsnav-head">Settings</div>
+		<nav class="settingsnav-list" aria-label="Settings sections">
+			@settingsLinks(current)
+		</nav>
+	</aside>
+}
+
+// SettingsNav is the same links as a scrolling row above the content,
+// shown when the window is too narrow for the settings column.
 templ SettingsNav(current string) {
 	<nav class="settings-menu" aria-label="Settings sections">
-		<div class="settings-menu-title">Settings</div>
-		<a class={ templ.KV("current", current == "appearance") } href="/settings">@Icon("palette", "ui-icon") Appearance</a>
-		<a class={ templ.KV("current", current == "usage") } href="/settings/usage">@Icon("chart-no-axes-combined", "ui-icon") Usage</a>
+		@settingsLinks(current)
 	</nav>
+}
+
+templ settingsLinks(current string) {
+	<a class={ templ.KV("current", current == "appearance") } href="/settings">@Icon("palette", "ui-icon") Appearance</a>
+	<a class={ templ.KV("current", current == "usage") } href="/settings/usage">@Icon("chart-no-axes-combined", "ui-icon") Usage</a>
+	<a class={ templ.KV("current", current == "providers") } href="/settings/providers">@Icon("plug", "ui-icon") Providers</a>
+}
+
+// settingsSection maps a page view to the settings link that should be
+// marked current; empty for pages outside settings.
+func settingsSection(view string) string {
+	switch view {
+	case "settings":
+		return "appearance"
+	case "usage", "providers":
+		return view
+	}
+	return ""
 }

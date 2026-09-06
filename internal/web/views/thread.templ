@@ -95,8 +95,63 @@ templ Thread(d ThreadData) {
 				}
 			</div>
 		</div>
+		@BusyBar(d)
+		// Shown by the layout's scroll script once the reader has scrolled
+		// up; the transcript stops following the stream at that point.
+		<div class="jump-wrap">
+			<button class="btn round jump" type="button" title="Jump to latest" aria-label="Jump to latest" onclick="document.getElementById('items').scrollTo({ top: 1e9, behavior: 'smooth' })">@Icon("arrow-down", "ui-icon")</button>
+		</div>
 		@Composer(d)
 	</main>
+}
+
+// BusyBar sits between the transcript and the composer while a turn runs.
+// Streaming already shows movement; this covers the quiet stretches (the
+// model thinking, a long tool call) with a shimmering word that the
+// layout's clock script rotates, and the time since the turn started.
+templ BusyBar(d ThreadData) {
+	<div id="busybar" class={ "busybar", templ.KV("on", d.Thread.Status == domain.StatusRunning) }>
+		if d.Thread.Status == domain.StatusRunning {
+			<span class="shimmer" data-busy-word>Working…</span>
+			<span class="dim tiny-text" data-since={ turnStartedAt(d).UTC().Format(time.RFC3339) }>{ elapsedText(time.Since(turnStartedAt(d))) }</span>
+		}
+	</div>
+}
+
+// elapsedText matches the clock script's format: "12s", "1m 05s".
+func elapsedText(d time.Duration) string {
+	s := int(d.Seconds())
+	if s < 0 {
+		s = 0
+	}
+	if s < 60 {
+		return fmt.Sprintf("%ds", s)
+	}
+	return fmt.Sprintf("%dm %02ds", s/60, s%60)
+}
+
+// turnStartedAt is when the running turn began: the last prompt's time,
+// or the thread's last change when the transcript is empty.
+func turnStartedAt(d ThreadData) time.Time {
+	for i := len(d.Items) - 1; i >= 0; i-- {
+		if d.Items[i].Kind == domain.KindUser {
+			return d.Items[i].CreatedAt
+		}
+	}
+	return d.Thread.UpdatedAt
+}
+
+// TabTitle is the browser tab text: the thread title with a marker in
+// front while a turn runs or waits for an approval, so a thread left in
+// another tab (or on the phone's home screen) shows when it needs a look.
+func TabTitle(t store.Thread) string {
+	switch t.Status {
+	case domain.StatusAwaitingApproval:
+		return "[!] " + t.Title
+	case domain.StatusRunning:
+		return "● " + t.Title
+	}
+	return t.Title
 }
 
 // MessageRail is a compact map of the prompts in this thread. Hovering a
@@ -124,14 +179,14 @@ templ MainHead(d ThreadData) {
 			<span class="dim">/</span>
 			<span class="ellipsis">{ d.Thread.Title }</span>
 		</nav>
-		<span class={ "status-pill", "st-" + d.Thread.Status } title={ d.Thread.StatusDetail }>@StatusIcon(d.Thread.Status) { statusLabel(d.Thread.Status) }</span>
-		<span class="dim tiny-text hide-sm ellipsis" title="Model reported by the agent">@Icon("bot", "ui-icon") { modelShown(d.Thread) }</span>
+		<span class={ "status-pill", "st-" + d.Thread.Status } title={ d.Thread.StatusDetail }>@StatusIcon(d.Thread.Status) <span>{ statusLabel(d.Thread.Status) }</span></span>
+		<span class="dim tiny-text hide-sm ellipsis" title="Model reported by the agent">@Icon("bot", "ui-icon") <span class="ellipsis">{ modelShown(d.Thread) }</span></span>
 		<span class="spacer"></span>
 		if d.Branch != "" {
-			<span class="dim tiny-text hide-sm">@Icon("git-branch", "ui-icon") { d.Branch }</span>
+			<span class="dim tiny-text hide-sm">@Icon("git-branch", "ui-icon") <span>{ d.Branch }</span></span>
 		}
 		<button class="btn ghost" data-on:click="$term = !$term" title="Toggle terminal">@Icon("terminal", "ui-icon") <span class="hide-sm">terminal</span></button>
-		<button class="btn ghost" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
+		<button class="btn ghost gittoggle" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
 		<button class="btn ghost dim" data-on:click={ "confirm('Delete this thread?') && @post('/api/threads/" + d.Thread.ID + "/delete')" } title="Delete thread"><span class="hide-sm">delete</span><span class="show-sm">@Icon("trash-2", "ui-icon")</span></button>
 	</header>
 }
@@ -171,7 +226,7 @@ templ WorkSummary(items []store.Item) {
 	{{ running, steps, dur := WorkState(items) }}
 	<summary id={ "wsum-" + items[0].ID } class="work-head">
 		if running {
-			<span>Working…</span>
+			<span class="shimmer">Working…</span>
 		} else {
 			<span>Worked for { dur.Round(time.Second).String() }</span>
 		}
@@ -185,7 +240,7 @@ templ PromptQueue(d ThreadData) {
 	<div id="prompt-queue" class={ "prompt-queue", templ.KV("empty", len(d.Queued) == 0) }>
 		if len(d.Queued) > 0 {
 			<div class="queue-head">
-				<span>@Icon("list-end", "ui-icon") { fmt.Sprintf("%d %s queued", len(d.Queued), plural(len(d.Queued), "message", "messages")) }</span>
+				<span>@Icon("list-end", "ui-icon") <span>{ fmt.Sprintf("%d %s queued", len(d.Queued), plural(len(d.Queued), "message", "messages")) }</span></span>
 			</div>
 			<div class="queue-list">
 				for i, q := range d.Queued {
@@ -223,7 +278,7 @@ templ AttachButton() {
 // from the input, which is the source of truth; the strip hides when
 // $attach empties, so stale items never show.
 templ AttachStrip() {
-	<div class="attachments" data-show="$attach.length > 0">
+	<div class="attachments" data-show="$attach.length > 0" data-preserve-attr="style" style="display: none">
 		<div class="attach-thumbs"></div>
 	</div>
 }
@@ -242,10 +297,11 @@ templ Composer(d ThreadData) {
 		@PromptQueue(d)
 		<textarea
 			class="prompt"
-			rows="3"
+			rows="1"
 			placeholder={ promptPlaceholder(d) }
 			data-bind:prompt
-			data-on:keydown={ "evt.key === 'Enter' && !evt.shiftKey && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send'))" }
+			data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send'))" }
+			data-effect="$prompt; autoGrow(el)"
 			autocomplete="off"
 			spellcheck="false"
 		></textarea>
@@ -267,19 +323,22 @@ func promptPlaceholder(d ThreadData) string {
 		return "Answer the approval above, or queue a follow-up…"
 	}
 	if busy(d.Thread) {
-		return "Add a follow-up… (Enter queues it)"
+		return "Add a follow-up… (sent when this turn ends)"
 	}
 	if len(d.Items) == 0 {
 		return "Describe what " + d.Thread.Agent + " should do in " + d.Project.Name + "…"
 	}
-	return "Reply… (Enter to send, Shift+Enter for a newline)"
+	return "Reply…"
 }
 
+// sendTitle is the send button's tooltip. The key hint is only true on a
+// hardware keyboard (see sendKey in layout.templ), which is also the only
+// place a tooltip shows.
 func sendTitle(queued bool) string {
 	if queued {
-		return "Queue message (Enter)"
+		return "Queue message (Enter, or Ctrl+Enter)"
 	}
-	return "Send (Enter)"
+	return "Send (Enter, or Ctrl+Enter)"
 }
 
 func promptSummary(body string) string {

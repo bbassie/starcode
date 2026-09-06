@@ -12,27 +12,52 @@ import "fmt"
 
 // Page identifies what the SSE stream should render.
 type Page struct {
-	View        string // "home" | "thread" | "settings" | "usage"
+	View        string // "home" | "thread" | "settings" | "usage" | "providers"
 	ThreadID    string
 	Theme       string
 	UsageDays   int
 	UsageMetric string
+	ProviderSel string
+	ProviderTab string
+}
+
+// streamURL carries the asset version the page was served with, so a
+// stream that reconnects to a rebuilt server can tell the page to reload
+// instead of morphing new markup into old CSS.
+// streamOpen is the expression that opens the page's stream. The request
+// resolves when the stream ends, which is when streamEnded (layout script)
+// schedules the next one.
+func streamOpen(p Page) string {
+	return fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000}).then(() => streamEnded(), () => streamEnded())", p.streamURL())
 }
 
 func (p Page) streamURL() string {
-	if p.View == "thread" {
-		return fmt.Sprintf("/events?view=thread&id=%s", p.ThreadID)
+	url := "/events?view=home"
+	switch p.View {
+	case "thread":
+		url = fmt.Sprintf("/events?view=thread&id=%s", p.ThreadID)
+	case "settings":
+		url = "/events?view=settings"
+	case "providers":
+		url = fmt.Sprintf("/events?view=providers&sel=%s&tab=%s", p.ProviderSel, p.ProviderTab)
+	case "usage":
+		url = fmt.Sprintf("/events?view=usage&days=%d&metric=%s", p.UsageDays, p.UsageMetric)
 	}
-	if p.View == "settings" {
-		return "/events?view=settings"
-	}
-	if p.View == "usage" {
-		return fmt.Sprintf("/events?view=usage&days=%d&metric=%s", p.UsageDays, p.UsageMetric)
-	}
-	return "/events?view=home"
+	return url + "&v=" + assetVersion
 }
 
-func Layout(title string, p Page) templ.Component {
+// Parts are the regions the page handler renders into the document. A nil
+// part leaves a placeholder for the stream to fill.
+type Parts struct {
+	Sidebar templ.Component
+	Main    templ.Component
+	Git     templ.Component
+	Update  templ.Component
+	// Thread is the data behind Main on the thread view.
+	Thread *ThreadData
+}
+
+func Layout(title string, p Page, parts Parts) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -60,13 +85,26 @@ func Layout(title string, p Page) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.Theme)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 29, Col: 37}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 54, Col: 37}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var2)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\"><meta name=\"color-scheme\" content=\"dark light\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content\"><meta name=\"color-scheme\" content=\"dark light\"><meta name=\"theme-color\" content=\"#08090b\"><meta name=\"mobile-web-app-capable\" content=\"yes\"><meta name=\"apple-mobile-web-app-capable\" content=\"yes\"><meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black-translucent\"><meta name=\"apple-mobile-web-app-title\" content=\"starcode\"><link rel=\"manifest\" href=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var3 templ.SafeURL
+		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/manifest.webmanifest"))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 67, Col: 68}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -74,84 +112,71 @@ func Layout(title string, p Page) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<link rel=\"icon\" href=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var3 templ.SafeURL
-		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/favicon.svg"))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 35, Col: 55}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "\" type=\"image/svg+xml\"><link rel=\"stylesheet\" href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<link rel=\"icon\" href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var4 templ.SafeURL
-		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/app.css"))
+		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/favicon.svg"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 36, Col: 57}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 69, Col: 55}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\"><script type=\"module\" src=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\" type=\"image/svg+xml\"><link rel=\"stylesheet\" href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var5 string
-		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/datastar.js"))
+		var templ_7745c5c3_Var5 templ.SafeURL
+		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/app.css"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 37, Col: 59}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 70, Col: 57}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "\"></script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "\"><script type=\"module\" src=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var6 string
+		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/datastar.js"))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 71, Col: 59}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var6)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "\"></script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if p.View == "thread" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<link rel=\"stylesheet\" href=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<link rel=\"stylesheet\" href=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var6 templ.SafeURL
-			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/xterm.css"))
+			var templ_7745c5c3_Var7 templ.SafeURL
+			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinURLErrs(asset("/static/xterm.css"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 39, Col: 60}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 73, Col: 60}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "\"><script defer src=\"")
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var7 string
-			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm.js"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 40, Col: 49}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "\"></script> <script defer src=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "\"><script defer src=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var8 string
-			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm-addon-fit.js"))
+			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm.js"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 41, Col: 59}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 74, Col: 49}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 			if templ_7745c5c3_Err != nil {
@@ -162,48 +187,117 @@ func Layout(title string, p Page) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var9 string
-			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/term.js"))
+			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/xterm-addon-fit.js"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 42, Col: 48}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 75, Col: 59}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "\"></script>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "\"></script> <script defer src=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var10 string
+			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(asset("/static/term.js"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 76, Col: 48}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "\"></script>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</head><body data-signals=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var10 string
-		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], _hb: 0}`, p.View == "thread", p.Theme))
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 46, Col: 265}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\" data-attr:data-theme=\"$theme\" data-init=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</head><body data-signals=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var11 string
-		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000})", p.streamURL()))
+		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', _hb: 0}`, p.View == "thread", p.Theme))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 48, Col: 100}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 80, Col: 286}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "\"><div class=\"shell\"><aside id=\"sidebar\" data-class:open=\"$nav\"><div class=\"dim pad\">loading…</div></aside><div class=\"backdrop\" data-show=\"$nav || $git\" data-on:click=\"$nav = false; $git = false\"></div><div class=\"mid\"><main id=\"main\"><div class=\"dim pad\">connecting…</div></main>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "\" data-attr:data-theme=\"$theme\" data-init=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var12 string
+		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.ResolveAttributeValue(streamOpen(p))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 82, Col: 28}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "\" data-on:stream__window=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var13 string
+		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.ResolveAttributeValue(streamOpen(p))
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 83, Col: 41}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "\" data-effect=\"$_hb; streamAlive()\"><div class=\"shell\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if parts.Sidebar != nil {
+			templ_7745c5c3_Err = parts.Sidebar.Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<aside id=\"sidebar\" data-class:open=\"$nav\"><div class=\"dim pad\">loading…</div></aside>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		if section := settingsSection(p.View); section != "" {
+			templ_7745c5c3_Err = SettingsSidebar(section).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "<div class=\"backdrop\" data-show=\"$nav || $git\" data-preserve-attr=\"style\" style=\"display: none\" data-on:click=\"$nav = false; $git = false\"></div><div class=\"mid\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if parts.Update != nil {
+			templ_7745c5c3_Err = parts.Update.Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "<div id=\"update\"></div>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		if parts.Main != nil {
+			templ_7745c5c3_Err = parts.Main.Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<main id=\"main\"><div class=\"dim pad\">connecting…</div></main>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
 		}
 		if p.View == "thread" {
 			templ_7745c5c3_Err = TermPanel(p.ThreadID).Render(ctx, templ_7745c5c3_Buffer)
@@ -211,17 +305,50 @@ func Layout(title string, p Page) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "</div><aside id=\"gitpanel\" data-class:open=\"$git\"></aside></div><div id=\"toast\"></div><datalist id=\"project-paths\"></datalist><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst near = (m) => m.scrollHeight - m.scrollTop - m.clientHeight < 160;\n\t\t\t\t\tlet stick = true;\n\t\t\t\t\tdocument.addEventListener('scroll', (e) => {\n\t\t\t\t\t\tif (e.target && e.target.id === 'items') stick = near(e.target);\n\t\t\t\t\t}, true);\n\t\t\t\t\tnew MutationObserver(() => {\n\t\t\t\t\t\tconst m = document.getElementById('items');\n\t\t\t\t\t\tif (m && stick) m.scrollTop = m.scrollHeight;\n\t\t\t\t\t}).observe(document.body, { childList: true, subtree: true, characterData: true });\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst addFiles = (target, files) => {\n\t\t\t\t\t\tconst form = target instanceof Element && target.closest('form.composer');\n\t\t\t\t\t\tconst input = form && form.querySelector('input[type=file]');\n\t\t\t\t\t\tif (!input || !files.length) return false;\n\t\t\t\t\t\tconst merged = new DataTransfer();\n\t\t\t\t\t\tfor (const f of input.files) merged.items.add(f);\n\t\t\t\t\t\tfor (const f of files) merged.items.add(f);\n\t\t\t\t\t\tinput.files = merged.files;\n\t\t\t\t\t\tinput.dispatchEvent(new Event('change', { bubbles: true }));\n\t\t\t\t\t\treturn true;\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('paste', (e) => {\n\t\t\t\t\t\tif (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')\n\t\t\t\t\t\t\t&& e.clipboardData && addFiles(e.target, e.clipboardData.files)) e.preventDefault();\n\t\t\t\t\t});\n\t\t\t\t\t// The strip above the composer row: one removable item per\n\t\t\t\t\t// picked file, rebuilt from the input on every change\n\t\t\t\t\t// (picker, paste, and drop all end in one).\n\t\t\t\t\tconst removeFile = (input, index) => {\n\t\t\t\t\t\tconst kept = new DataTransfer();\n\t\t\t\t\t\t[...input.files].forEach((f, i) => { if (i !== index) kept.items.add(f); });\n\t\t\t\t\t\tinput.files = kept.files;\n\t\t\t\t\t\tinput.dispatchEvent(new Event('change', { bubbles: true }));\n\t\t\t\t\t};\n\t\t\t\t\tconst renderStrip = (input) => {\n\t\t\t\t\t\tconst box = input.closest('form.composer')?.querySelector('.attach-thumbs');\n\t\t\t\t\t\tif (!box) return;\n\t\t\t\t\t\tbox.replaceChildren(...[...input.files].map((f, i) => {\n\t\t\t\t\t\t\tconst item = document.createElement('div');\n\t\t\t\t\t\t\tif (f.type.startsWith('image/')) {\n\t\t\t\t\t\t\t\titem.className = 'attach-item';\n\t\t\t\t\t\t\t\tconst img = document.createElement('img');\n\t\t\t\t\t\t\t\timg.src = URL.createObjectURL(f);\n\t\t\t\t\t\t\t\timg.onload = () => URL.revokeObjectURL(img.src);\n\t\t\t\t\t\t\t\timg.alt = img.title = f.name;\n\t\t\t\t\t\t\t\titem.append(img);\n\t\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\t\titem.className = 'attach-item file';\n\t\t\t\t\t\t\t\titem.append(Object.assign(document.createElement('span'), { className: 'ellipsis', textContent: f.name }));\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tconst x = Object.assign(document.createElement('button'), {\n\t\t\t\t\t\t\t\ttype: 'button', className: 'attach-remove', title: 'Remove ' + f.name, textContent: '×',\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tx.addEventListener('click', () => removeFile(input, i));\n\t\t\t\t\t\t\titem.append(x);\n\t\t\t\t\t\t\treturn item;\n\t\t\t\t\t\t}));\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('change', (e) => {\n\t\t\t\t\t\tif (e.target instanceof HTMLInputElement && e.target.type === 'file') renderStrip(e.target);\n\t\t\t\t\t});\n\t\t\t\t\t// A morphed composer comes back with an empty strip while\n\t\t\t\t\t// the input still holds files; refill it.\n\t\t\t\t\tnew MutationObserver(() => {\n\t\t\t\t\t\tfor (const input of document.querySelectorAll('form.composer input[type=file]')) {\n\t\t\t\t\t\t\tconst box = input.closest('form.composer').querySelector('.attach-thumbs');\n\t\t\t\t\t\t\tif (box && !box.childElementCount && input.files.length) renderStrip(input);\n\t\t\t\t\t\t}\n\t\t\t\t\t}).observe(document.body, { childList: true, subtree: true });\n\t\t\t\t\tdocument.addEventListener('dragover', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (c && e.dataTransfer && e.dataTransfer.types.includes('Files')) {\n\t\t\t\t\t\t\te.preventDefault();\n\t\t\t\t\t\t\tc.classList.add('dropping');\n\t\t\t\t\t\t}\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('dragleave', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (c && !(e.relatedTarget instanceof Node && c.contains(e.relatedTarget))) c.classList.remove('dropping');\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('drop', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (!c) return;\n\t\t\t\t\t\tc.classList.remove('dropping');\n\t\t\t\t\t\tif (e.dataTransfer && addFiles(e.target, e.dataTransfer.files)) e.preventDefault();\n\t\t\t\t\t});\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tlet timer, controller;\n\t\t\t\t\tconst update = (input) => {\n\t\t\t\t\t\tclearTimeout(timer);\n\t\t\t\t\t\ttimer = setTimeout(async () => {\n\t\t\t\t\t\t\tcontroller?.abort();\n\t\t\t\t\t\t\tcontroller = new AbortController();\n\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\tconst response = await fetch('/api/project-paths?path=' + encodeURIComponent(input.value), { signal: controller.signal });\n\t\t\t\t\t\t\t\tif (!response.ok) return;\n\t\t\t\t\t\t\t\tconst paths = await response.json();\n\t\t\t\t\t\t\t\tconst list = document.getElementById('project-paths');\n\t\t\t\t\t\t\t\tlist.replaceChildren(...paths.map((path) => Object.assign(document.createElement('option'), { value: path })));\n\t\t\t\t\t\t\t} catch (error) {\n\t\t\t\t\t\t\t\tif (error.name !== 'AbortError') console.warn('project path completion failed', error);\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}, 100);\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('input', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('focusin', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t})();\n\t\t\t</script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "</div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if p.View == "usage" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "  <script>\n\t\t\t\t\t(() => {\n\t\t\t\t\t\tconst chartHit = (target) => target instanceof Element && target.closest('.usage-chart-hit');\n\t\t\t\t\t\tconst hide = (chart) => {\n\t\t\t\t\t\t\tif (!chart) return;\n\t\t\t\t\t\t\tconst cursor = chart.querySelector('.usage-chart-cursor');\n\t\t\t\t\t\t\tif (cursor) cursor.hidden = true;\n\t\t\t\t\t\t\tfor (const tip of chart.querySelectorAll('.usage-chart-tip')) tip.hidden = true;\n\t\t\t\t\t\t};\n\t\t\t\t\t\tconst hideAll = () => {\n\t\t\t\t\t\t\tfor (const chart of document.querySelectorAll('.usage-chart')) hide(chart);\n\t\t\t\t\t\t};\n\t\t\t\t\t\tconst show = (hit) => {\n\t\t\t\t\t\t\tconst chart = hit.closest('.usage-chart');\n\t\t\t\t\t\t\tif (!chart || !chart.clientWidth) return;\n\t\t\t\t\t\t\tconst index = hit.dataset.usageIndex;\n\t\t\t\t\t\t\tconst svgX = Number(hit.dataset.usageX);\n\t\t\t\t\t\t\tconst left = svgX / 800 * chart.clientWidth;\n\t\t\t\t\t\t\tconst cursor = chart.querySelector('.usage-chart-cursor');\n\t\t\t\t\t\t\tif (cursor) {\n\t\t\t\t\t\t\t\tcursor.style.left = left + 'px';\n\t\t\t\t\t\t\t\tcursor.hidden = false;\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tfor (const item of chart.querySelectorAll('.usage-chart-tip')) item.hidden = true;\n\t\t\t\t\t\t\tconst tip = [...chart.querySelectorAll('.usage-chart-tip')]\n\t\t\t\t\t\t\t\t.find((item) => item.dataset.usageTip === index);\n\t\t\t\t\t\t\tif (!tip) return;\n\t\t\t\t\t\t\ttip.hidden = false;\n\t\t\t\t\t\t\tconst half = tip.offsetWidth / 2 + 7;\n\t\t\t\t\t\t\ttip.style.left = Math.max(half, Math.min(chart.clientWidth - half, left)) + 'px';\n\t\t\t\t\t\t};\n\t\t\t\t\t\tdocument.addEventListener('pointerover', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit) show(hit);\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('pointerout', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (!hit) return;\n\t\t\t\t\t\t\tconst target = hit.closest('.usage-chart-target');\n\t\t\t\t\t\t\tif (!(event.relatedTarget instanceof Node && target.contains(event.relatedTarget))) {\n\t\t\t\t\t\t\t\thide(hit.closest('.usage-chart'));\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('focusin', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit) show(hit);\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('focusout', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit && !(event.relatedTarget instanceof Node && hit.closest('.usage-chart-target').contains(event.relatedTarget))) {\n\t\t\t\t\t\t\t\thide(hit.closest('.usage-chart'));\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('click', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit) show(hit);\n\t\t\t\t\t\t\telse hideAll();\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('keydown', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {\n\t\t\t\t\t\t\t\tconst hits = [...hit.closest('.usage-chart').querySelectorAll('.usage-chart-hit')];\n\t\t\t\t\t\t\t\tconst direction = event.key === 'ArrowLeft' ? -1 : 1;\n\t\t\t\t\t\t\t\tconst next = hits[Math.max(0, Math.min(hits.length - 1, hits.indexOf(hit) + direction))];\n\t\t\t\t\t\t\t\tnext?.focus();\n\t\t\t\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\t\t\t} else if (event.key === 'Escape') {\n\t\t\t\t\t\t\t\thideAll();\n\t\t\t\t\t\t\t\thit?.blur();\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t});\n\t\t\t\t\t})();\n\t\t\t\t</script>")
+		if parts.Git != nil {
+			templ_7745c5c3_Err = parts.Git.Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			var templ_7745c5c3_Var14 = []any{templ.KV("closed", p.View != "thread")}
+			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var14...)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "<aside id=\"gitpanel\" class=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var15 string
+			templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var14).String())
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 1, Col: 0}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var15)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "\" data-class:open=\"$git\" data-class:closed=\"!$git\"></aside>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "</body></html>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "</div><div id=\"toast\"></div><datalist id=\"project-paths\"></datalist><script>\n\t\t\t\t(() => {\n\t\t\t\t\tlet last = Date.now();\n\t\t\t\t\tlet wait = 1000;\n\t\t\t\t\tlet timer;\n\t\t\t\t\tconst reopen = () => {\n\t\t\t\t\t\tclearTimeout(timer);\n\t\t\t\t\t\ttimer = setTimeout(() => window.dispatchEvent(new Event('stream')), wait);\n\t\t\t\t\t};\n\t\t\t\t\twindow.streamAlive = () => {\n\t\t\t\t\t\tlast = Date.now();\n\t\t\t\t\t\twait = 1000;\n\t\t\t\t\t};\n\t\t\t\t\twindow.streamEnded = () => {\n\t\t\t\t\t\treopen();\n\t\t\t\t\t\twait = Math.min(wait * 2, 15000);\n\t\t\t\t\t};\n\t\t\t\t\tconst stale = (ms) => Date.now() - last > ms;\n\t\t\t\t\tsetInterval(() => { if (stale(45000)) { last = Date.now(); reopen(); } }, 5000);\n\t\t\t\t\tdocument.addEventListener('visibilitychange', () => {\n\t\t\t\t\t\tif (document.visibilityState === 'visible' && stale(25000)) { last = Date.now(); wait = 1000; reopen(); }\n\t\t\t\t\t});\n\t\t\t\t\twindow.addEventListener('online', () => { wait = 1000; reopen(); });\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst near = (m) => m.scrollHeight - m.scrollTop - m.clientHeight < 160;\n\t\t\t\t\tlet stick = true;\n\t\t\t\t\tconst track = (m) => {\n\t\t\t\t\t\tstick = near(m);\n\t\t\t\t\t\tdocument.body.classList.toggle('scrolled-up', !stick);\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('scroll', (e) => {\n\t\t\t\t\t\tif (e.target && e.target.id === 'items') track(e.target);\n\t\t\t\t\t}, true);\n\t\t\t\t\tnew MutationObserver(() => {\n\t\t\t\t\t\tconst m = document.getElementById('items');\n\t\t\t\t\t\tif (!m) return;\n\t\t\t\t\t\tif (stick) m.scrollTop = m.scrollHeight;\n\t\t\t\t\t\telse document.body.classList.toggle('scrolled-up', !near(m));\n\t\t\t\t\t}).observe(document.body, { childList: true, subtree: true, characterData: true });\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\twindow.sendKey = (evt) => evt.key === 'Enter' && !evt.isComposing\n\t\t\t\t\t&& (evt.ctrlKey || evt.metaKey || (!evt.shiftKey && !matchMedia('(pointer: coarse)').matches));\n\t\t\t\twindow.autoGrow = (el) => queueMicrotask(() => {\n\t\t\t\t\tel.style.height = 'auto';\n\t\t\t\t\tel.style.height = el.scrollHeight + 'px';\n\t\t\t\t});\n\t\t\t\tdocument.addEventListener('input', (e) => {\n\t\t\t\t\tif (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')) autoGrow(e.target);\n\t\t\t\t});\n\t\t\t</script><script>\n\t\t\t\tdocument.addEventListener('keydown', (e) => {\n\t\t\t\t\tconst t = e.target instanceof Element ? e.target : null;\n\t\t\t\t\tif (t && t.closest('#termpanel')) return;\n\t\t\t\t\tif (e.key === 'Escape') {\n\t\t\t\t\t\tif (document.querySelector('#sidebar.open, #gitpanel.open')) document.querySelector('.backdrop')?.click();\n\t\t\t\t\t\telse if (document.querySelector('.chip.open') && !(t && t.closest('.pick'))) document.body.click();\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tif (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1 || e.key === ' ') return;\n\t\t\t\t\tif (t && t.closest('button, a, summary, input, textarea, select, [contenteditable], [tabindex]')) return;\n\t\t\t\t\tdocument.querySelector('form.composer .prompt')?.focus();\n\t\t\t\t});\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst ago = (t) => {\n\t\t\t\t\t\tconst s = Math.max(0, (Date.now() - t) / 1000);\n\t\t\t\t\t\tif (s < 60) return 'now';\n\t\t\t\t\t\tif (s < 3600) return Math.floor(s / 60) + 'm';\n\t\t\t\t\t\tif (s < 86400) return Math.floor(s / 3600) + 'h';\n\t\t\t\t\t\tif (s < 14 * 86400) return Math.floor(s / 86400) + 'd';\n\t\t\t\t\t\treturn Math.floor(s / 7 / 86400) + 'w';\n\t\t\t\t\t};\n\t\t\t\t\tconst elapsed = (t) => {\n\t\t\t\t\t\tconst s = Math.max(0, Math.floor((Date.now() - t) / 1000));\n\t\t\t\t\t\treturn s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's';\n\t\t\t\t\t};\n\t\t\t\t\tconst words = ['Working', 'Thinking', 'Reading', 'Considering', 'Tinkering', 'Pondering', 'Mulling', 'Wrangling', 'Sifting', 'Brewing', 'Puzzling', 'Poking around'];\n\t\t\t\t\tlet tick = 0;\n\t\t\t\t\tsetInterval(() => {\n\t\t\t\t\t\ttick++;\n\t\t\t\t\t\tfor (const el of document.querySelectorAll('[data-since]')) el.textContent = elapsed(Date.parse(el.dataset.since));\n\t\t\t\t\t\tif (tick % 30 === 0) for (const el of document.querySelectorAll('[data-ago]')) el.textContent = ago(Date.parse(el.dataset.ago));\n\t\t\t\t\t\tif (tick % 4 === 0) for (const el of document.querySelectorAll('[data-busy-word]')) el.textContent = words[Math.floor(Math.random() * words.length)] + '…';\n\t\t\t\t\t}, 1000);\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst meta = document.querySelector('meta[name=\"theme-color\"]');\n\t\t\t\t\tconst apply = () => {\n\t\t\t\t\t\tconst bg = getComputedStyle(document.body).getPropertyValue('--bg').trim();\n\t\t\t\t\t\tif (bg) meta.content = bg;\n\t\t\t\t\t};\n\t\t\t\t\tapply();\n\t\t\t\t\tnew MutationObserver(apply).observe(document.body, { attributeFilter: ['data-theme'] });\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst phone = matchMedia('(max-width: 900px)');\n\t\t\t\t\tconst edge = 48;\n\t\t\t\t\tlet start = null;\n\t\t\t\t\tconst scrollsX = (el) => {\n\t\t\t\t\t\tfor (; el && el !== document.body; el = el.parentElement) {\n\t\t\t\t\t\t\tif (el.id === 'termpanel') return true;\n\t\t\t\t\t\t\tconst o = getComputedStyle(el).overflowX;\n\t\t\t\t\t\t\tif ((o === 'auto' || o === 'scroll') && el.scrollWidth > el.clientWidth + 1) return true;\n\t\t\t\t\t\t}\n\t\t\t\t\t\treturn false;\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('touchstart', (e) => {\n\t\t\t\t\t\tstart = null;\n\t\t\t\t\t\tif (!phone.matches || e.touches.length !== 1 || scrollsX(e.target)) return;\n\t\t\t\t\t\tconst t = e.touches[0];\n\t\t\t\t\t\tif (t.clientX < edge || t.clientX > innerWidth - edge) return;\n\t\t\t\t\t\tstart = { x: t.clientX, y: t.clientY, lastX: t.clientX, lastY: t.clientY, at: Date.now() };\n\t\t\t\t\t}, { passive: true });\n\t\t\t\t\t// touchend reports a stale point once the browser has turned the\n\t\t\t\t\t// gesture into a scroll, so the last move is tracked by hand.\n\t\t\t\t\tdocument.addEventListener('touchmove', (e) => {\n\t\t\t\t\t\tif (start) { start.lastX = e.touches[0].clientX; start.lastY = e.touches[0].clientY; }\n\t\t\t\t\t}, { passive: true });\n\t\t\t\t\tdocument.addEventListener('touchend', () => {\n\t\t\t\t\t\tconst s = start;\n\t\t\t\t\t\tstart = null;\n\t\t\t\t\t\tif (!s || Date.now() - s.at > 600) return;\n\t\t\t\t\t\tconst dx = s.lastX - s.x;\n\t\t\t\t\t\tconst dy = s.lastY - s.y;\n\t\t\t\t\t\tif (Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) * 0.6) return;\n\t\t\t\t\t\tconst press = (sel) => document.querySelector(sel)?.click();\n\t\t\t\t\t\tconst nav = document.getElementById('sidebar')?.classList.contains('open');\n\t\t\t\t\t\tconst git = document.getElementById('gitpanel')?.classList.contains('open');\n\t\t\t\t\t\tif (dx > 0) {\n\t\t\t\t\t\t\tif (git) press('.backdrop'); else if (!nav) press('.navtoggle');\n\t\t\t\t\t\t} else if (nav) press('.backdrop'); else if (!git) press('.gittoggle');\n\t\t\t\t\t}, { passive: true });\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\twindow.pickLabel = (el, value) => {\n\t\t\t\t\tconst menu = el.closest('.pick')?.querySelector('.pick-menu');\n\t\t\t\t\tconst opt = menu && [...menu.querySelectorAll('.opt[data-value]')].find((o) => o.dataset.value === String(value ?? ''));\n\t\t\t\t\tif (!opt) return value || '';\n\t\t\t\t\treturn opt.dataset.short || opt.querySelector('.opt-name')?.textContent.trim() || value;\n\t\t\t\t};\n\t\t\t\twindow.pickFocus = (el) => setTimeout(() => {\n\t\t\t\t\t// After a rail switch the open menu is another agent's, so\n\t\t\t\t\t// look for the one that is actually on screen.\n\t\t\t\t\tconst menu = [...el.closest('form').querySelectorAll('.pick-menu')].find((m) => m.getClientRects().length);\n\t\t\t\t\tif (!menu || matchMedia('(pointer: coarse)').matches) return;\n\t\t\t\t\t(menu.querySelector('input') || menu.querySelector('.opt.sel') || menu.querySelector('.opt'))?.focus();\n\t\t\t\t});\n\t\t\t\twindow.pickKey = (e, root) => {\n\t\t\t\t\tconst menu = root.querySelector('.pick-menu');\n\t\t\t\t\tif (!menu || getComputedStyle(menu).display === 'none') return false;\n\t\t\t\t\tif (e.key === 'Escape') {\n\t\t\t\t\t\te.preventDefault();\n\t\t\t\t\t\te.stopPropagation();\n\t\t\t\t\t\troot.querySelector('.chip')?.focus();\n\t\t\t\t\t\treturn true;\n\t\t\t\t\t}\n\t\t\t\t\tconst opts = [...menu.querySelectorAll('.opt')].filter((o) => getComputedStyle(o).display !== 'none');\n\t\t\t\t\tif (!opts.length) return false;\n\t\t\t\t\tif (e.key === 'ArrowDown' || e.key === 'ArrowUp') {\n\t\t\t\t\t\te.preventDefault();\n\t\t\t\t\t\tconst i = opts.indexOf(document.activeElement);\n\t\t\t\t\t\tconst n = e.key === 'ArrowDown' ? (i + 1) % opts.length : (i - 1 + opts.length) % opts.length;\n\t\t\t\t\t\topts[n].focus();\n\t\t\t\t\t\topts[n].scrollIntoView({ block: 'nearest' });\n\t\t\t\t\t} else if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {\n\t\t\t\t\t\te.preventDefault();\n\t\t\t\t\t\tif (e.target.value.trim()) opts[0].click();\n\t\t\t\t\t\telse return true;\n\t\t\t\t\t}\n\t\t\t\t\treturn false;\n\t\t\t\t};\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tconst addFiles = (target, files) => {\n\t\t\t\t\t\tconst form = target instanceof Element && target.closest('form.composer');\n\t\t\t\t\t\tconst input = form && form.querySelector('input[type=file]');\n\t\t\t\t\t\tif (!input || !files.length) return false;\n\t\t\t\t\t\tconst merged = new DataTransfer();\n\t\t\t\t\t\tfor (const f of input.files) merged.items.add(f);\n\t\t\t\t\t\tfor (const f of files) merged.items.add(f);\n\t\t\t\t\t\tinput.files = merged.files;\n\t\t\t\t\t\tinput.dispatchEvent(new Event('change', { bubbles: true }));\n\t\t\t\t\t\treturn true;\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('paste', (e) => {\n\t\t\t\t\t\tif (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')\n\t\t\t\t\t\t\t&& e.clipboardData && addFiles(e.target, e.clipboardData.files)) e.preventDefault();\n\t\t\t\t\t});\n\t\t\t\t\t// The strip above the composer row: one removable item per\n\t\t\t\t\t// picked file, rebuilt from the input on every change\n\t\t\t\t\t// (picker, paste, and drop all end in one).\n\t\t\t\t\tconst removeFile = (input, index) => {\n\t\t\t\t\t\tconst kept = new DataTransfer();\n\t\t\t\t\t\t[...input.files].forEach((f, i) => { if (i !== index) kept.items.add(f); });\n\t\t\t\t\t\tinput.files = kept.files;\n\t\t\t\t\t\tinput.dispatchEvent(new Event('change', { bubbles: true }));\n\t\t\t\t\t};\n\t\t\t\t\tconst renderStrip = (input) => {\n\t\t\t\t\t\tconst box = input.closest('form.composer')?.querySelector('.attach-thumbs');\n\t\t\t\t\t\tif (!box) return;\n\t\t\t\t\t\tbox.replaceChildren(...[...input.files].map((f, i) => {\n\t\t\t\t\t\t\tconst item = document.createElement('div');\n\t\t\t\t\t\t\tif (f.type.startsWith('image/')) {\n\t\t\t\t\t\t\t\titem.className = 'attach-item';\n\t\t\t\t\t\t\t\tconst img = document.createElement('img');\n\t\t\t\t\t\t\t\timg.src = URL.createObjectURL(f);\n\t\t\t\t\t\t\t\timg.onload = () => URL.revokeObjectURL(img.src);\n\t\t\t\t\t\t\t\timg.alt = img.title = f.name;\n\t\t\t\t\t\t\t\titem.append(img);\n\t\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\t\titem.className = 'attach-item file';\n\t\t\t\t\t\t\t\titem.append(Object.assign(document.createElement('span'), { className: 'ellipsis', textContent: f.name }));\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tconst x = Object.assign(document.createElement('button'), {\n\t\t\t\t\t\t\t\ttype: 'button', className: 'attach-remove', title: 'Remove ' + f.name, textContent: '×',\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tx.addEventListener('click', () => removeFile(input, i));\n\t\t\t\t\t\t\titem.append(x);\n\t\t\t\t\t\t\treturn item;\n\t\t\t\t\t\t}));\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('change', (e) => {\n\t\t\t\t\t\tif (e.target instanceof HTMLInputElement && e.target.type === 'file') renderStrip(e.target);\n\t\t\t\t\t});\n\t\t\t\t\t// A morphed composer comes back with an empty strip while\n\t\t\t\t\t// the input still holds files; refill it.\n\t\t\t\t\tnew MutationObserver(() => {\n\t\t\t\t\t\tfor (const input of document.querySelectorAll('form.composer input[type=file]')) {\n\t\t\t\t\t\t\tconst box = input.closest('form.composer').querySelector('.attach-thumbs');\n\t\t\t\t\t\t\tif (box && !box.childElementCount && input.files.length) renderStrip(input);\n\t\t\t\t\t\t}\n\t\t\t\t\t}).observe(document.body, { childList: true, subtree: true });\n\t\t\t\t\tdocument.addEventListener('dragover', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (c && e.dataTransfer && e.dataTransfer.types.includes('Files')) {\n\t\t\t\t\t\t\te.preventDefault();\n\t\t\t\t\t\t\tc.classList.add('dropping');\n\t\t\t\t\t\t}\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('dragleave', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (c && !(e.relatedTarget instanceof Node && c.contains(e.relatedTarget))) c.classList.remove('dropping');\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('drop', (e) => {\n\t\t\t\t\t\tconst c = e.target instanceof Element && e.target.closest('form.composer');\n\t\t\t\t\t\tif (!c) return;\n\t\t\t\t\t\tc.classList.remove('dropping');\n\t\t\t\t\t\tif (e.dataTransfer && addFiles(e.target, e.dataTransfer.files)) e.preventDefault();\n\t\t\t\t\t});\n\t\t\t\t})();\n\t\t\t</script><script>\n\t\t\t\t(() => {\n\t\t\t\t\tlet timer, controller;\n\t\t\t\t\tconst update = (input) => {\n\t\t\t\t\t\tclearTimeout(timer);\n\t\t\t\t\t\ttimer = setTimeout(async () => {\n\t\t\t\t\t\t\tcontroller?.abort();\n\t\t\t\t\t\t\tcontroller = new AbortController();\n\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\tconst response = await fetch('/api/project-paths?path=' + encodeURIComponent(input.value), { signal: controller.signal });\n\t\t\t\t\t\t\t\tif (!response.ok) return;\n\t\t\t\t\t\t\t\tconst paths = await response.json();\n\t\t\t\t\t\t\t\tconst list = document.getElementById('project-paths');\n\t\t\t\t\t\t\t\tlist.replaceChildren(...paths.map((path) => Object.assign(document.createElement('option'), { value: path })));\n\t\t\t\t\t\t\t} catch (error) {\n\t\t\t\t\t\t\t\tif (error.name !== 'AbortError') console.warn('project path completion failed', error);\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}, 100);\n\t\t\t\t\t};\n\t\t\t\t\tdocument.addEventListener('input', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t\tdocument.addEventListener('focusin', (event) => {\n\t\t\t\t\t\tif (event.target instanceof HTMLInputElement && event.target.classList.contains('project-path')) update(event.target);\n\t\t\t\t\t});\n\t\t\t\t})();\n\t\t\t</script>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if p.View == "usage" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "  <script>\n\t\t\t\t\t(() => {\n\t\t\t\t\t\tconst chartHit = (target) => target instanceof Element && target.closest('.usage-chart-hit');\n\t\t\t\t\t\tconst hide = (chart) => {\n\t\t\t\t\t\t\tif (!chart) return;\n\t\t\t\t\t\t\tconst cursor = chart.querySelector('.usage-chart-cursor');\n\t\t\t\t\t\t\tif (cursor) cursor.hidden = true;\n\t\t\t\t\t\t\tfor (const tip of chart.querySelectorAll('.usage-chart-tip')) tip.hidden = true;\n\t\t\t\t\t\t};\n\t\t\t\t\t\tconst hideAll = () => {\n\t\t\t\t\t\t\tfor (const chart of document.querySelectorAll('.usage-chart')) hide(chart);\n\t\t\t\t\t\t};\n\t\t\t\t\t\tconst show = (hit) => {\n\t\t\t\t\t\t\tconst chart = hit.closest('.usage-chart');\n\t\t\t\t\t\t\tif (!chart || !chart.clientWidth) return;\n\t\t\t\t\t\t\tconst index = hit.dataset.usageIndex;\n\t\t\t\t\t\t\tconst svgX = Number(hit.dataset.usageX);\n\t\t\t\t\t\t\tconst left = svgX / 800 * chart.clientWidth;\n\t\t\t\t\t\t\tconst cursor = chart.querySelector('.usage-chart-cursor');\n\t\t\t\t\t\t\tif (cursor) {\n\t\t\t\t\t\t\t\tcursor.style.left = left + 'px';\n\t\t\t\t\t\t\t\tcursor.hidden = false;\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tfor (const item of chart.querySelectorAll('.usage-chart-tip')) item.hidden = true;\n\t\t\t\t\t\t\tconst tip = [...chart.querySelectorAll('.usage-chart-tip')]\n\t\t\t\t\t\t\t\t.find((item) => item.dataset.usageTip === index);\n\t\t\t\t\t\t\tif (!tip) return;\n\t\t\t\t\t\t\ttip.hidden = false;\n\t\t\t\t\t\t\tconst half = tip.offsetWidth / 2 + 7;\n\t\t\t\t\t\t\ttip.style.left = Math.max(half, Math.min(chart.clientWidth - half, left)) + 'px';\n\t\t\t\t\t\t};\n\t\t\t\t\t\tdocument.addEventListener('pointerover', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit) show(hit);\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('pointerout', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (!hit) return;\n\t\t\t\t\t\t\tconst target = hit.closest('.usage-chart-target');\n\t\t\t\t\t\t\tif (!(event.relatedTarget instanceof Node && target.contains(event.relatedTarget))) {\n\t\t\t\t\t\t\t\thide(hit.closest('.usage-chart'));\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('focusin', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit) show(hit);\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('focusout', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit && !(event.relatedTarget instanceof Node && hit.closest('.usage-chart-target').contains(event.relatedTarget))) {\n\t\t\t\t\t\t\t\thide(hit.closest('.usage-chart'));\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('click', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit) show(hit);\n\t\t\t\t\t\t\telse hideAll();\n\t\t\t\t\t\t});\n\t\t\t\t\t\tdocument.addEventListener('keydown', (event) => {\n\t\t\t\t\t\t\tconst hit = chartHit(event.target);\n\t\t\t\t\t\t\tif (hit && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {\n\t\t\t\t\t\t\t\tconst hits = [...hit.closest('.usage-chart').querySelectorAll('.usage-chart-hit')];\n\t\t\t\t\t\t\t\tconst direction = event.key === 'ArrowLeft' ? -1 : 1;\n\t\t\t\t\t\t\t\tconst next = hits[Math.max(0, Math.min(hits.length - 1, hits.indexOf(hit) + direction))];\n\t\t\t\t\t\t\t\tnext?.focus();\n\t\t\t\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\t\t\t} else if (event.key === 'Escape') {\n\t\t\t\t\t\t\t\thideAll();\n\t\t\t\t\t\t\t\thit?.blur();\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t});\n\t\t\t\t\t})();\n\t\t\t\t</script>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "</body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -245,25 +372,25 @@ func PageTitle(title string) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var12 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var12 == nil {
-			templ_7745c5c3_Var12 = templ.NopComponent
+		templ_7745c5c3_Var16 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var16 == nil {
+			templ_7745c5c3_Var16 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "<title id=\"page-title\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<title id=\"page-title\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var13 string
-		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(title)
+		var templ_7745c5c3_Var17 string
+		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 274, Col: 31}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/layout.templ`, Line: 547, Col: 31}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, " · starcode</title>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, " · starcode</title>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

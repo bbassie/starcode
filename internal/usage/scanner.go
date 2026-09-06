@@ -55,8 +55,17 @@ type cachedFile struct {
 	entries []Entry
 }
 
+// Root is one transcript directory to scan: Agent is the starcode instance
+// the usage belongs to, Driver picks the file format ("claude" | "codex").
+type Root struct {
+	Agent  string
+	Driver string
+	Dir    string
+}
+
 type Scanner struct {
 	mu           sync.Mutex
+	roots        []Root
 	files        map[string]cachedFile
 	cacheDir     string
 	client       *http.Client
@@ -73,15 +82,31 @@ func New(cacheDir string) *Scanner {
 	return &Scanner{files: make(map[string]cachedFile), cacheDir: cacheDir, client: &http.Client{Timeout: 5 * time.Second}}
 }
 
+// SetRoots replaces the directories to scan. Two instances sharing a
+// directory (the built-in Claude and an added one without its own config
+// dir, say) count it once, under the first.
+func (s *Scanner) SetRoots(roots []Root) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.roots = nil
+	seen := map[string]bool{}
+	for _, r := range roots {
+		if r.Dir == "" || seen[r.Dir] {
+			continue
+		}
+		seen[r.Dir] = true
+		s.roots = append(s.roots, r)
+	}
+}
+
 func (s *Scanner) Read(ctx context.Context, since time.Time) (Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	rates, status := s.loadRates(ctx)
-	roots := s.transcriptRoots()
 	var entries []Entry
-	for agent, root := range roots {
-		files, err := transcriptFiles(root, since.Add(-transcriptMTimeSlack))
+	for _, root := range s.transcriptRoots() {
+		files, err := transcriptFiles(root.Dir, since.Add(-transcriptMTimeSlack))
 		if err != nil {
 			return Result{}, err
 		}
@@ -92,14 +117,17 @@ func (s *Scanner) Read(ctx context.Context, since time.Time) (Result, error) {
 			}
 			cached, ok := s.files[path]
 			if !ok || cached.size != info.Size() || !cached.modTime.Equal(info.ModTime()) {
-				parsed, err := parseTranscript(path, agent)
+				parsed, err := parseTranscript(path, root.Driver)
 				if err != nil {
 					continue
 				}
 				cached = cachedFile{size: info.Size(), modTime: info.ModTime(), entries: parsed}
 				s.files[path] = cached
 			}
-			entries = append(entries, cached.entries...)
+			for _, e := range cached.entries {
+				e.Agent = root.Agent
+				entries = append(entries, e)
+			}
 		}
 	}
 
@@ -130,23 +158,45 @@ func (s *Scanner) Read(ctx context.Context, since time.Time) (Result, error) {
 	return out, nil
 }
 
-func (s *Scanner) transcriptRoots() map[string]string {
+// transcriptRoots is what SetRoots gave, else the test overrides, else the
+// two CLIs' default homes.
+func (s *Scanner) transcriptRoots() []Root {
+	if len(s.roots) > 0 {
+		return s.roots
+	}
 	if s.claudeDir != "" || s.codexDir != "" {
-		return map[string]string{"claude": s.claudeDir, "codex": s.codexDir}
+		return []Root{{Agent: "claude", Driver: "claude", Dir: s.claudeDir}, {Agent: "codex", Driver: "codex", Dir: s.codexDir}}
 	}
+	return []Root{
+		{Agent: "claude", Driver: "claude", Dir: TranscriptDir("claude", "")},
+		{Agent: "codex", Driver: "codex", Dir: TranscriptDir("codex", "")},
+	}
+}
+
+// TranscriptDir is where a driver keeps its transcripts under configDir,
+// or under its default home (CLAUDE_CONFIG_DIR / CODEX_HOME, then
+// ~/.claude / ~/.codex) when configDir is empty.
+func TranscriptDir(driver, configDir string) string {
 	home, _ := os.UserHomeDir()
-	claudeHome := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
-	if claudeHome == "" {
-		claudeHome = filepath.Join(home, ".claude")
+	switch driver {
+	case "claude":
+		if configDir == "" {
+			configDir = strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
+		}
+		if configDir == "" {
+			configDir = filepath.Join(home, ".claude")
+		}
+		return filepath.Join(configDir, "projects")
+	case "codex":
+		if configDir == "" {
+			configDir = strings.TrimSpace(os.Getenv("CODEX_HOME"))
+		}
+		if configDir == "" {
+			configDir = filepath.Join(home, ".codex")
+		}
+		return filepath.Join(configDir, "sessions")
 	}
-	codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
-	if codexHome == "" {
-		codexHome = filepath.Join(home, ".codex")
-	}
-	return map[string]string{
-		"claude": filepath.Join(claudeHome, "projects"),
-		"codex":  filepath.Join(codexHome, "sessions"),
-	}
+	return ""
 }
 
 func transcriptFiles(root string, modifiedAfter time.Time) ([]string, error) {

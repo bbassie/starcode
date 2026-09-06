@@ -8,6 +8,7 @@ import (
 type HomeData struct {
 	Projects []store.Project
 	Threads  []store.Thread
+	Looks    map[string]AgentLook
 	Settings SettingsData
 }
 
@@ -32,24 +33,18 @@ templ Home(d HomeData) {
 					>
 						<textarea
 							class="prompt"
-							rows="3"
-							placeholder="Describe the task. Enter starts a new thread with this prompt; leave it empty to just open one."
+							rows="1"
+							placeholder="Describe the task. Sending starts a new thread with it; send nothing to just open one."
 							data-bind:prompt
-							data-on:keydown="evt.key === 'Enter' && !evt.shiftKey && (evt.preventDefault(), @post('/api/threads'))"
+							data-on:keydown="sendKey(evt) && (evt.preventDefault(), @post('/api/threads'))"
+							data-effect="$prompt; autoGrow(el)"
 							autocomplete="off"
 							spellcheck="false"
 						></textarea>
 						@AttachStrip()
 						<div class="composer-row">
 							@AttachButton()
-							<label class="chip" title="Project">
-								<span class="chip-icon">@Icon("folder", "ui-icon")</span>
-								<select data-bind:project>
-									for _, p := range d.Projects {
-										<option value={ p.ID }>{ p.Name }</option>
-									}
-								</select>
-							</label>
+							@ProjectPick(d.Projects)
 							@Chips(d.Settings, "", false, false)
 							<span class="spacer"></span>
 							<button class="btn round primary" type="submit" title="Start thread">@Icon("arrow-up", "ui-icon")</button>
@@ -74,7 +69,7 @@ templ Home(d HomeData) {
 							for _, t := range d.Threads {
 								if t.ProjectID == p.ID && n < 8 {
 									{{ n++ }}
-									@ThreadRow(t, p, false, false)
+									@ThreadRow(t, p, false, false, d.Looks[t.Agent])
 								}
 							}
 						</ul>
@@ -99,4 +94,30 @@ func FirstOr(xs []string, def string) string {
 		return xs[0]
 	}
 	return def
+}
+
+// ProjectPick is the home composer's project chip: the same menu as the
+// setting pickers, over the $project signal.
+templ ProjectPick(projects []store.Project) {
+	<div class="pick" data-on:click__outside="$pick == 'project' && !evt.target.closest('.pick') && ($pick = '')" data-on:keydown="pickKey(evt, el) && ($pick = '')">
+		<button type="button" class="chip" title="Project" data-on:click={ pickToggle("project") } data-class:open="$pick == 'project'">
+			<span class="chip-icon">@Icon("folder", "ui-icon")</span>
+			<span class="chip-label" data-text="pickLabel(el, $project)">{ projects[0].Name }</span>
+			@Icon("chevron-down", "ui-icon chip-caret")
+		</button>
+		<div class="pick-menu" data-show="$pick == 'project'" data-preserve-attr="style" style="display: none">
+			<div class="pick-list" role="listbox">
+				<div class="pick-head">Project</div>
+				for i, p := range projects {
+					<button type="button" class={ "opt", templ.KV("sel", i == 0) } role="option" data-value={ p.ID } data-class:sel={ "$project == " + jsq(p.ID) } data-on:click={ pickSet("project", p.ID, "") }>
+						<span class="opt-text">
+							<span class="opt-name"><span class="ellipsis">{ p.Name }</span></span>
+							<span class="opt-desc" title={ p.Path }>{ p.Path }</span>
+						</span>
+						@Icon("check", "ui-icon opt-check")
+					</button>
+				}
+			</div>
+		</div>
+	</div>
 }

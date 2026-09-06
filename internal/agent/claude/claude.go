@@ -53,6 +53,7 @@ const summaryLimit = 200
 // Agent starts Claude Code sessions.
 type Agent struct {
 	binary string
+	env    []string // extra KEY=VALUE pairs for every child
 	log    *slog.Logger
 }
 
@@ -65,6 +66,15 @@ func WithBinary(path string) Option {
 		if path != "" {
 			a.binary = path
 		}
+	}
+}
+
+// WithEnv adds KEY=VALUE pairs to every process this agent launches, after
+// the inherited environment. CLAUDE_CONFIG_DIR here also moves where the
+// adapter looks for the CLI's transcripts.
+func WithEnv(kv []string) Option {
+	return func(a *Agent) {
+		a.env = append(a.env, kv...)
 	}
 }
 
@@ -100,7 +110,7 @@ func (a *Agent) Capabilities(ctx context.Context) (agent.Capabilities, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, a.binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose")
-	cmd.Env = childEnv()
+	cmd.Env = childEnv(a.env)
 	cmd.Stdin = strings.NewReader(`{"type":"control_request","request_id":"init","request":{"subtype":"initialize"}}` + "\n")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -125,10 +135,11 @@ func (a *Agent) Capabilities(ctx context.Context) (agent.Capabilities, error) {
 				Error     string `json:"error"`
 				Response  struct {
 					Models []struct {
-						Value       string   `json:"value"`
-						DisplayName string   `json:"displayName"`
-						Description string   `json:"description"`
-						Efforts     []string `json:"supportedEffortLevels"`
+						Value         string   `json:"value"`
+						ResolvedModel string   `json:"resolvedModel"`
+						DisplayName   string   `json:"displayName"`
+						Description   string   `json:"description"`
+						Efforts       []string `json:"supportedEffortLevels"`
 					} `json:"models"`
 					CurrentPermissionMode string `json:"current_permission_mode"`
 				} `json:"response"`
@@ -140,11 +151,22 @@ func (a *Agent) Capabilities(ctx context.Context) (agent.Capabilities, error) {
 		if msg.Response.Subtype != "success" {
 			return caps, fmt.Errorf("claude: initialize: %s", msg.Response.Error)
 		}
+		listed := map[string]bool{}
 		for _, m := range msg.Response.Response.Models {
+			listed[strings.TrimSuffix(m.ResolvedModel, "[1m]")] = true
+			desc := m.Description
+			if m.ResolvedModel != "" && !strings.Contains(desc, m.ResolvedModel) {
+				desc = strings.TrimSpace(desc + " (" + m.ResolvedModel + ")")
+			}
 			caps.Models = append(caps.Models, agent.Model{
-				ID: m.Value, DisplayName: m.DisplayName, Description: m.Description,
+				ID: m.Value, DisplayName: versionedName(m.DisplayName, m.Description), Description: desc,
 				Default: m.Value == "default", Efforts: m.Efforts,
 			})
+		}
+		for _, m := range olderModels {
+			if !listed[m.ID] {
+				caps.Models = append(caps.Models, agent.Model{ID: m.ID, DisplayName: m.DisplayName, Description: m.Description, Group: "Older versions"})
+			}
 		}
 		break
 	}
@@ -166,6 +188,104 @@ func (a *Agent) Capabilities(ctx context.Context) (agent.Capabilities, error) {
 		{ID: "bypassPermissions", Label: "bypassPermissions (never ask)"},
 	}
 	return caps, nil
+}
+
+// olderModels are still-served models the CLI leaves out of its initialize
+// list, which only names the current generation by alias. Any of them (and
+// anything else the API accepts) can also be typed into the picker; this
+// list just saves looking the ids up. Entries whose id an alias already
+// resolves to are skipped.
+var olderModels = []agent.Model{
+	{ID: "claude-fable-5", DisplayName: "Fable 5", Description: "Fable 5 · Previous Fable release (claude-fable-5)"},
+	{ID: "claude-opus-4-8", DisplayName: "Opus 4.8", Description: "Opus 4.8 (claude-opus-4-8)"},
+	{ID: "claude-opus-4-7", DisplayName: "Opus 4.7", Description: "Opus 4.7 (claude-opus-4-7)"},
+	{ID: "claude-opus-4-6", DisplayName: "Opus 4.6", Description: "Opus 4.6 (claude-opus-4-6)"},
+	{ID: "claude-sonnet-4-6", DisplayName: "Sonnet 4.6", Description: "Sonnet 4.6 (claude-sonnet-4-6)"},
+}
+
+// versionedName puts the version on an alias label. The CLI names aliases
+// without one ("Fable", "Opus (1M context)") and keeps it in the
+// description ("Fable 5.1 · Most capable…", "Opus 5 with 1M context · …"),
+// so the label is taken from there when it starts with the same family
+// name. Labels that do not ("Default (recommended)") are kept.
+func versionedName(name, desc string) string {
+	head, _, _ := strings.Cut(desc, "·")
+	head = strings.TrimSpace(strings.Replace(head, " with 1M context", " (1M)", 1))
+	family, _, _ := strings.Cut(name, " ")
+	if family == "" || head == "" || !strings.HasPrefix(strings.ToLower(head), strings.ToLower(family)) {
+		return name
+	}
+	return head
+}
+
+// Provider reports the installed CLI: path, version and sign-in state.
+// `claude auth status --json` answers without touching the API, so an
+// expired OAuth session shows up here before a turn fails on it.
+func (a *Agent) Provider(ctx context.Context) (agent.ProviderInfo, error) {
+	info := agent.ProviderInfo{Package: "@anthropic-ai/claude-code", UpdateCommand: "claude update"}
+	path, err := exec.LookPath(a.binary)
+	if err != nil {
+		return info, err
+	}
+	info.Binary = path
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	out, err := cliOutput(ctx, a.binary, a.env, "--version")
+	if err != nil {
+		return info, fmt.Errorf("claude --version: %w", err)
+	}
+	// "2.1.261 (Claude Code)"
+	if f := strings.Fields(out); len(f) > 0 {
+		info.Version = f[0]
+	}
+	out, err = cliOutput(ctx, a.binary, a.env, "auth", "status", "--json")
+	var st struct {
+		LoggedIn         *bool  `json:"loggedIn"`
+		AuthMethod       string `json:"authMethod"`
+		Email            string `json:"email"`
+		SubscriptionType string `json:"subscriptionType"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &st); jsonErr == nil && st.LoggedIn != nil {
+		info.LoggedIn = st.LoggedIn
+		var parts []string
+		if st.Email != "" {
+			parts = append(parts, st.Email)
+		}
+		if st.SubscriptionType != "" {
+			parts = append(parts, st.SubscriptionType)
+		}
+		if st.AuthMethod != "" {
+			parts = append(parts, "via "+st.AuthMethod)
+		}
+		info.Account = strings.Join(parts, " · ")
+	} else if err != nil {
+		// Older CLIs have no `auth status`; report the version and leave
+		// the sign-in state unknown rather than failing the whole probe.
+		info.Account = "sign-in state unknown: " + firstLineOf(err.Error())
+	}
+	return info, nil
+}
+
+// cliOutput runs the CLI for a one-shot answer and returns its trimmed
+// stdout. A non-zero exit carries the stderr tail in the error.
+func cliOutput(ctx context.Context, binary string, env []string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Env = childEnv(env)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return strings.TrimSpace(string(out)), fmt.Errorf("%s", msg)
+		}
+		return strings.TrimSpace(string(out)), err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func firstLineOf(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }
 
 // Start spawns the CLI. The session lives until Close is called or ctx is
@@ -199,7 +319,7 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 	runCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(runCtx, a.binary, args...)
 	cmd.Dir = cfg.Cwd
-	cmd.Env = childEnv()
+	cmd.Env = childEnv(a.env)
 	// Cancel is what Close and a cancelled ctx trigger: ask nicely, then let
 	// os/exec send SIGKILL once WaitDelay expires.
 	cmd.Cancel = func() error {
@@ -227,7 +347,7 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 	s := &session{
 		log:    a.log.With("agent", "claude"),
 		cmd:    cmd,
-		config: claudeConfigDir(),
+		config: claudeConfigDir(a.env),
 		cancel: cancel,
 		stdin:  stdin,
 		stdout: stdout,
@@ -248,11 +368,11 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 }
 
 // childEnv is os.Environ minus the variables Claude Code sets for its own
-// children. Leaving them in place makes a nested launch think it is running
-// inside another Claude Code and refuse to start.
-func childEnv() []string {
+// children, plus extra. Leaving the former in place makes a nested launch
+// think it is running inside another Claude Code and refuse to start.
+func childEnv(extra []string) []string {
 	src := os.Environ()
-	out := make([]string, 0, len(src))
+	out := make([]string, 0, len(src)+len(extra))
 	for _, kv := range src {
 		name, _, _ := strings.Cut(kv, "=")
 		if name == "CLAUDECODE" || strings.HasPrefix(name, "CLAUDE_CODE_") {
@@ -260,10 +380,17 @@ func childEnv() []string {
 		}
 		out = append(out, kv)
 	}
-	return out
+	return append(out, extra...)
 }
 
-func claudeConfigDir() string {
+// claudeConfigDir is where this agent's CLI keeps its state: an extra
+// CLAUDE_CONFIG_DIR wins over the inherited one, then ~/.claude.
+func claudeConfigDir(extra []string) string {
+	for i := len(extra) - 1; i >= 0; i-- {
+		if v, ok := strings.CutPrefix(extra[i], "CLAUDE_CONFIG_DIR="); ok && strings.TrimSpace(v) != "" {
+			return filepath.Clean(strings.TrimSpace(v))
+		}
+	}
 	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
 		return filepath.Clean(dir)
 	}
@@ -281,39 +408,82 @@ func claudeConfigDir() string {
 // best-effort: a missing or changed internal format leaves Starcode's prompt
 // title in place.
 func persistedTitle(configDir, sessionID string) string {
+	return (&titleReader{}).read(configDir, sessionID)
+}
+
+// titleReader remembers how far into the transcript it has looked, so a
+// session that completes many turns reads each byte once instead of the
+// whole file (tens of megabytes on a long thread) after every turn. The
+// CLI only appends, and only whole lines count: the offset stops at the
+// last newline so a line still being written is read next time.
+type titleReader struct {
+	sessionID string
+	path      string
+	offset    int64
+	title     string
+}
+
+func (r *titleReader) read(configDir, sessionID string) string {
 	if configDir == "" || sessionID == "" || filepath.Base(sessionID) != sessionID || strings.ContainsAny(sessionID, "*?[") {
 		return ""
 	}
-	paths, err := filepath.Glob(filepath.Join(configDir, "projects", "*", sessionID+".jsonl"))
-	if err != nil {
-		return ""
+	if sessionID != r.sessionID {
+		*r = titleReader{sessionID: sessionID}
 	}
-	for _, path := range paths {
-		f, err := os.Open(path)
-		if err != nil {
+	if r.path == "" {
+		paths, err := filepath.Glob(filepath.Join(configDir, "projects", "*", sessionID+".jsonl"))
+		if err != nil || len(paths) == 0 {
+			return ""
+		}
+		r.path = paths[0]
+	}
+	f, err := os.Open(r.path)
+	if err != nil {
+		r.path = ""
+		return r.title
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || info.Size() < r.offset {
+		// Truncated or replaced: start over.
+		r.offset = 0
+	}
+	if _, err := f.Seek(r.offset, io.SeekStart); err != nil {
+		return r.title
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return r.title
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	consumed := 0
+	for i, raw := range lines {
+		if i == len(lines)-1 {
+			// No newline after this one yet. A record that already parses
+			// is complete (the CLI writes whole objects); anything else is
+			// still being written and is read next time.
+			if len(bytes.TrimSpace(raw)) == 0 || !json.Valid(raw) {
+				break
+			}
+			consumed += len(raw)
+		} else {
+			consumed += len(raw) + 1
+		}
+		if !bytes.Contains(raw, []byte(`"ai-title"`)) {
 			continue
 		}
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-		var title string
-		for scanner.Scan() {
-			var line struct {
-				Type      string `json:"type"`
-				AITitle   string `json:"aiTitle"`
-				SessionID string `json:"sessionId"`
-			}
-			if json.Unmarshal(scanner.Bytes(), &line) == nil && line.Type == "ai-title" && line.SessionID == sessionID {
-				if name := strings.TrimSpace(line.AITitle); name != "" {
-					title = name
-				}
-			}
+		var line struct {
+			Type      string `json:"type"`
+			AITitle   string `json:"aiTitle"`
+			SessionID string `json:"sessionId"`
 		}
-		f.Close()
-		if title != "" {
-			return title
+		if json.Unmarshal(raw, &line) == nil && line.Type == "ai-title" && line.SessionID == sessionID {
+			if name := strings.TrimSpace(line.AITitle); name != "" {
+				r.title = name
+			}
 		}
 	}
-	return ""
+	r.offset += int64(consumed)
+	return r.title
 }
 
 // session is one live CLI process.
@@ -335,7 +505,8 @@ type session struct {
 	// title is the last native ai-title surfaced to the app. Claude's public
 	// stream does not currently include it, so readLoop supplements the
 	// stream from the CLI's session transcript after a turn completes.
-	title string
+	title  string
+	titles titleReader
 
 	// emu orders sends on events against closing it.
 	emu      sync.Mutex
@@ -545,7 +716,7 @@ func (s *session) readLoop() {
 }
 
 func (s *session) emitPersistedTitle(sessionID string) error {
-	title := persistedTitle(s.config, sessionID)
+	title := s.titles.read(s.config, sessionID)
 	if title == "" || title == s.title {
 		return nil
 	}
@@ -696,6 +867,9 @@ func (st *state) endTurn() {
 	clear(st.streamedThinking)
 	clear(st.toolInputs)
 	clear(st.denied)
+	// A can_use_tool the turn never answered is dead with the turn; keeping
+	// it would let a later Resolve write a response nobody waits for.
+	clear(st.approvals)
 }
 
 // Wire shapes. Only the fields the adapter uses are declared.

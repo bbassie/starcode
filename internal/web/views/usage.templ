@@ -18,7 +18,9 @@ type UsagePoint struct {
 
 type UsageGroup struct {
 	Name                string
-	Agent               string
+	Agent               string // instance name
+	Driver              string // picks the default colour
+	Color               string // the instance's tag colour, when set
 	Turns               int
 	Threads             int
 	CostUSD             float64
@@ -31,7 +33,21 @@ type UsageGroup struct {
 type UsageSeries struct {
 	Name   string
 	Agent  string
+	Driver string
+	Color  string
 	Points []UsagePoint
+}
+
+// seriesStyle overrides the driver colour with the instance's own, so two
+// instances of one driver stay apart on the chart.
+func seriesStyle(prop, color string) string {
+	if color == "" {
+		return ""
+	}
+	if prop == "fill-area" {
+		return "fill: color-mix(in srgb, " + color + " 11%, transparent)"
+	}
+	return prop + ": " + color
 }
 
 type UsageData struct {
@@ -241,13 +257,9 @@ func usageBucketAria(d UsageData, index int) string {
 	return out.String()
 }
 
-templ AgentMark(agent string) {
-	<span class={ "usage-agent-mark", "agent-" + agent }>
-		if agent == "claude" {
-			@Icon("sparkles", "ui-icon")
-		} else {
-			@Icon("bot", "ui-icon")
-		}
+templ AgentMark(agent string, color string) {
+	<span class={ "usage-agent-mark", "agent-" + agent } style={ seriesStyle("color", color) }>
+		@Brand(agent, "ui-icon")
 	</span>
 }
 
@@ -287,7 +299,7 @@ templ UsagePage(d UsageData) {
 							<ul class="usage-agents">
 								for _, group := range d.Agents {
 									<li>
-										@AgentMark(group.Agent)
+										@AgentMark(group.Driver, group.Color)
 										<span>{ group.Name } <small class="dim">{ fmt.Sprintf("%d sessions", group.Threads) }</small></span>
 										<strong>{ formatTokens(usageGroupTokens(group)) }</strong>
 										<small class="dim">{ formatCost(group.CostUSD) }</small>
@@ -300,7 +312,7 @@ templ UsagePage(d UsageData) {
 								<h2>Daily { d.Metric }</h2>
 								<div class="usage-chart-legend">
 									for _, series := range d.Series {
-										<span><i class={ "agent-" + series.Agent }></i>{ series.Name }</span>
+										<span><i class={ "agent-" + series.Driver } style={ seriesStyle("background", series.Color) }></i>{ series.Name }</span>
 									}
 								</div>
 							</header>
@@ -310,10 +322,10 @@ templ UsagePage(d UsageData) {
 									<line x1="48" y1="130" x2="772" y2="130" class="chart-grid"></line>
 									<line x1="48" y1="222" x2="772" y2="222" class="chart-grid"></line>
 									for _, series := range d.Series {
-										<path d={ usageAreaPath(series.Points, d.Metric, chartMax) } class={ "chart-area", "agent-" + series.Agent }></path>
+										<path d={ usageAreaPath(series.Points, d.Metric, chartMax) } class={ "chart-area", "agent-" + series.Driver } style={ seriesStyle("fill-area", series.Color) }></path>
 									}
 									for _, series := range d.Series {
-										<path d={ usageChartPath(series.Points, d.Metric, chartMax) } class={ "chart-line", "agent-" + series.Agent }></path>
+										<path d={ usageChartPath(series.Points, d.Metric, chartMax) } class={ "chart-line", "agent-" + series.Driver } style={ seriesStyle("stroke", series.Color) }></path>
 									}
 									for i := range d.Daily {
 										{{ hitX, hitWidth := usageChartHitBounds(i, len(d.Daily)) }}
@@ -335,7 +347,8 @@ templ UsagePage(d UsageData) {
 														cx={ fmt.Sprintf("%.1f", usageChartX(i, len(d.Daily))) }
 														cy={ fmt.Sprintf("%.1f", usageChartY(series.Points[i], d.Metric, chartMax)) }
 														r="3.5"
-														class={ "chart-point", "agent-" + series.Agent }
+														class={ "chart-point", "agent-" + series.Driver }
+														style={ seriesStyle("fill", series.Color) }
 													></circle>
 												}
 											}
@@ -349,7 +362,7 @@ templ UsagePage(d UsageData) {
 										for _, series := range d.Series {
 											if i < len(series.Points) {
 												<span class="usage-tip-row">
-													<i class={ "agent-" + series.Agent }></i>
+													<i class={ "agent-" + series.Driver } style={ seriesStyle("background", series.Color) }></i>
 													<span>{ series.Name }</span>
 													<b>{ usageMetricValue(series.Points[i], d.Metric) }</b>
 												</span>
@@ -382,7 +395,7 @@ templ UsagePage(d UsageData) {
 								<tbody>
 									for _, group := range d.Models {
 										<tr>
-											<td><span class="usage-model"><span>@AgentMark(group.Agent)</span>{ group.Name }</span></td>
+											<td><span class="usage-model"><span>@AgentMark(group.Driver, group.Color)</span>{ group.Name }</span></td>
 											<td>{ formatCost(group.CostUSD) }</td>
 											<td class="dim">{ formatShare(group, d) }</td>
 											<td class="dim">{ formatTokens(usageGroupTokens(group)) }</td>

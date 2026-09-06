@@ -183,6 +183,9 @@ type Model struct {
 	// Efforts lists the reasoning effort levels this model accepts, when the
 	// agent knows them per model. Empty means "use the agent-wide list".
 	Efforts []string
+	// Group puts the model under a labelled heading in the picker. Empty
+	// means the main list.
+	Group string
 }
 
 // Choice is one selectable value of a thread setting.
@@ -204,4 +207,27 @@ type Capabilities struct {
 // Describer is implemented by agents that can report their Capabilities.
 type Describer interface {
 	Capabilities(ctx context.Context) (Capabilities, error)
+}
+
+// ProviderInfo describes the installed CLI behind an agent: where it is,
+// which version, and whether it is signed in. Version and login checks
+// shell out, so callers cache the answer.
+type ProviderInfo struct {
+	Binary  string // resolved executable path
+	Version string
+	// LoggedIn is nil when the CLI could not say.
+	LoggedIn *bool
+	// Account is who is signed in, in the CLI's own words ("Logged in using
+	// ChatGPT", an email), when known.
+	Account string
+	// Package is the npm package whose releases track this CLI; empty when
+	// there is nothing to compare against.
+	Package string
+	// UpdateCommand is what to run to move to the latest release.
+	UpdateCommand string
+}
+
+// Prober is implemented by agents that can report on their installation.
+type Prober interface {
+	Provider(ctx context.Context) (ProviderInfo, error)
 }

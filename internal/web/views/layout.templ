@@ -4,33 +4,67 @@ import "fmt"
 
 // Page identifies what the SSE stream should render.
 type Page struct {
-	View        string // "home" | "thread" | "settings" | "usage"
+	View        string // "home" | "thread" | "settings" | "usage" | "providers"
 	ThreadID    string
 	Theme       string
 	UsageDays   int
 	UsageMetric string
+	ProviderSel string
+	ProviderTab string
+}
+
+// streamURL carries the asset version the page was served with, so a
+// stream that reconnects to a rebuilt server can tell the page to reload
+// instead of morphing new markup into old CSS.
+// streamOpen is the expression that opens the page's stream. The request
+// resolves when the stream ends, which is when streamEnded (layout script)
+// schedules the next one.
+func streamOpen(p Page) string {
+	return fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000}).then(() => streamEnded(), () => streamEnded())", p.streamURL())
 }
 
 func (p Page) streamURL() string {
-	if p.View == "thread" {
-		return fmt.Sprintf("/events?view=thread&id=%s", p.ThreadID)
+	url := "/events?view=home"
+	switch p.View {
+	case "thread":
+		url = fmt.Sprintf("/events?view=thread&id=%s", p.ThreadID)
+	case "settings":
+		url = "/events?view=settings"
+	case "providers":
+		url = fmt.Sprintf("/events?view=providers&sel=%s&tab=%s", p.ProviderSel, p.ProviderTab)
+	case "usage":
+		url = fmt.Sprintf("/events?view=usage&days=%d&metric=%s", p.UsageDays, p.UsageMetric)
 	}
-	if p.View == "settings" {
-		return "/events?view=settings"
-	}
-	if p.View == "usage" {
-		return fmt.Sprintf("/events?view=usage&days=%d&metric=%s", p.UsageDays, p.UsageMetric)
-	}
-	return "/events?view=home"
+	return url + "&v=" + assetVersion
 }
 
-templ Layout(title string, p Page) {
+// Parts are the regions the page handler renders into the document. A nil
+// part leaves a placeholder for the stream to fill.
+type Parts struct {
+	Sidebar templ.Component
+	Main    templ.Component
+	Git     templ.Component
+	Update  templ.Component
+	// Thread is the data behind Main on the thread view.
+	Thread *ThreadData
+}
+
+templ Layout(title string, p Page, parts Parts) {
 	<!DOCTYPE html>
 	<html lang="en" data-theme={ p.Theme }>
 		<head>
 			<meta charset="utf-8"/>
-			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"/>
 			<meta name="color-scheme" content="dark light"/>
+			// Installable from a phone's "add to home screen": the manifest
+			// asks for a standalone window and the theme-color script below
+			// keeps the system bars in the current theme's background.
+			<meta name="theme-color" content="#08090b"/>
+			<meta name="mobile-web-app-capable" content="yes"/>
+			<meta name="apple-mobile-web-app-capable" content="yes"/>
+			<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+			<meta name="apple-mobile-web-app-title" content="starcode"/>
+			<link rel="manifest" href={ asset("/static/manifest.webmanifest") }/>
 			@PageTitle(title)
 			<link rel="icon" href={ asset("/static/favicon.svg") } type="image/svg+xml"/>
 			<link rel="stylesheet" href={ asset("/static/app.css") }/>
@@ -43,41 +77,280 @@ templ Layout(title string, p Page) {
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], _hb: 0}`, p.View == "thread", p.Theme) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: '', path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', _hb: 0}`, p.View == "thread", p.Theme) }
 			data-attr:data-theme="$theme"
-			data-init={ fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000})", p.streamURL()) }
+			data-init={ streamOpen(p) }
+			data-on:stream__window={ streamOpen(p) }
+			data-effect="$_hb; streamAlive()"
 		>
 			<div class="shell">
-				<aside id="sidebar" data-class:open="$nav">
-					<div class="dim pad">loading…</div>
-				</aside>
-				<div class="backdrop" data-show="$nav || $git" data-on:click="$nav = false; $git = false"></div>
+				if parts.Sidebar != nil {
+					@parts.Sidebar
+				} else {
+					<aside id="sidebar" data-class:open="$nav">
+						<div class="dim pad">loading…</div>
+					</aside>
+				}
+				if section := settingsSection(p.View); section != "" {
+					@SettingsSidebar(section)
+				}
+				<div class="backdrop" data-show="$nav || $git" data-preserve-attr="style" style="display: none" data-on:click="$nav = false; $git = false"></div>
 				<div class="mid">
-					<main id="main">
-						<div class="dim pad">connecting…</div>
-					</main>
+					if parts.Update != nil {
+						@parts.Update
+					} else {
+						<div id="update"></div>
+					}
+					if parts.Main != nil {
+						@parts.Main
+					} else {
+						<main id="main">
+							<div class="dim pad">connecting…</div>
+						</main>
+					}
 					if p.View == "thread" {
 						@TermPanel(p.ThreadID)
 					}
 				</div>
-				<aside id="gitpanel" data-class:open="$git"></aside>
+				if parts.Git != nil {
+					@parts.Git
+				} else {
+					<aside id="gitpanel" class={ templ.KV("closed", p.View != "thread") } data-class:open="$git" data-class:closed="!$git"></aside>
+				}
 			</div>
 			<div id="toast"></div>
 			<datalist id="project-paths"></datalist>
+			// Stream keepalive. Datastar retries a stream that fails, but one
+			// that ends cleanly (starcode restarted, a proxy timed out, a
+			// phone came back from the background) just stops, and the page
+			// goes stale. streamEnded reopens it when the request finishes;
+			// the watchdog reopens it when heartbeats (_hb, every 20s) stop
+			// or the tab becomes visible after a long gap. Reopening fires
+			// the "stream" event handled on <body>.
+			<script>
+				(() => {
+					let last = Date.now();
+					let wait = 1000;
+					let timer;
+					const reopen = () => {
+						clearTimeout(timer);
+						timer = setTimeout(() => window.dispatchEvent(new Event('stream')), wait);
+					};
+					window.streamAlive = () => {
+						last = Date.now();
+						wait = 1000;
+					};
+					window.streamEnded = () => {
+						reopen();
+						wait = Math.min(wait * 2, 15000);
+					};
+					const stale = (ms) => Date.now() - last > ms;
+					setInterval(() => { if (stale(45000)) { last = Date.now(); reopen(); } }, 5000);
+					document.addEventListener('visibilitychange', () => {
+						if (document.visibilityState === 'visible' && stale(25000)) { last = Date.now(); wait = 1000; reopen(); }
+					});
+					window.addEventListener('online', () => { wait = 1000; reopen(); });
+				})();
+			</script>
 			// Keep the transcript pinned to the bottom while it streams, but
-			// only if the reader has not scrolled up to look at something.
+			// only if the reader has not scrolled up to look at something. The
+			// body class shows the "jump to latest" button while they are.
 			<script>
 				(() => {
 					const near = (m) => m.scrollHeight - m.scrollTop - m.clientHeight < 160;
 					let stick = true;
+					const track = (m) => {
+						stick = near(m);
+						document.body.classList.toggle('scrolled-up', !stick);
+					};
 					document.addEventListener('scroll', (e) => {
-						if (e.target && e.target.id === 'items') stick = near(e.target);
+						if (e.target && e.target.id === 'items') track(e.target);
 					}, true);
 					new MutationObserver(() => {
 						const m = document.getElementById('items');
-						if (m && stick) m.scrollTop = m.scrollHeight;
+						if (!m) return;
+						if (stick) m.scrollTop = m.scrollHeight;
+						else document.body.classList.toggle('scrolled-up', !near(m));
 					}).observe(document.body, { childList: true, subtree: true, characterData: true });
 				})();
+			</script>
+			// Composer helpers shared by the thread and home pages.
+			// sendKey: Enter sends on a hardware keyboard, Shift+Enter breaks
+			// the line. On a touch screen Enter is the only way to get a
+			// newline, so there it breaks the line and the send button (or
+			// Ctrl/Cmd+Enter, on a paired keyboard) sends. Enter pressed to
+			// pick an IME candidate never sends.
+			// autoGrow: the prompt box follows its text up to the CSS
+			// max-height; runs on input and, through data-effect, when the
+			// signal is cleared after a send.
+			<script>
+				window.sendKey = (evt) => evt.key === 'Enter' && !evt.isComposing
+					&& (evt.ctrlKey || evt.metaKey || (!evt.shiftKey && !matchMedia('(pointer: coarse)').matches));
+				window.autoGrow = (el) => queueMicrotask(() => {
+					el.style.height = 'auto';
+					el.style.height = el.scrollHeight + 'px';
+				});
+				document.addEventListener('input', (e) => {
+					if (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')) autoGrow(e.target);
+				});
+			</script>
+			// Keyboard: Escape closes an open side panel or setting menu; a
+			// printable key pressed with nothing focused goes to the
+			// composer. Keys on a focused control (Space on a button, arrows
+			// in a select) and everything inside the terminal are left
+			// alone. A menu whose own keydown handler saw the Escape has
+			// closed already; one that lost focus closes through a click on
+			// the body, which its outside-click handler answers.
+			<script>
+				document.addEventListener('keydown', (e) => {
+					const t = e.target instanceof Element ? e.target : null;
+					if (t && t.closest('#termpanel')) return;
+					if (e.key === 'Escape') {
+						if (document.querySelector('#sidebar.open, #gitpanel.open')) document.querySelector('.backdrop')?.click();
+						else if (document.querySelector('.chip.open') && !(t && t.closest('.pick'))) document.body.click();
+						return;
+					}
+					if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1 || e.key === ' ') return;
+					if (t && t.closest('button, a, summary, input, textarea, select, [contenteditable], [tabindex]')) return;
+					document.querySelector('form.composer .prompt')?.focus();
+				});
+			</script>
+			// Clock: relative ages in thread rows ([data-ago], same rules as
+			// views.ago) and the busy row's elapsed time tick without a
+			// server round trip; the busy word changes every few seconds.
+			<script>
+				(() => {
+					const ago = (t) => {
+						const s = Math.max(0, (Date.now() - t) / 1000);
+						if (s < 60) return 'now';
+						if (s < 3600) return Math.floor(s / 60) + 'm';
+						if (s < 86400) return Math.floor(s / 3600) + 'h';
+						if (s < 14 * 86400) return Math.floor(s / 86400) + 'd';
+						return Math.floor(s / 7 / 86400) + 'w';
+					};
+					const elapsed = (t) => {
+						const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+						return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's';
+					};
+					const words = ['Working', 'Thinking', 'Reading', 'Considering', 'Tinkering', 'Pondering', 'Mulling', 'Wrangling', 'Sifting', 'Brewing', 'Puzzling', 'Poking around'];
+					let tick = 0;
+					setInterval(() => {
+						tick++;
+						for (const el of document.querySelectorAll('[data-since]')) el.textContent = elapsed(Date.parse(el.dataset.since));
+						if (tick % 30 === 0) for (const el of document.querySelectorAll('[data-ago]')) el.textContent = ago(Date.parse(el.dataset.ago));
+						if (tick % 4 === 0) for (const el of document.querySelectorAll('[data-busy-word]')) el.textContent = words[Math.floor(Math.random() * words.length)] + '…';
+					}, 1000);
+				})();
+			</script>
+			// theme-color follows the theme: the phone's status and address
+			// bars take the page background instead of a fixed colour.
+			<script>
+				(() => {
+					const meta = document.querySelector('meta[name="theme-color"]');
+					const apply = () => {
+						const bg = getComputedStyle(document.body).getPropertyValue('--bg').trim();
+						if (bg) meta.content = bg;
+					};
+					apply();
+					new MutationObserver(apply).observe(document.body, { attributeFilter: ['data-theme'] });
+				})();
+			</script>
+			// Phone swipes: right opens the thread list (or closes the changes
+			// panel), left closes it (or opens the changes panel). A swipe that
+			// starts on something that scrolls sideways, or in the terminal, is
+			// left to that element, and one that starts at a screen edge is the
+			// phone's own back/forward gesture, so it is ignored rather than
+			// fought over. Panels are driven through their own buttons so the
+			// Datastar signals stay the single source of truth.
+			<script>
+				(() => {
+					const phone = matchMedia('(max-width: 900px)');
+					const edge = 48;
+					let start = null;
+					const scrollsX = (el) => {
+						for (; el && el !== document.body; el = el.parentElement) {
+							if (el.id === 'termpanel') return true;
+							const o = getComputedStyle(el).overflowX;
+							if ((o === 'auto' || o === 'scroll') && el.scrollWidth > el.clientWidth + 1) return true;
+						}
+						return false;
+					};
+					document.addEventListener('touchstart', (e) => {
+						start = null;
+						if (!phone.matches || e.touches.length !== 1 || scrollsX(e.target)) return;
+						const t = e.touches[0];
+						if (t.clientX < edge || t.clientX > innerWidth - edge) return;
+						start = { x: t.clientX, y: t.clientY, lastX: t.clientX, lastY: t.clientY, at: Date.now() };
+					}, { passive: true });
+					// touchend reports a stale point once the browser has turned the
+					// gesture into a scroll, so the last move is tracked by hand.
+					document.addEventListener('touchmove', (e) => {
+						if (start) { start.lastX = e.touches[0].clientX; start.lastY = e.touches[0].clientY; }
+					}, { passive: true });
+					document.addEventListener('touchend', () => {
+						const s = start;
+						start = null;
+						if (!s || Date.now() - s.at > 600) return;
+						const dx = s.lastX - s.x;
+						const dy = s.lastY - s.y;
+						if (Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
+						const press = (sel) => document.querySelector(sel)?.click();
+						const nav = document.getElementById('sidebar')?.classList.contains('open');
+						const git = document.getElementById('gitpanel')?.classList.contains('open');
+						if (dx > 0) {
+							if (git) press('.backdrop'); else if (!nav) press('.navtoggle');
+						} else if (nav) press('.backdrop'); else if (!git) press('.gittoggle');
+					}, { passive: true });
+				})();
+			</script>
+			// Setting pickers (views.Chips). A pick is a chip button plus a
+			// menu of .opt buttons; the open one is named by the pick signal.
+			// pickLabel gives the chip the text of the row whose value the
+			// signal holds (its data-short when set), or the raw value for
+			// an id typed in by hand, so the home composer needs no round
+			// trip. pickFocus lands in the search box on a keyboard machine
+			// and nowhere on a phone, where that would raise the keyboard.
+			// pickKey moves through the visible rows with the arrow keys,
+			// picks the first match on Enter in the search box, and answers
+			// true for Escape so the caller can close the menu.
+			<script>
+				window.pickLabel = (el, value) => {
+					const menu = el.closest('.pick')?.querySelector('.pick-menu');
+					const opt = menu && [...menu.querySelectorAll('.opt[data-value]')].find((o) => o.dataset.value === String(value ?? ''));
+					if (!opt) return value || '';
+					return opt.dataset.short || opt.querySelector('.opt-name')?.textContent.trim() || value;
+				};
+				window.pickFocus = (el) => setTimeout(() => {
+					// After a rail switch the open menu is another agent's, so
+					// look for the one that is actually on screen.
+					const menu = [...el.closest('form').querySelectorAll('.pick-menu')].find((m) => m.getClientRects().length);
+					if (!menu || matchMedia('(pointer: coarse)').matches) return;
+					(menu.querySelector('input') || menu.querySelector('.opt.sel') || menu.querySelector('.opt'))?.focus();
+				});
+				window.pickKey = (e, root) => {
+					const menu = root.querySelector('.pick-menu');
+					if (!menu || getComputedStyle(menu).display === 'none') return false;
+					if (e.key === 'Escape') {
+						e.preventDefault();
+						e.stopPropagation();
+						root.querySelector('.chip')?.focus();
+						return true;
+					}
+					const opts = [...menu.querySelectorAll('.opt')].filter((o) => getComputedStyle(o).display !== 'none');
+					if (!opts.length) return false;
+					if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+						e.preventDefault();
+						const i = opts.indexOf(document.activeElement);
+						const n = e.key === 'ArrowDown' ? (i + 1) % opts.length : (i - 1 + opts.length) % opts.length;
+						opts[n].focus();
+						opts[n].scrollIntoView({ block: 'nearest' });
+					} else if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
+						e.preventDefault();
+						if (e.target.value.trim()) opts[0].click();
+						else return true;
+					}
+					return false;
+				};
 			</script>
 			// Pasting or dropping files on a composer adds them to its attach
 			// input (merged with what is already picked) and fires a change

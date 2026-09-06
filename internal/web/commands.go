@@ -39,6 +39,10 @@ func (s *Server) readSignals(r *http.Request) signals {
 	return sig
 }
 
+func newSSE(w http.ResponseWriter, r *http.Request) *datastar.ServerSentEventGenerator {
+	return datastar.NewSSE(w, r)
+}
+
 // ok answers a command that has nothing to say: an empty event stream, which
 // Datastar closes cleanly (a bare 204 makes it abort the fetch).
 func (s *Server) ok(w http.ResponseWriter, r *http.Request) {
@@ -142,9 +146,10 @@ func (s *Server) newThread(w http.ResponseWriter, r *http.Request) {
 // composer carried a prompt, sends it as the first turn before redirecting.
 func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID, agent, model, effort, mode, prompt string, attach []UploadFile) {
 	if agent == "" {
-		agent = "claude"
-		if _, ok := s.App.Agents[agent]; !ok {
-			agent = s.agentNames()[0]
+		agent = views.FirstOr(s.agentNames(), "")
+		if agent == "" {
+			s.fail(w, r, errors.New("no provider is enabled (see Settings > Providers)"))
+			return
 		}
 	}
 	id, err := s.App.CreateThread(r.Context(), projectID, agent, model)
@@ -299,7 +304,7 @@ func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := r.URL.Query().Get("path")
-	if strings.Contains(path, "..") {
+	if !insideProject(path) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
@@ -326,7 +331,7 @@ func (s *Server) gitFile(w http.ResponseWriter, r *http.Request) {
 	}
 	sse := datastar.NewSSE(w, r)
 	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": true, "file": content})
-	sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Diff: gitx.Diff(r.Context(), p.Path, path)}))
+	sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Diff: gitx.Diff(r.Context(), p.Path, path), Editing: true}))
 }
 
 func (s *Server) saveGitFile(w http.ResponseWriter, r *http.Request) {
@@ -344,4 +349,16 @@ func (s *Server) saveGitFile(w http.ResponseWriter, r *http.Request) {
 	sse := datastar.NewSSE(w, r)
 	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "file": ""})
 	sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Diff: gitx.Diff(r.Context(), p.Path, path)}))
+}
+
+// insideProject rejects paths that could name a file outside the project:
+// absolute ones and ones that climb out with "..". git confines tracked
+// paths on its own, but the untracked fallback in gitx.Diff runs git diff
+// --no-index, which would happily print any file on the machine.
+func insideProject(path string) bool {
+	clean := filepath.Clean(filepath.FromSlash(path))
+	if path == "" || clean == "." || filepath.IsAbs(clean) {
+		return false
+	}
+	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
 }
