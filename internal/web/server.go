@@ -118,6 +118,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/threads/{id}/send", s.send)
 	s.mux.HandleFunc("POST /api/threads/{id}/queue/{qid}/remove", s.removeQueuedPrompt)
 	s.mux.HandleFunc("POST /api/threads/{id}/interrupt", s.interrupt)
+	s.mux.HandleFunc("POST /api/threads/{id}/compact", s.compactContext)
 	s.mux.HandleFunc("POST /api/threads/{id}/delete", s.deleteThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/archive", s.archiveThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/unarchive", s.unarchiveThread)

@@ -380,28 +380,89 @@ templ AttachStrip() {
 	</div>
 }
 
-// ContextMeter is the gauge next to the setting chips: how much of the
-// model's context window this conversation already takes up. It reads the
-// last number the agent sent, so it is empty until the first turn and
-// climbs while one runs. Clicking it opens the model picker, since a
-// window that is filling up is the moment to move to a model with a
-// bigger one.
+// ContextMeter is the gauge next to the setting chips: a ring showing how
+// much of the model's context window this conversation already takes up.
+// It reads the last number the agent sent, so it is empty until the first
+// turn and moves while one runs. Clicking it opens a card with the
+// numbers, a button that compacts the conversation, and one that opens
+// the model picker, since a bigger window is the other way out of a full
+// one. The card is a pick like the setting menus, so the same signal,
+// keys and outside-click rules apply.
 templ ContextMeter(d ThreadData) {
-	{{ used, window := d.Thread.ContextTokens, contextWindow(d) }}
+	{{ t := d.Thread }}
+	{{ used, window := t.ContextTokens, contextWindow(d) }}
 	{{ pct := contextPct(used, window) }}
-	<div id="context-meter" class={ "ctx", templ.KV("empty", used <= 0) }>
+	<div id="context-meter" class={ "pick", "ctx", templ.KV("empty", used <= 0) } data-on:click__outside="$pick == 'context' && !evt.target.closest('.pick') && ($pick = '')" data-on:keydown="pickKey(evt, el) && ($pick = '')">
 		if used > 0 {
-			<button type="button" class={ "chip", "ctx-chip", contextLevel(pct) } title={ contextTitle(used, window, pct) } data-on:click="$pick = 'model'; pickFocus(el)">
+			<button type="button" class={ "chip", "ctx-chip", contextLevel(pct) } title="Context window" data-on:click={ pickToggle("context") } data-class:open="$pick == 'context'">
 				if window > 0 {
-					<span class="ctx-track"><span class="ctx-fill" style={ barWidth(pct) }></span></span>
+					@ContextRing(pct)
 					<span class="chip-label">{ fmt.Sprintf("%d%%", pct) }</span>
 				} else {
 					@Icon("gauge", "ui-icon")
 					<span class="chip-label">{ formatTokens(used) }</span>
 				}
 			</button>
+			<div class="pick-menu pick-context" data-show="$pick == 'context'" data-preserve-attr="style" style="display: none">
+				<div class="ctx-card">
+					<div class="pick-head">Context window</div>
+					<div class="ctx-figures">
+						<span class="ctx-big">{ formatTokens(used) }</span>
+						if window > 0 {
+							<span class="dim">{ fmt.Sprintf("of %s tokens · %d%%", windowLabel(window), pct) }</span>
+						} else {
+							<span class="dim">tokens; this agent does not say how big the window is</span>
+						}
+					</div>
+					if window > 0 {
+						<div class={ "ctx-track", contextLevel(pct) }><span class="ctx-fill" style={ barWidth(pct) }></span></div>
+					}
+					<p class="dim tiny-text">{ contextModelLine(d, window) }</p>
+					<p class="dim tiny-text">The last request's size: the cached prefix, the new input and the reply. Compacting folds the conversation so far into a summary the agent goes on from.</p>
+					<div class="ctx-actions">
+						<button type="button" class="btn" disabled?={ busy(t) } title={ compactTitle(t) } data-on:click={ "$pick = ''; @post('/api/threads/" + t.ID + "/compact')" }>@Icon("fold-vertical", "ui-icon") <span>Compact</span></button>
+						<button type="button" class="btn ghost" title="Open the model picker" data-on:click="$pick = 'model'; pickFocus(el)">@Icon("bot", "ui-icon") <span>Switch model</span></button>
+					</div>
+				</div>
+			</div>
 		}
 	</div>
+}
+
+// ContextRing is the donut in the chip: a track and an arc over pct of
+// it. pathLength makes the dash lengths percentages, and the arc starts
+// at the top.
+templ ContextRing(pct int) {
+	<svg class="ctx-ring" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+		<circle class="ctx-ring-track" cx="10" cy="10" r="7.5" pathLength="100"></circle>
+		<circle class="ctx-ring-fill" cx="10" cy="10" r="7.5" pathLength="100" stroke-dasharray={ ringDash(pct) } transform="rotate(-90 10 10)"></circle>
+	</svg>
+}
+
+// ringDash is the arc as a dash: pct long, then a gap that covers the
+// rest. A sliver stays visible at the low end, as with the bar.
+func ringDash(pct int) string {
+	return fmt.Sprintf("%d 100", max(pct, 2))
+}
+
+// contextModelLine names the model the reading belongs to and its window.
+func contextModelLine(d ThreadData, window int64) string {
+	name := modelLabel(d.Settings.Caps[d.Thread.Agent], d.Thread.Model, d.Settings.CapsErrs[d.Thread.Agent])
+	// The id the agent resolved the choice to, unless the label says it.
+	if r := d.Thread.ResolvedModel; r != "" && r != d.Thread.Model && !strings.Contains(name, r) {
+		name += " (" + r + ")"
+	}
+	if window > 0 {
+		return name + " · " + windowLabel(window) + " window"
+	}
+	return name
+}
+
+func compactTitle(t store.Thread) string {
+	if busy(t) {
+		return "Wait for the current turn to finish"
+	}
+	return "Fold the conversation so far into a summary"
 }
 
 // contextWindow is what the thread is measured against: the limit the
@@ -456,13 +517,6 @@ func contextLevel(pct int) string {
 
 func barWidth(pct int) string {
 	return fmt.Sprintf("width: %d%%", max(pct, 2))
-}
-
-func contextTitle(used, window int64, pct int) string {
-	if window <= 0 {
-		return formatTokens(used) + " tokens in the context window. This agent does not say how big it is.\nClick to pick another model."
-	}
-	return fmt.Sprintf("%s of %s tokens in the context window (%d%%).\nClick to pick a model with a bigger one.", formatTokens(used), windowLabel(window), pct)
 }
 
 // windowLabel writes a context size the way the model cards do: 200K, 1M.

@@ -515,6 +515,42 @@ func (a *App) startPromptLocked(ctx context.Context, l *live, t store.Thread, qu
 	return nil
 }
 
+// CompactContext has the agent fold the conversation so far into a
+// summary, which frees most of the context window. It runs as a turn: the
+// thread must be idle, and the session's own TurnStarted and TurnCompleted
+// bracket it as they do a prompt, so the status, the meter and the prompt
+// queue follow without more help. The session is started (or resumed) if
+// there is none, since compacting is a thing to do before the next prompt.
+func (a *App) CompactContext(ctx context.Context, threadID string) error {
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	t, err := a.Store.Thread(ctx, threadID)
+	if err != nil {
+		return err
+	}
+	if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
+		return errors.New("wait for the current turn to finish")
+	}
+	l, err := a.session(ctx, t)
+	if err != nil {
+		return err
+	}
+	c, ok := l.sess.(agent.Compactor)
+	if !ok {
+		return fmt.Errorf("%s cannot compact its context", t.Agent)
+	}
+	if _, err := a.Store.Append(ctx, threadID,
+		domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: "Compacting the context…"},
+		domain.ThreadStatusChanged{Status: domain.StatusRunning}); err != nil {
+		return err
+	}
+	if err := c.Compact(ctx); err != nil {
+		a.Store.Append(ctx, threadID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
+		return err
+	}
+	return nil
+}
+
 func (a *App) Interrupt(ctx context.Context, threadID string) error {
 	a.mu.Lock()
 	l := a.sessions[threadID]

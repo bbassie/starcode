@@ -262,6 +262,14 @@ func (s *Server) attachToPrompt(threadID, text string, files []UploadFile) (stri
 	return promptWithAttachments(text, files, paths), nil
 }
 
+func (s *Server) compactContext(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.CompactContext(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
 func (s *Server) interrupt(w http.ResponseWriter, r *http.Request) {
 	if err := s.App.Interrupt(r.Context(), r.PathValue("id")); err != nil {
 		s.fail(w, r, err)

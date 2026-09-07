@@ -47,16 +47,14 @@ templ Chips(d SettingsData, onChange string, agentLocked bool) {
 // pickAttrs are shared by every picker: shown for its agent, closed by a
 // click elsewhere or Escape. A click inside any picker is left alone: the
 // hidden pickers of the other agents see every click as outside, and the
-// rail switches agents by making one of them the visible one. The context
-// meter is left alone too, since it opens the model menu from outside
-// every picker and would otherwise close it in the same click.
+// rail switches agents by making one of them the visible one.
 func pickAttrs(d SettingsData, name, kind string) templ.Attributes {
 	return templ.Attributes{
 		"class":                  "pick",
 		"data-show":              "$agent == " + jsq(name),
 		"data-preserve-attr":     "style",
 		"style":                  hiddenUnless(name == d.Agent),
-		"data-on:click__outside": "$pick == '" + kind + "' && !evt.target.closest('.pick, #context-meter') && ($pick = '')",
+		"data-on:click__outside": "$pick == '" + kind + "' && !evt.target.closest('.pick') && ($pick = '')",
 		"data-on:keydown":        "pickKey(evt, el) && ($pick = '')",
 	}
 }

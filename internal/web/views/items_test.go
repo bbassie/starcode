@@ -88,6 +88,11 @@ func TestContextMeterNumbers(t *testing.T) {
 			t.Errorf("contextLevel(%d) = %q, want %q", pct, got, c.level)
 		}
 	}
+	for pct, want := range map[int]string{0: "2 100", 1: "2 100", 42: "42 100", 100: "100 100"} {
+		if got := ringDash(pct); got != want {
+			t.Errorf("ringDash(%d) = %q, want %q", pct, got, want)
+		}
+	}
 	for n, want := range map[int64]string{200_000: "200K", 1_000_000: "1M", 272_000: "272K", 131_072: "131.1K", 0: ""} {
 		if got := windowLabel(n); got != want {
 			t.Errorf("windowLabel(%d) = %q, want %q", n, got, want)

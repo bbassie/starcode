@@ -657,18 +657,31 @@ body.scrolled-up .jump { display: inline-flex; }
 .opt-custom { border-top: var(--border-w) solid var(--border); border-radius: 0; margin-top: 4px; padding-top: 10px; }
 .composer.start { margin: 0 0 24px; box-shadow: none; }
 
-/* Context meter: how full the model's window is, as a chip beside the
-   pickers. It opens the model picker, so it looks and sits like the
-   chips it stands next to. */
+/* Context meter: how full the model's window is, as a ring in a chip
+   beside the pickers. The chip opens a card (a pick-menu like the
+   others, anchored to the right since the chip ends the row) with the
+   numbers, a bar, and the compact and switch-model buttons. */
 .ctx { flex: none; }
 .ctx.empty { display: none; }
-.ctx-chip { gap: 7px; padding-right: 9px; font-variant-numeric: tabular-nums; }
-.ctx-track { flex: none; width: 34px; height: 5px; border-radius: 999px; background: var(--bg-4); overflow: hidden; }
-.ctx-fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.ctx-chip { gap: 6px; padding-right: 9px; font-variant-numeric: tabular-nums; }
+.ctx-ring { flex: none; }
+.ctx-ring-track { fill: none; stroke: var(--bg-4); stroke-width: 3.5; }
+.ctx-ring-fill { fill: none; stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round; }
 .ctx-chip.warn { color: var(--warn); }
-.ctx-chip.warn .ctx-fill { background: var(--warn); }
+.ctx-chip.warn .ctx-ring-fill { stroke: var(--warn); }
 .ctx-chip.full { color: var(--err); border-color: var(--err); }
-.ctx-chip.full .ctx-fill { background: var(--err); }
+.ctx-chip.full .ctx-ring-fill { stroke: var(--err); }
+.pick-context { width: 330px; left: auto; right: 0; }
+.ctx-card { display: flex; flex-direction: column; gap: 8px; padding: 6px 12px 12px; }
+.ctx-card .pick-head { padding-left: 0; padding-right: 0; }
+.ctx-figures { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.ctx-big { font-size: 1.35em; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ctx-track { display: block; width: 100%; height: 6px; border-radius: 999px; background: var(--bg-4); overflow: hidden; }
+.ctx-fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.ctx-track.warn .ctx-fill { background: var(--warn); }
+.ctx-track.full .ctx-fill { background: var(--err); }
+.ctx-card p { margin: 0; line-height: 1.4; }
+.ctx-actions { display: flex; gap: 6px; margin-top: 2px; }
 
 /* ---- home ---- */
 

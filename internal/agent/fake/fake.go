@@ -215,6 +215,35 @@ func (s *session) context(n int64) {
 	s.emit(agent.Event{Kind: agent.KindContextUsage, ContextUsage: &agent.ContextUsage{Tokens: tokens, Window: window}})
 }
 
+// Compact plays a compaction turn: a notice, then the conversation shrunk
+// to a tenth of itself, then the turn's end.
+func (s *session) Compact(ctx context.Context) error {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		return fmt.Errorf("fake: turn already running")
+	}
+	s.running = true
+	s.turn++
+	turnID := fmt.Sprintf("turn-%d", s.turn)
+	dropped := s.ctxTokens - s.ctxTokens/10
+	s.mu.Unlock()
+	go func() {
+		start := time.Now()
+		s.emit(agent.Event{Kind: agent.KindTurnStarted, TurnStarted: &agent.TurnStarted{TurnID: turnID}})
+		s.sleep()
+		s.emit(agent.Event{Kind: agent.KindNotice, Notice: &agent.Notice{Text: "Context was compacted."}})
+		s.context(-dropped)
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
+		s.emit(agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{
+			TurnID: turnID, Status: "done", DurationMS: time.Since(start).Milliseconds(),
+		}})
+	}()
+	return nil
+}
+
 func (s *session) Interrupt(ctx context.Context) error {
 	select {
 	case s.stop <- struct{}{}:

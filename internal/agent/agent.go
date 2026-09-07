@@ -63,6 +63,14 @@ type ModeSetter interface {
 // switch a running session to the mode.
 var ErrModeNextTurn = errors.New("permission mode applies from the next turn")
 
+// Compactor is implemented by sessions that can fold the conversation so
+// far into a summary, which frees most of the context window. It runs as
+// a turn: TurnStarted, a Notice, a ContextUsage with the new size, then
+// TurnCompleted, so the app treats it like a prompt without a prompt.
+type Compactor interface {
+	Compact(ctx context.Context) error
+}
+
 type Decision string
 
 const (

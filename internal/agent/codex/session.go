@@ -113,6 +113,15 @@ func (s *session) Send(ctx context.Context, text string) error {
 
 // Interrupt cancels the running turn. The turn ends with a turn/completed
 // notification whose status is "interrupted".
+// Compact asks the server to fold the thread's history into a summary. The
+// server runs it as a turn of its own: turn/started and turn/completed
+// arrive as for a prompt, with a contextCompaction item and a fresh token
+// reading between them, so nothing here waits for it.
+func (s *session) Compact(ctx context.Context) error {
+	_, err := s.c.call(ctx, "thread/compact/start", map[string]any{"threadId": s.threadID})
+	return err
+}
+
 func (s *session) Interrupt(ctx context.Context) error {
 	s.mu.Lock()
 	turnID := s.turnID

@@ -368,6 +368,42 @@ func TestTokenUsageReportsContext(t *testing.T) {
 	}
 }
 
+func TestCompactRunsAsATurn(t *testing.T) {
+	_, f, s := harness(t)
+	events := s.Events()
+
+	errc := make(chan error, 1)
+	go func() { errc <- s.(agent.Compactor).Compact(context.Background()) }()
+	m := f.expect("thread/compact/start")
+	var p struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := json.Unmarshal(m.Params, &p); err != nil || p.ThreadID != "thr_1" {
+		t.Fatalf("thread/compact/start params = %s, %v", m.Params, err)
+	}
+	f.reply(m.ID, `{}`)
+	if err := <-errc; err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	// The server then runs it as a turn of its own.
+	f.send(`{"method":"turn/started","params":{"threadId":"thr_1","turn":{"id":"turn_c","status":"inProgress"}}}`)
+	f.send(`{"method":"item/started","params":{"threadId":"thr_1","turnId":"turn_c","item":{"id":"item_c","type":"contextCompaction"}}}`)
+	f.send(`{"method":"item/completed","params":{"threadId":"thr_1","turnId":"turn_c","item":{"id":"item_c","type":"contextCompaction"}}}`)
+	f.send(`{"method":"thread/tokenUsage/updated","params":{"threadId":"thr_1","turnId":"turn_c","tokenUsage":{"total":{"inputTokens":900,"outputTokens":60,"totalTokens":960},"last":{"inputTokens":500,"outputTokens":10,"totalTokens":510},"modelContextWindow":258400}}}`)
+	f.send(`{"method":"turn/completed","params":{"threadId":"thr_1","turn":{"id":"turn_c","status":"completed"}}}`)
+	if ev := expectKind(t, events, agent.KindTurnStarted); ev.TurnStarted.TurnID != "turn_c" {
+		t.Fatalf("turn id = %q", ev.TurnStarted.TurnID)
+	}
+	expectKind(t, events, agent.KindNotice)
+	if ev := expectKind(t, events, agent.KindContextUsage); ev.ContextUsage.Tokens != 510 || ev.ContextUsage.Window != 258400 {
+		t.Fatalf("reading after compaction = %+v", ev.ContextUsage)
+	}
+	if ev := expectKind(t, events, agent.KindTurnCompleted); ev.TurnCompleted.Status != "done" {
+		t.Fatalf("turn completed = %+v", ev.TurnCompleted)
+	}
+}
+
 func TestAgentMessageWithoutDeltas(t *testing.T) {
 	_, f, s := harness(t)
 	events := s.Events()

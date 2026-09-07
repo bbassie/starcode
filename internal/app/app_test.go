@@ -63,6 +63,7 @@ func (s *queueSession) Send(_ context.Context, text string) error {
 	return nil
 }
 func (s *queueSession) Interrupt(context.Context) error                       { return nil }
+func (s *queueSession) Compact(context.Context) error                         { s.sent <- "/compact"; return nil }
 func (s *queueSession) Resolve(context.Context, string, agent.Decision) error { return nil }
 func (s *queueSession) Events() <-chan agent.Event                            { return s.events }
 func (s *queueSession) Close() error {
@@ -136,6 +137,67 @@ func TestSendPromptQueuesAndDispatchesInOrder(t *testing.T) {
 	thread, err := st.Thread(ctx, threadID)
 	if err != nil || thread.Title != "Agent generated title" {
 		t.Fatalf("thread title = %q, %v", thread.Title, err)
+	}
+}
+
+func TestCompactContextRunsAsATurn(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "compact.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	sess := newQueueSession()
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.CompactContext(ctx, threadID); err != nil {
+		t.Fatal(err)
+	}
+	if got := receivePrompt(t, sess.sent); got != "/compact" {
+		t.Fatalf("session received %q", got)
+	}
+	th, _ := st.Thread(ctx, threadID)
+	if th.Status != domain.StatusRunning {
+		t.Fatalf("status while compacting = %q", th.Status)
+	}
+	// A second one has to wait; a prompt meanwhile is queued as usual.
+	if err := a.CompactContext(ctx, threadID); err == nil {
+		t.Fatal("compact during a turn was accepted")
+	}
+	if err := a.SendPrompt(ctx, threadID, "after"); err != nil {
+		t.Fatal(err)
+	}
+	sess.events <- agent.Event{Kind: agent.KindTurnStarted, TurnStarted: &agent.TurnStarted{TurnID: "turn-c"}}
+	sess.events <- agent.Event{Kind: agent.KindNotice, Notice: &agent.Notice{Text: "Context was compacted."}}
+	sess.events <- agent.Event{Kind: agent.KindContextUsage, ContextUsage: &agent.ContextUsage{Tokens: 1046, Window: 200_000}}
+	sess.events <- agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{TurnID: "turn-c", Status: "done", DurationMS: 10}}
+	if got := receivePrompt(t, sess.sent); got != "after" {
+		t.Fatalf("queued send = %q", got)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		th, _ = st.Thread(ctx, threadID)
+		if th.ContextTokens == 1046 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("reading after compaction = %d", th.ContextTokens)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	items, err := st.Items(ctx, threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) < 3 || items[0].Kind != domain.KindSystem || items[1].Kind != domain.KindSystem || items[2].Kind != domain.KindResult {
+		t.Fatalf("transcript = %+v", items)
 	}
 }
 

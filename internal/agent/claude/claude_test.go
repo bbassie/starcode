@@ -25,6 +25,12 @@ const (
 	lineStatus        = `{"type":"system","subtype":"status","status":"requesting","session_id":"s1","uuid":"cd5766f6-903f-418b-9661-6b50bb34288d"}`
 	lineThinkingToks  = `{"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"estimated_tokens_delta":50,"session_id":"s1","uuid":"4d1a3d25-ae14-46d3-991c-d7a9fe1ddca5"}`
 	lineCompact       = `{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"auto"}}`
+	// A manual /compact, recorded from claude 2.1.263: the status pair, the
+	// boundary with sizes, then a result with no usage.
+	lineCompacting    = `{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}`
+	lineCompactedOK   = `{"type":"system","subtype":"status","status":null,"compact_result":"success","session_id":"s1"}`
+	lineCompactSizes  = `{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"manual","pre_tokens":23016,"post_tokens":1046,"cumulative_dropped_tokens":21970,"duration_ms":8252}}`
+	lineCompactResult = `{"session_id":"s1","total_cost_usd":0.02,"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0},"is_error":false,"num_turns":0,"subtype":"success","result":"","type":"result","duration_ms":8300}`
 	lineRateAllowed   = `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1788525000,"rateLimitType":"five_hour"},"session_id":"s1"}`
 	lineRateThrottled = `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1788525000,"rateLimitType":"five_hour"},"session_id":"s1"}`
 	lineCtlAck        = `{"type":"control_response","response":{"subtype":"success","request_id":"int-1","response":{"still_queued":[]}}}`
@@ -377,6 +383,27 @@ func TestParseAssistantReportsContextUsage(t *testing.T) {
 	next := one(t, feed(st, lineTextMsgUsage2), agent.KindContextUsage).ContextUsage
 	if got, want := next.Tokens, int64(12+9099+20000+40); got != want {
 		t.Errorf("Tokens = %d, want %d", got, want)
+	}
+}
+
+func TestParseCompactionMovesTheMeter(t *testing.T) {
+	st := newState(nil)
+	st.turnID = "turn-c"
+	feed(st, lineInit, lineTextMsgUsage)
+	events := feed(st, lineCompacting, lineCompactedOK, lineCompactSizes, lineCompactResult)
+	want := []agent.EventKind{agent.KindNotice, agent.KindContextUsage, agent.KindTurnCompleted}
+	if got := kinds(events); !slices.Equal(got, want) {
+		t.Fatalf("compaction events = %v, want %v", got, want)
+	}
+	if got := one(t, events, agent.KindContextUsage).ContextUsage; got.Tokens != 1046 || got.Window != standardWindow {
+		t.Errorf("reading after compaction = %+v", got)
+	}
+	if got := one(t, events, agent.KindTurnCompleted).TurnCompleted; got.Status != "done" || got.InputTokens != 0 {
+		t.Errorf("compaction turn = %+v", got)
+	}
+	// A boundary without sizes (older CLIs, auto compaction) is only a notice.
+	if got := kinds(feed(st, lineCompact)); !slices.Equal(got, []agent.EventKind{agent.KindNotice}) {
+		t.Errorf("bare boundary = %v", got)
 	}
 }
 

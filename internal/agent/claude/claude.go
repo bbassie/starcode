@@ -577,6 +577,15 @@ func (s *session) Send(ctx context.Context, text string) error {
 	return s.write(userTurn(text))
 }
 
+// Compact runs the CLI's own /compact, which it takes as a user turn over
+// stream-json: a status line, a compact_boundary with the sizes before and
+// after, the summary as a user message, then a result with no usage.
+// When there is too little to compact the CLI says so in an assistant
+// message and still ends the turn.
+func (s *session) Compact(ctx context.Context) error {
+	return s.Send(ctx, "/compact")
+}
+
 // Interrupt cancels the running turn. The CLI still reports a result for it;
 // that result is reported as "interrupted".
 func (s *session) Interrupt(ctx context.Context) error {
@@ -961,6 +970,14 @@ type outLine struct {
 	Model     string `json:"model"`
 	AITitle   string `json:"aiTitle"`
 
+	// system/compact_boundary. PostTokens is the CLI's count of what the
+	// conversation is after the fold.
+	CompactMetadata *struct {
+		Trigger    string `json:"trigger"`
+		PreTokens  int64  `json:"pre_tokens"`
+		PostTokens int64  `json:"post_tokens"`
+	} `json:"compact_metadata"`
+
 	// stream_event
 	Event json.RawMessage `json:"event"`
 
@@ -1141,10 +1158,18 @@ func parseSystem(out *outLine, st *state) []agent.Event {
 			SessionInfo: &agent.SessionInfo{ExternalID: out.SessionID, Model: out.Model},
 		}}
 	case "compact_boundary":
-		return []agent.Event{{
+		// The boundary's post_tokens counts the messages that survive and
+		// leaves out the system prompt and tool list that ride on every
+		// request, so the reading is low until the next message corrects
+		// it. Still the right moment to move the meter: the fold happened.
+		events := []agent.Event{{
 			Kind:   agent.KindNotice,
 			Notice: &agent.Notice{Text: "Context was compacted."},
 		}}
+		if out.CompactMetadata != nil {
+			events = append(events, st.contextEvent(out.CompactMetadata.PostTokens)...)
+		}
+		return events
 	default:
 		st.log.Debug("ignored system message", "subtype", out.Subtype)
 		return nil
