@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
 
 // Config describes how to start or resume one thread's session.
@@ -50,6 +51,18 @@ type Session interface {
 	Close() error
 }
 
+// ModeSetter is implemented by sessions that can change the permission mode
+// while a turn runs. A session without it, or one that returns
+// ErrModeNextTurn, keeps its mode for the running turn; the app then starts
+// the next turn on a fresh session with the new Config.
+type ModeSetter interface {
+	SetPermissionMode(ctx context.Context, mode string) error
+}
+
+// ErrModeNextTurn is what SetPermissionMode returns when the agent cannot
+// switch a running session to the mode.
+var ErrModeNextTurn = errors.New("permission mode applies from the next turn")
+
 type Decision string
 
 const (
@@ -70,6 +83,7 @@ type Event struct {
 	ToolOutput    *ToolOutput
 	ToolCompleted *ToolCompleted
 	Approval      *ApprovalRequested
+	ContextUsage  *ContextUsage
 	TurnCompleted *TurnCompleted
 	Notice        *Notice
 	Closed        *Closed
@@ -87,6 +101,7 @@ const (
 	KindToolOutput    EventKind = "tool_output"
 	KindToolCompleted EventKind = "tool_completed"
 	KindApproval      EventKind = "approval"
+	KindContextUsage  EventKind = "context_usage"
 	KindTurnCompleted EventKind = "turn_completed"
 	KindNotice        EventKind = "notice"
 	KindClosed        EventKind = "closed"
@@ -153,6 +168,19 @@ type ApprovalRequested struct {
 	Input       json.RawMessage
 }
 
+// ContextUsage says how much of the model's context window the
+// conversation takes up right now. Adapters send it whenever they learn a
+// new number, which is at least once per turn, and the same number twice
+// is fine: the app only records changes.
+type ContextUsage struct {
+	// Tokens is everything the last request carried, the cached prefix and
+	// the reply included. That is what the next request has to fit around.
+	Tokens int64
+	// Window is the model's limit. 0 when the agent did not say, in which
+	// case the caller falls back to the catalog.
+	Window int64
+}
+
 type TurnCompleted struct {
 	TurnID       string
 	Status       string // "done" | "interrupted" | "error"
@@ -186,6 +214,10 @@ type Model struct {
 	// Group puts the model under a labelled heading in the picker. Empty
 	// means the main list.
 	Group string
+	// ContextWindow is the model's token limit, 0 when the agent does not
+	// say. The picker shows it so a thread running out of room can move to
+	// a model with more of it.
+	ContextWindow int64
 }
 
 // Choice is one selectable value of a thread setting.

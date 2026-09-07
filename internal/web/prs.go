@@ -159,8 +159,9 @@ func (s *Server) pullRequestThread(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if sig.Effort != "" || sig.Mode != "" {
-		if err := s.App.SetThreadSettings(r.Context(), id, app.ThreadSettings{Agent: agent, Model: sig.Model, Effort: sig.Effort, PermissionMode: sig.Mode}); err != nil {
+	mode := sig.modeOr(s.defaultMode(r.Context(), agent))
+	if sig.Effort != "" || mode != "" {
+		if err := s.App.SetThreadSettings(r.Context(), id, app.ThreadSettings{Agent: agent, Model: sig.Model, Effort: sig.Effort, PermissionMode: mode}); err != nil {
 			s.fail(w, r, err)
 			return
 		}

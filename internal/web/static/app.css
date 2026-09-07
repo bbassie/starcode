@@ -651,10 +651,24 @@ body.scrolled-up .jump { display: inline-flex; }
 .opt-badge { flex: none; font-size: 0.72em; padding: 1px 6px; border-radius: 999px; background: var(--bg-4); color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.04em; }
 .opt-desc { font-size: 0.84em; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt-icon { color: var(--fg-dim); }
+.opt-ctx { flex: none; font-size: 0.78em; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
 .opt-check { color: var(--accent); visibility: hidden; }
 .opt.sel .opt-check { visibility: visible; }
 .opt-custom { border-top: var(--border-w) solid var(--border); border-radius: 0; margin-top: 4px; padding-top: 10px; }
 .composer.start { margin: 0 0 24px; box-shadow: none; }
+
+/* Context meter: how full the model's window is, as a chip beside the
+   pickers. It opens the model picker, so it looks and sits like the
+   chips it stands next to. */
+.ctx { flex: none; }
+.ctx.empty { display: none; }
+.ctx-chip { gap: 7px; padding-right: 9px; font-variant-numeric: tabular-nums; }
+.ctx-track { flex: none; width: 34px; height: 5px; border-radius: 999px; background: var(--bg-4); overflow: hidden; }
+.ctx-fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.ctx-chip.warn { color: var(--warn); }
+.ctx-chip.warn .ctx-fill { background: var(--warn); }
+.ctx-chip.full { color: var(--err); border-color: var(--err); }
+.ctx-chip.full .ctx-fill { background: var(--err); }
 
 /* ---- home ---- */
 

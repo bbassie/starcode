@@ -55,7 +55,10 @@ type session struct {
 	// usageTotal mirrors the thread's cumulative token counters; usageBase
 	// is the snapshot taken when the current turn started.
 	usageTotal, usageBase usage
-	turnStart             time.Time
+	// ctxTokens and ctxWindow are the last context reading passed on, so
+	// the same numbers are not reported twice.
+	ctxTokens, ctxWindow int64
+	turnStart            time.Time
 }
 
 type usage struct{ input, output int64 }
@@ -568,7 +571,9 @@ func (s *session) turnCompleted(params json.RawMessage) {
 }
 
 // tokenUsage records the thread's cumulative counters. Per-turn numbers are
-// the difference between the value at turn start and at turn end.
+// the difference between the value at turn start and at turn end. The same
+// notification carries the last request's size and the model's limit, which
+// together are how full the context window is.
 func (s *session) tokenUsage(params json.RawMessage) {
 	var p struct {
 		TokenUsage struct {
@@ -576,14 +581,30 @@ func (s *session) tokenUsage(params json.RawMessage) {
 				InputTokens  int64 `json:"inputTokens"`
 				OutputTokens int64 `json:"outputTokens"`
 			} `json:"total"`
+			Last struct {
+				InputTokens  int64 `json:"inputTokens"`
+				OutputTokens int64 `json:"outputTokens"`
+				TotalTokens  int64 `json:"totalTokens"`
+			} `json:"last"`
+			ModelContextWindow int64 `json:"modelContextWindow"`
 		} `json:"tokenUsage"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return
 	}
+	inContext := p.TokenUsage.Last.TotalTokens
+	if inContext == 0 {
+		inContext = p.TokenUsage.Last.InputTokens + p.TokenUsage.Last.OutputTokens
+	}
 	s.mu.Lock()
 	s.usageTotal = usage{p.TokenUsage.Total.InputTokens, p.TokenUsage.Total.OutputTokens}
+	window := p.TokenUsage.ModelContextWindow
+	repeat := inContext == s.ctxTokens && window == s.ctxWindow
+	s.ctxTokens, s.ctxWindow = inContext, window
 	s.mu.Unlock()
+	if inContext > 0 && !repeat {
+		s.emit(agent.Event{Kind: agent.KindContextUsage, ContextUsage: &agent.ContextUsage{Tokens: inContext, Window: window}})
+	}
 }
 
 func (s *session) threadError(params json.RawMessage) {

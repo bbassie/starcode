@@ -346,6 +346,28 @@ func TestTurnWithAgentMessageDeltas(t *testing.T) {
 	}
 }
 
+func TestTokenUsageReportsContext(t *testing.T) {
+	_, f, s := harness(t)
+	events := s.Events()
+
+	sendAsync(t, f, s, "hello", "turn_1")
+	expectKind(t, events, agent.KindTurnStarted)
+
+	f.send(`{"method":"thread/tokenUsage/updated","params":{"threadId":"thr_1","turnId":"turn_1","tokenUsage":{"total":{"inputTokens":120,"outputTokens":34,"totalTokens":154},"last":{"inputTokens":120,"outputTokens":34,"totalTokens":154},"modelContextWindow":272000}}}`)
+	ev := expectKind(t, events, agent.KindContextUsage)
+	if ev.ContextUsage.Tokens != 154 || ev.ContextUsage.Window != 272000 {
+		t.Fatalf("context usage = %+v", ev.ContextUsage)
+	}
+
+	// The same reading again says nothing; a bigger one does.
+	f.send(`{"method":"thread/tokenUsage/updated","params":{"threadId":"thr_1","turnId":"turn_1","tokenUsage":{"total":{"inputTokens":120,"outputTokens":34,"totalTokens":154},"last":{"inputTokens":120,"outputTokens":34,"totalTokens":154},"modelContextWindow":272000}}}`)
+	f.send(`{"method":"thread/tokenUsage/updated","params":{"threadId":"thr_1","turnId":"turn_1","tokenUsage":{"total":{"inputTokens":900,"outputTokens":60,"totalTokens":960},"last":{"inputTokens":900,"outputTokens":60,"totalTokens":960},"modelContextWindow":272000}}}`)
+	ev = expectKind(t, events, agent.KindContextUsage)
+	if ev.ContextUsage.Tokens != 960 {
+		t.Fatalf("context usage = %+v", ev.ContextUsage)
+	}
+}
+
 func TestAgentMessageWithoutDeltas(t *testing.T) {
 	_, f, s := harness(t)
 	events := s.Events()

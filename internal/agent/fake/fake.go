@@ -14,6 +14,11 @@ import (
 	"starcode/internal/agent"
 )
 
+// fakeWindow is the context limit the scripted agent pretends to have. It
+// is small on purpose: a handful of turns fills the meter, which is what
+// makes it worth looking at while working on the UI.
+const fakeWindow = 100_000
+
 type Agent struct {
 	// Delay between streamed chunks. Zero means as fast as possible.
 	Delay time.Duration
@@ -25,7 +30,10 @@ func (a *Agent) Name() string { return "fake" }
 
 func (a *Agent) Capabilities(ctx context.Context) (agent.Capabilities, error) {
 	return agent.Capabilities{
-		Models:          []agent.Model{{ID: "fake-1", DisplayName: "Fake 1", Default: true, Efforts: []string{"low", "high"}}},
+		Models: []agent.Model{
+			{ID: "fake-1", DisplayName: "Fake 1", Default: true, Efforts: []string{"low", "high"}, ContextWindow: fakeWindow},
+			{ID: "fake-1-long", DisplayName: "Fake 1 (1M context)", Description: "Same model, room for ten times as much", Efforts: []string{"low", "high"}, ContextWindow: 1_000_000},
+		},
 		Efforts:         []agent.Choice{{ID: "", Label: "default"}, {ID: "low", Label: "low"}, {ID: "high", Label: "high"}},
 		PermissionModes: []agent.Choice{{ID: "", Label: "default"}, {ID: "yolo", Label: "yolo"}},
 	}, nil
@@ -72,6 +80,7 @@ type session struct {
 	stop      chan struct{}
 	mu        sync.Mutex
 	turn      int
+	ctxTokens int64
 	running   bool
 	closeOnce sync.Once
 }
@@ -127,6 +136,9 @@ func (s *session) run(turnID, prompt string) {
 		}})
 	}
 	s.emit(agent.Event{Kind: agent.KindTurnStarted, TurnStarted: &agent.TurnStarted{TurnID: turnID}})
+	// Each turn takes another bite out of the window, in two readings, so
+	// the meter both climbs and moves mid-turn.
+	s.context(9_000)
 
 	msg := turnID + "-m1"
 	for _, w := range strings.Fields("Let me think about " + firstWords(prompt, 6) + " for a moment before I touch anything.") {
@@ -175,6 +187,7 @@ func (s *session) run(turnID, prompt string) {
 		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t2, Status: "done"}})
 	}
 
+	s.context(4_500)
 	msg2 := turnID + "-m2"
 	prose := "You asked: *" + firstWords(prompt, 12) + "*\n\nHere is what I did:\n\n1. Listed the Go files with `Glob`.\n2. Ran the tests (decision: **" + string(d) + "**).\n\n```go\nfunc main() {\n\tfmt.Println(\"hello from the fake agent\")\n}\n```\n\nNothing else needed changing."
 	for _, w := range strings.SplitAfter(prose, " ") {
@@ -185,6 +198,21 @@ func (s *session) run(turnID, prompt string) {
 		}
 	}
 	finish("done")
+}
+
+// context grows the pretend conversation by n tokens and reports it. The
+// long-context model gets the bigger window, so switching between the two
+// in the picker moves the meter.
+func (s *session) context(n int64) {
+	s.mu.Lock()
+	s.ctxTokens += n
+	tokens := s.ctxTokens
+	s.mu.Unlock()
+	window := int64(fakeWindow)
+	if strings.HasSuffix(s.cfg.Model, "-long") {
+		window = 1_000_000
+	}
+	s.emit(agent.Event{Kind: agent.KindContextUsage, ContextUsage: &agent.ContextUsage{Tokens: tokens, Window: window}})
 }
 
 func (s *session) Interrupt(ctx context.Context) error {

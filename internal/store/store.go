@@ -46,8 +46,14 @@ type Thread struct {
 	Status            string
 	StatusDetail      string
 	Archived          bool
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// ContextTokens is how much of the model's context window the
+	// conversation took up at the last reading, and ContextWindow the limit
+	// the agent named for it (0 when it named none, or when the model
+	// changed and no turn has run on the new one yet).
+	ContextTokens int64
+	ContextWindow int64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type Item struct {
@@ -73,6 +79,7 @@ type Approval struct {
 	Input       json.RawMessage
 	Decision    string
 	CreatedAt   time.Time
+	ResolvedAt  time.Time // zero while pending
 }
 
 type QueuedPrompt struct {
@@ -281,9 +288,12 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET archived=0, updated_at=? WHERE id=?`, ts, ev.ThreadID)
 		return err
 	case domain.ThreadSettingsChanged:
-		// A different agent cannot resume another agent's session.
-		_, err := tx.ExecContext(ctx, `UPDATE threads SET model=?, effort=?, permission_mode=?, external_session_id=CASE WHEN agent=? THEN external_session_id ELSE '' END, agent=?, updated_at=? WHERE id=?`,
-			p.Model, p.Effort, p.PermissionMode, p.Agent, p.Agent, ts, ev.ThreadID)
+		// A different agent cannot resume another agent's session. Another
+		// model has another window, so the one the old model reported is
+		// dropped and the catalog answers until the next turn; the count
+		// stays, because the conversation is the same one.
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET model=?, effort=?, permission_mode=?, external_session_id=CASE WHEN agent=? THEN external_session_id ELSE '' END, context_window=CASE WHEN model=? THEN context_window ELSE 0 END, agent=?, updated_at=? WHERE id=?`,
+			p.Model, p.Effort, p.PermissionMode, p.Agent, p.Model, p.Agent, ts, ev.ThreadID)
 		return err
 	case domain.AgentSessionBound:
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET external_session_id=?, resolved_model=CASE WHEN ?='' THEN resolved_model ELSE ? END, updated_at=? WHERE id=?`,
@@ -296,6 +306,12 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		return touch()
 	case domain.TurnCompleted:
 		return touch()
+	case domain.ContextUsed:
+		// Only the newest reading matters, and it is not activity: no touch,
+		// so a thread does not go unread because its window filled up.
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET context_tokens=?, context_window=CASE WHEN ?=0 THEN context_window ELSE ? END WHERE id=?`,
+			p.Tokens, p.Window, p.Window, ev.ThreadID)
+		return err
 	case domain.PromptQueued:
 		_, err := tx.ExecContext(ctx, `INSERT INTO queued_prompts(id,thread_id,seq,body,created_at) VALUES(?,?,?,?,?)`,
 			p.ID, ev.ThreadID, ev.Seq, p.Body, ts)
@@ -355,7 +371,7 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 			p.ID, ev.ThreadID, p.ItemID, p.ToolName, p.Description, in, ts)
 		return err
 	case domain.ApprovalResolved:
-		_, err := tx.ExecContext(ctx, `UPDATE approvals SET decision=? WHERE thread_id=? AND id=?`, p.Decision, ev.ThreadID, p.ID)
+		_, err := tx.ExecContext(ctx, `UPDATE approvals SET decision=?, resolved_at=? WHERE thread_id=? AND id=?`, p.Decision, ts, ev.ThreadID, p.ID)
 		if err != nil || p.Decision != domain.DecisionAllowSession || p.Auto {
 			return err
 		}
@@ -402,6 +418,8 @@ func deref(p any) any {
 	case *domain.TurnStarted:
 		return *v
 	case *domain.TurnCompleted:
+		return *v
+	case *domain.ContextUsed:
 		return *v
 	case *domain.PromptQueued:
 		return *v
@@ -484,12 +502,12 @@ func (s *Store) Project(ctx context.Context, id string) (Project, error) {
 	return p, err
 }
 
-const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,created_at,updated_at`
+const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,context_tokens,context_window,created_at,updated_at`
 
 func scanThread(sc interface{ Scan(...any) error }) (Thread, error) {
 	var t Thread
 	var c, u string
-	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &c, &u)
+	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.ContextTokens, &t.ContextWindow, &c, &u)
 	t.CreatedAt, _ = time.Parse(timeFmt, c)
 	t.UpdatedAt, _ = time.Parse(timeFmt, u)
 	return t, err
@@ -629,9 +647,22 @@ func scanItem(sc interface{ Scan(...any) error }) (Item, error) {
 	return it, err
 }
 
+const approvalCols = `id,thread_id,item_id,tool_name,description,input,decision,created_at,resolved_at`
+
 // PendingApprovals returns unresolved approvals for a thread, oldest first.
 func (s *Store) PendingApprovals(ctx context.Context, threadID string) ([]Approval, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,thread_id,item_id,tool_name,description,input,decision,created_at FROM approvals WHERE thread_id=? AND decision='' ORDER BY created_at`, threadID)
+	return s.approvals(ctx, `SELECT `+approvalCols+` FROM approvals WHERE thread_id=? AND decision='' ORDER BY created_at`, threadID)
+}
+
+// Approvals returns every approval of a thread, answered or not, oldest
+// first. The transcript renders the pending ones as cards and uses the
+// answered ones to leave waiting time out of the "worked for" counts.
+func (s *Store) Approvals(ctx context.Context, threadID string) ([]Approval, error) {
+	return s.approvals(ctx, `SELECT `+approvalCols+` FROM approvals WHERE thread_id=? ORDER BY created_at`, threadID)
+}
+
+func (s *Store) approvals(ctx context.Context, q string, args ...any) ([]Approval, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -648,7 +679,7 @@ func (s *Store) PendingApprovals(ctx context.Context, threadID string) ([]Approv
 }
 
 func (s *Store) Approval(ctx context.Context, threadID, id string) (Approval, error) {
-	a, err := scanApproval(s.db.QueryRowContext(ctx, `SELECT id,thread_id,item_id,tool_name,description,input,decision,created_at FROM approvals WHERE thread_id=? AND id=?`, threadID, id))
+	a, err := scanApproval(s.db.QueryRowContext(ctx, `SELECT `+approvalCols+` FROM approvals WHERE thread_id=? AND id=?`, threadID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -657,10 +688,13 @@ func (s *Store) Approval(ctx context.Context, threadID, id string) (Approval, er
 
 func scanApproval(sc interface{ Scan(...any) error }) (Approval, error) {
 	var a Approval
-	var in, c string
-	err := sc.Scan(&a.ID, &a.ThreadID, &a.ItemID, &a.ToolName, &a.Description, &in, &a.Decision, &c)
+	var in, c, r string
+	err := sc.Scan(&a.ID, &a.ThreadID, &a.ItemID, &a.ToolName, &a.Description, &in, &a.Decision, &c, &r)
 	a.Input = json.RawMessage(in)
 	a.CreatedAt, _ = time.Parse(timeFmt, c)
+	if r != "" {
+		a.ResolvedAt, _ = time.Parse(timeFmt, r)
+	}
 	return a, err
 }
 

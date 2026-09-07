@@ -71,9 +71,9 @@ func Home(d HomeData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var2 string
-			templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.ResolveAttributeValue(signalsJSON(FirstOr(d.Settings.Agents, "claude"), "", "", "", fmt.Sprintf("project: %q", d.Projects[0].ID)))
+			templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.ResolveAttributeValue(signalsJSON(d.Settings.Agent, "", "", d.Settings.Mode, fmt.Sprintf("project: %q", d.Projects[0].ID)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 33, Col: 128}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 33, Col: 121}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var2)
 			if templ_7745c5c3_Err != nil {
@@ -112,7 +112,7 @@ func Home(d HomeData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = Chips(d.Settings, "", false, false).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = Chips(d.Settings, "", false).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

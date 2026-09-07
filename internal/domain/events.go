@@ -191,6 +191,15 @@ func RuleKey(tool string, input json.RawMessage) string {
 	return tool
 }
 
+// ContextUsed records how full the model's context window is. Only the
+// newest one counts, so the projection keeps it on the thread rather than
+// in the transcript. Window is 0 when the agent did not name a limit and
+// the reader falls back to the model catalog.
+type ContextUsed struct {
+	Tokens int64 `json:"tokens"`
+	Window int64 `json:"window,omitempty"`
+}
+
 type TurnCompleted struct {
 	TurnID     string  `json:"turn_id"`
 	Status     string  `json:"status"` // "done" | "interrupted" | "error"
@@ -247,6 +256,8 @@ func TypeOf(p any) string {
 		return "turn.started"
 	case TurnCompleted, *TurnCompleted:
 		return "turn.completed"
+	case ContextUsed, *ContextUsed:
+		return "thread.context"
 	case PromptQueued, *PromptQueued:
 		return "prompt.queued"
 	case PromptDequeued, *PromptDequeued:
@@ -303,6 +314,8 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &TurnStarted{}
 	case "turn.completed":
 		p = &TurnCompleted{}
+	case "thread.context":
+		p = &ContextUsed{}
 	case "prompt.queued":
 		p = &PromptQueued{}
 	case "prompt.dequeued":

@@ -30,7 +30,7 @@ templ Home(d HomeData) {
 					<h1 class="h">What should we work on?</h1>
 					<form
 						class="composer start"
-						data-signals={ signalsJSON(FirstOr(d.Settings.Agents, "claude"), "", "", "", fmt.Sprintf("project: %q", d.Projects[0].ID)) }
+						data-signals={ signalsJSON(d.Settings.Agent, "", "", d.Settings.Mode, fmt.Sprintf("project: %q", d.Projects[0].ID)) }
 						data-on:submit="evt.preventDefault(); @post('/api/threads')"
 					>
 						<textarea
@@ -48,7 +48,7 @@ templ Home(d HomeData) {
 						<div class="composer-row">
 							@AttachButton()
 							@ProjectPick(d.Projects)
-							@Chips(d.Settings, "", false, false)
+							@Chips(d.Settings, "", false)
 							<span class="spacer"></span>
 							<button class="btn round primary" type="submit" title="Start thread">@Icon("arrow-up", "ui-icon")</button>
 						</div>

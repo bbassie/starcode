@@ -304,9 +304,13 @@ type ThreadSettings struct {
 
 // SetThreadSettings changes how the thread's agent runs. The agent itself
 // can only change before the first prompt (the transcript belongs to one
-// agent's session); model, effort and permission mode apply from the next
-// turn, which is why the idle session is closed and later resumed with the
-// new flags.
+// agent's session). Model, effort and permission mode are flags of the
+// agent process, so between turns the idle session is closed and the next
+// turn resumes it with the new ones. During a turn the session stays: the
+// permission mode is pushed into it when the agent takes that (see
+// agent.ModeSetter), and whatever the agent cannot take live marks the
+// session stale, so the next turn starts a fresh one. A note in the
+// transcript says which of the two happened.
 func (a *App) SetThreadSettings(ctx context.Context, id string, st ThreadSettings) error {
 	if _, ok := a.Agent(st.Agent); !ok {
 		return fmt.Errorf("unknown agent %q", st.Agent)
@@ -314,9 +318,6 @@ func (a *App) SetThreadSettings(ctx context.Context, id string, st ThreadSetting
 	t, err := a.Store.Thread(ctx, id)
 	if err != nil {
 		return err
-	}
-	if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
-		return errors.New("wait for the current turn to finish")
 	}
 	if st.Agent != t.Agent {
 		items, err := a.Store.Items(ctx, id)
@@ -327,11 +328,64 @@ func (a *App) SetThreadSettings(ctx context.Context, id string, st ThreadSetting
 			return errors.New("agent can only be changed before the first prompt")
 		}
 	}
-	a.closeSession(id)
-	_, err = a.Store.Append(ctx, id, domain.ThreadSettingsChanged{
-		Agent: st.Agent, Model: strings.TrimSpace(st.Model), Effort: strings.TrimSpace(st.Effort), PermissionMode: strings.TrimSpace(st.PermissionMode),
-	})
+	st.Model, st.Effort, st.PermissionMode = strings.TrimSpace(st.Model), strings.TrimSpace(st.Effort), strings.TrimSpace(st.PermissionMode)
+	changed := domain.ThreadSettingsChanged{Agent: st.Agent, Model: st.Model, Effort: st.Effort, PermissionMode: st.PermissionMode}
+	if t.Status != domain.StatusRunning && t.Status != domain.StatusAwaitingApproval {
+		a.closeSession(id)
+		_, err = a.Store.Append(ctx, id, changed)
+		return err
+	}
+
+	a.mu.Lock()
+	l := a.sessions[id]
+	a.mu.Unlock()
+	evs := []any{changed}
+	stale := false
+	note := func(text string) {
+		evs = append(evs, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: text})
+	}
+	if st.PermissionMode != t.PermissionMode {
+		name := st.PermissionMode
+		if name == "" {
+			name = "default"
+		}
+		switch err := a.setLiveMode(ctx, l, st.PermissionMode); {
+		case err == nil:
+			note("permission mode is now " + name)
+		case errors.Is(err, agent.ErrModeNextTurn):
+			stale = true
+			note("permission mode " + name + " applies from the next turn; this turn keeps its current mode")
+		default:
+			a.Log.Warn("set permission mode", "thread", id, "mode", st.PermissionMode, "err", err)
+			stale = true
+			note("permission mode " + name + " applies from the next turn (" + err.Error() + ")")
+		}
+	}
+	if st.Model != t.Model || st.Effort != t.Effort {
+		stale = true
+		note("model and effort changes apply from the next turn")
+	}
+	if stale && l != nil {
+		l.mu.Lock()
+		l.stale = true
+		l.mu.Unlock()
+	}
+	_, err = a.Store.Append(ctx, id, evs...)
 	return err
+}
+
+// setLiveMode pushes a permission mode into a running session. Agents whose
+// sessions cannot take one report agent.ErrModeNextTurn, as does a thread
+// with no session behind it.
+func (a *App) setLiveMode(ctx context.Context, l *live, mode string) error {
+	if l == nil {
+		return agent.ErrModeNextTurn
+	}
+	ms, ok := l.sess.(agent.ModeSetter)
+	if !ok {
+		return agent.ErrModeNextTurn
+	}
+	return ms.SetPermissionMode(ctx, mode)
 }
 
 func (a *App) DeleteThread(ctx context.Context, id string) error {
@@ -579,6 +633,13 @@ type live struct {
 	agentName string
 	sess      agent.Session
 	mu        sync.Mutex
+	// stale is set when settings changed during a turn in a way the session
+	// cannot take: it is retired when the turn ends and the next turn
+	// starts a fresh session with the new flags.
+	stale bool
+	// ctxTokens and ctxWindow are the last context reading written to the
+	// log, so a repeat costs nothing.
+	ctxTokens, ctxWindow int64
 	// turn-scoped bookkeeping
 	interrupted bool
 	turnID      string
@@ -591,11 +652,18 @@ type live struct {
 
 func (a *App) session(ctx context.Context, t store.Thread) (*live, error) {
 	a.mu.Lock()
-	if l := a.sessions[t.ID]; l != nil {
-		a.mu.Unlock()
-		return l, nil
-	}
+	cur := a.sessions[t.ID]
 	a.mu.Unlock()
+	if cur != nil {
+		cur.mu.Lock()
+		stale := cur.stale
+		cur.mu.Unlock()
+		if !stale {
+			return cur, nil
+		}
+		// Settings changed after its turn ended and before it was retired.
+		a.retire(cur)
+	}
 
 	ag, ok := a.Agent(t.Agent)
 	if !ok {
@@ -631,6 +699,17 @@ func (a *App) closeSession(threadID string) {
 	if l != nil {
 		l.sess.Close()
 	}
+}
+
+// retire closes l and forgets it, unless the thread has moved on to another
+// session already, which is then left alone.
+func (a *App) retire(l *live) {
+	a.mu.Lock()
+	if a.sessions[l.threadID] == l {
+		delete(a.sessions, l.threadID)
+	}
+	a.mu.Unlock()
+	l.sess.Close()
 }
 
 // pump translates one session's agent events into domain events.
@@ -728,6 +807,18 @@ func (a *App) pump(l *live) {
 			l.pending[ap.ID] = ap
 			l.mu.Unlock()
 			append_(req, domain.ThreadStatusChanged{Status: domain.StatusAwaitingApproval})
+		case agent.KindContextUsage:
+			cu := e.ContextUsage
+			l.mu.Lock()
+			same := cu.Tokens == l.ctxTokens && cu.Window == l.ctxWindow
+			l.ctxTokens, l.ctxWindow = cu.Tokens, cu.Window
+			l.mu.Unlock()
+			// Adapters may report the same reading more than once (Claude
+			// splits one message across several lines); only a change is
+			// worth a row in the log.
+			if !same {
+				append_(domain.ContextUsed{Tokens: cu.Tokens, Window: cu.Window})
+			}
 		case agent.KindTurnCompleted:
 			tc := e.TurnCompleted
 			l.mu.Lock()
@@ -781,11 +872,25 @@ func (a *App) pump(l *live) {
 				completed = append(completed, domain.ThreadStatusChanged{Status: status, Detail: detail})
 			}
 			append_(completed...)
+			// Settings that changed during the turn want a fresh session;
+			// a queued prompt starts on that one instead of this.
+			l.mu.Lock()
+			stale := l.stale
+			l.mu.Unlock()
+			next := l
+			if stale {
+				a.retire(l)
+				next = nil
+			}
 			if len(queued) > 0 {
 				t, err := a.Store.Thread(ctx, tid)
+				if err == nil && next == nil {
+					next, err = a.session(ctx, t)
+				}
 				if err != nil {
-					log.Error("load thread for queued prompt", "err", err)
-				} else if err := a.startPromptLocked(ctx, l, t, queued[0].ID, queued[0].Body); err != nil {
+					log.Error("start queued prompt", "err", err)
+					append_(domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
+				} else if err := a.startPromptLocked(ctx, next, t, queued[0].ID, queued[0].Body); err != nil {
 					log.Error("start queued prompt", "err", err)
 				}
 			}
@@ -795,7 +900,8 @@ func (a *App) pump(l *live) {
 			append_(domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: e.Notice.Text})
 		case agent.KindClosed:
 			a.mu.Lock()
-			if a.sessions[tid] == l {
+			current := a.sessions[tid] == l
+			if current {
 				delete(a.sessions, tid)
 			}
 			a.mu.Unlock()
@@ -803,9 +909,13 @@ func (a *App) pump(l *live) {
 			if err != nil {
 				continue
 			}
+			busy := t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval
 			if e.Closed.Err != nil {
 				append_(domain.ItemStarted{ID: newID(), Kind: domain.KindError, Body: "agent exited: " + e.Closed.Err.Error()},
 					domain.ThreadStatusChanged{Status: domain.StatusError, Detail: e.Closed.Err.Error()})
+			} else if !current && busy {
+				// A retired session going away while its successor runs
+				// the next turn; that turn's status stands.
 			} else if t.Status != domain.StatusIdle {
 				append_(domain.ThreadStatusChanged{Status: domain.StatusIdle})
 			}

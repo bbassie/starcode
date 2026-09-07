@@ -161,11 +161,14 @@ func (a *Agent) Capabilities(ctx context.Context) (agent.Capabilities, error) {
 			caps.Models = append(caps.Models, agent.Model{
 				ID: m.Value, DisplayName: versionedName(m.DisplayName, m.Description), Description: desc,
 				Default: m.Value == "default", Efforts: m.Efforts,
+				ContextWindow: contextWindowFor(m.Value, m.ResolvedModel, m.Description),
 			})
 		}
 		for _, m := range olderModels {
 			if !listed[m.ID] {
-				caps.Models = append(caps.Models, agent.Model{ID: m.ID, DisplayName: m.DisplayName, Description: m.Description, Group: "Older versions"})
+				m.Group = "Older versions"
+				m.ContextWindow = contextWindowFor(m.ID, m.Description)
+				caps.Models = append(caps.Models, m)
 			}
 		}
 		break
@@ -201,6 +204,29 @@ var olderModels = []agent.Model{
 	{ID: "claude-opus-4-7", DisplayName: "Opus 4.7", Description: "Opus 4.7 (claude-opus-4-7)"},
 	{ID: "claude-opus-4-6", DisplayName: "Opus 4.6", Description: "Opus 4.6 (claude-opus-4-6)"},
 	{ID: "claude-sonnet-4-6", DisplayName: "Sonnet 4.6", Description: "Sonnet 4.6 (claude-sonnet-4-6)"},
+}
+
+// standardWindow and longWindow are the two context sizes Claude models
+// come in today.
+const (
+	standardWindow = 200_000
+	longWindow     = 1_000_000
+)
+
+// contextWindowFor is the token limit of a Claude model, guessed from any
+// of the names the CLI gives it. The model list carries no number, so the
+// long-context variants are recognized by the "[1m]" suffix on their id or
+// by their description, and everything else gets the standard window. A
+// turn's result states the real number for the model it ran on and
+// replaces this.
+func contextWindowFor(names ...string) int64 {
+	for _, n := range names {
+		s := strings.ToLower(n)
+		if strings.Contains(s, "[1m]") || strings.Contains(s, "1m context") {
+			return longWindow
+		}
+	}
+	return standardWindow
 }
 
 // versionedName puts the version on an alias label. The CLI names aliases
@@ -356,6 +382,8 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 		dying:  make(chan struct{}),
 		exited: make(chan struct{}),
 		st:     newState(a.log),
+
+		bypassOK: cfg.PermissionMode == "bypassPermissions",
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -496,6 +524,11 @@ type session struct {
 	stdout io.ReadCloser
 	stderr *tailBuffer
 
+	// bypassOK records that the CLI was launched in bypassPermissions. Only
+	// then does it accept a later switch back to that mode; other sessions
+	// silently keep their mode.
+	bypassOK bool
+
 	// wmu serializes stdin writes so two JSON lines never interleave.
 	wmu sync.Mutex
 
@@ -522,6 +555,7 @@ type session struct {
 var errSessionClosed = errors.New("claude: session closed")
 
 var _ agent.Session = (*session)(nil)
+var _ agent.ModeSetter = (*session)(nil)
 
 func (s *session) Events() <-chan agent.Event { return s.events }
 
@@ -553,6 +587,21 @@ func (s *session) Interrupt(ctx context.Context) error {
 	s.st.interrupted = true
 	s.mu.Unlock()
 	return s.write(interruptRequest(newUUID()))
+}
+
+// SetPermissionMode switches the running session to mode. The CLI applies
+// it to the next tool call; an approval it already asked for stays pending.
+func (s *session) SetPermissionMode(ctx context.Context, mode string) error {
+	if err := s.alive(); err != nil {
+		return err
+	}
+	if mode == "bypassPermissions" && !s.bypassOK {
+		return agent.ErrModeNextTurn
+	}
+	if mode == "" {
+		mode = "default"
+	}
+	return s.write(setModeRequest(newUUID(), mode))
 }
 
 // Resolve answers a pending ApprovalRequested.
@@ -748,6 +797,14 @@ func interruptRequest(id string) []byte {
 	})
 }
 
+func setModeRequest(id, mode string) []byte {
+	return encodeLine(map[string]any{
+		"type":       "control_request",
+		"request_id": id,
+		"request":    map[string]any{"subtype": "set_permission_mode", "mode": mode},
+	})
+}
+
 func approvalResponse(requestID string, decision agent.Decision, input json.RawMessage) []byte {
 	inner := map[string]any{"behavior": "deny", "message": "User denied this action"}
 	if decision == agent.Allow {
@@ -796,6 +853,13 @@ type state struct {
 	// sessionID is learned from system/init and identifies Claude's local
 	// persisted transcript.
 	sessionID string
+
+	// model is the model the conversation runs on, so the result's
+	// per-model usage can be read for the right one. window is its context
+	// limit; ctxTokens and ctxWindow are the last reading passed on, so the
+	// same numbers are not reported twice.
+	model                        string
+	window, ctxTokens, ctxWindow int64
 
 	// turnID is the id Send generated for the turn in flight.
 	turnID string
@@ -856,8 +920,22 @@ func (st *state) takeOutbox() [][]byte {
 	return out
 }
 
+// contextEvent reports how full the window is, or nothing when neither the
+// count nor the limit moved since the last reading.
+func (st *state) contextEvent(tokens int64) []agent.Event {
+	if tokens <= 0 || (tokens == st.ctxTokens && st.window == st.ctxWindow) {
+		return nil
+	}
+	st.ctxTokens, st.ctxWindow = tokens, st.window
+	return []agent.Event{{
+		Kind:         agent.KindContextUsage,
+		ContextUsage: &agent.ContextUsage{Tokens: tokens, Window: st.window},
+	}}
+}
+
 // endTurn drops the per-turn bookkeeping. Message and tool ids are unique per
-// turn, so nothing here outlives a result.
+// turn, so nothing here outlives a result. The model and its context reading
+// describe the conversation instead, and stay.
 func (st *state) endTurn() {
 	st.turnID = ""
 	st.interrupted = false
@@ -893,6 +971,9 @@ type outLine struct {
 	RequestID string          `json:"request_id"`
 	Request   json.RawMessage `json:"request"`
 
+	// control_response
+	Response json.RawMessage `json:"response"`
+
 	// rate_limit_event
 	Status        string          `json:"status"`
 	RateLimitInfo json.RawMessage `json:"rate_limit_info"`
@@ -903,6 +984,26 @@ type outLine struct {
 	Result     string  `json:"result"`
 	CostUSD    float64 `json:"total_cost_usd"`
 	Usage      *usage  `json:"usage"`
+	// ModelUsage breaks the turn down per model, and is the one place the
+	// CLI states the context window it ran with.
+	ModelUsage map[string]struct {
+		ContextWindow int64 `json:"contextWindow"`
+	} `json:"modelUsage"`
+}
+
+// contextWindow reads the window of the model the conversation runs on.
+// Subagents add entries of their own, so the main model is looked up by
+// name and a map with nothing else in it is taken as that model's.
+func (out *outLine) contextWindow(model string) int64 {
+	if u, ok := out.ModelUsage[model]; ok {
+		return u.ContextWindow
+	}
+	if len(out.ModelUsage) == 1 {
+		for _, u := range out.ModelUsage {
+			return u.ContextWindow
+		}
+	}
+	return 0
 }
 
 type usage struct {
@@ -910,6 +1011,17 @@ type usage struct {
 	OutputTokens        int64 `json:"output_tokens"`
 	CacheReadTokens     int64 `json:"cache_read_input_tokens"`
 	CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+}
+
+// context is what this request put in the window: the fresh input, the
+// cached prefix it was replayed on top of, and the reply that joins them
+// for the next one. On a result line the same fields are the turn's total
+// instead, so only a message's usage may be read this way.
+func (u *usage) context() int64 {
+	if u == nil {
+		return 0
+	}
+	return u.InputTokens + u.CacheReadTokens + u.CacheCreationTokens + u.OutputTokens
 }
 
 type streamEvent struct {
@@ -937,6 +1049,8 @@ type streamEvent struct {
 type apiMessage struct {
 	ID      string          `json:"id"`
 	Role    string          `json:"role"`
+	Model   string          `json:"model"`
+	Usage   *usage          `json:"usage"`
 	Content json.RawMessage `json:"content"`
 }
 
@@ -996,7 +1110,17 @@ func parseLine(line []byte, st *state) []agent.Event {
 		}
 		return nil
 	case "control_response":
-		st.log.Debug("control response", "line", clip(string(line), 200))
+		// Answers to our own requests (interrupt, set_permission_mode). A
+		// refusal is worth seeing in the log; success is noise.
+		var resp struct {
+			Subtype string `json:"subtype"`
+			Error   string `json:"error"`
+		}
+		if json.Unmarshal(out.Response, &resp) == nil && resp.Subtype == "error" {
+			st.log.Warn("control request refused", "err", resp.Error, "line", clip(string(line), 200))
+		} else {
+			st.log.Debug("control response", "line", clip(string(line), 200))
+		}
 		return nil
 	default:
 		st.log.Debug("ignored line", "type", out.Type, "subtype", out.Subtype)
@@ -1008,6 +1132,10 @@ func parseSystem(out *outLine, st *state) []agent.Event {
 	switch out.Subtype {
 	case "init":
 		st.sessionID = out.SessionID
+		if out.Model != "" {
+			st.model = out.Model
+			st.window = contextWindowFor(out.Model)
+		}
 		return []agent.Event{{
 			Kind:        agent.KindSessionInfo,
 			SessionInfo: &agent.SessionInfo{ExternalID: out.SessionID, Model: out.Model},
@@ -1123,7 +1251,12 @@ func parseAssistant(out *outLine, st *state) []agent.Event {
 	if !ok {
 		return nil
 	}
-	var events []agent.Event
+	// Every assistant message states what its request cost, which is the
+	// only place the size of the conversation shows up while a turn runs.
+	if msg.Model != "" {
+		st.model = msg.Model
+	}
+	events := st.contextEvent(msg.Usage.context())
 	for _, blk := range blocks {
 		switch blk.Type {
 		case "text":
@@ -1267,8 +1400,16 @@ func parseResult(out *outLine, st *state) []agent.Event {
 		done.Status = "interrupted"
 		done.Error = ""
 	}
+	// The result is where the CLI names the real window; the count stays
+	// the one the last message reported, since the usage here is the sum
+	// over the whole turn rather than what sits in the window.
+	var events []agent.Event
+	if w := out.contextWindow(st.model); w > 0 && w != st.window {
+		st.window = w
+		events = st.contextEvent(st.ctxTokens)
+	}
 	st.endTurn()
-	return []agent.Event{{Kind: agent.KindTurnCompleted, TurnCompleted: done}}
+	return append(events, agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: done})
 }
 
 // decodeMessage unpacks message.content, which is either a string or a list

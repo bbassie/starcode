@@ -100,7 +100,7 @@ func TestAppendProjectsAndReplay(t *testing.T) {
 			t.Fatalf("items = %+v", items)
 		}
 		aps, err := s.PendingApprovals(ctx, "t1")
-		if err != nil || len(aps) != 1 || aps[0].ToolName != "Bash" {
+		if err != nil || len(aps) != 1 || aps[0].ToolName != "Bash" || !aps[0].ResolvedAt.IsZero() {
 			t.Fatalf("approvals = %+v, %v", aps, err)
 		}
 		queued, err := s.QueuedPrompts(ctx, "t1")
@@ -119,7 +119,15 @@ func TestAppendProjectsAndReplay(t *testing.T) {
 	}
 	check()
 
-	if _, err := s.Append(ctx, "t1", domain.PromptDequeued{ID: "q1"}, domain.ApprovalResolved{ID: "a1", Decision: domain.DecisionAllow}, domain.ThreadDeleted{}); err != nil {
+	if _, err := s.Append(ctx, "t1", domain.PromptDequeued{ID: "q1"}, domain.ApprovalResolved{ID: "a1", Decision: domain.DecisionAllow}); err != nil {
+		t.Fatal(err)
+	}
+	// The answer time is kept, so the transcript can leave the wait out
+	// of its "worked for" counts.
+	if all, err := s.Approvals(ctx, "t1"); err != nil || len(all) != 1 || all[0].Decision != domain.DecisionAllow || all[0].ResolvedAt.IsZero() || all[0].ResolvedAt.Before(all[0].CreatedAt) {
+		t.Fatalf("approvals after answer = %+v, %v", all, err)
+	}
+	if _, err := s.Append(ctx, "t1", domain.ThreadDeleted{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Thread(ctx, "t1"); err != ErrNotFound {
@@ -185,6 +193,51 @@ func TestArchiveProjectionAndReplay(t *testing.T) {
 	}
 	if th, _ = s.Thread(ctx, "t1"); !th.Archived {
 		t.Fatalf("after replay: %+v", th)
+	}
+}
+
+func TestContextProjectionAndReplay(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if _, err := s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/ctx", Name: "ctx"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "t1", domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "one", Agent: "claude", Model: "sonnet"},
+		domain.ContextUsed{Tokens: 42_000, Window: 200_000}); err != nil {
+		t.Fatal(err)
+	}
+	th, _ := s.Thread(ctx, "t1")
+	if th.ContextTokens != 42_000 || th.ContextWindow != 200_000 {
+		t.Fatalf("after first reading: %d/%d", th.ContextTokens, th.ContextWindow)
+	}
+	// A reading without a window keeps the one already known.
+	if _, err := s.Append(ctx, "t1", domain.ContextUsed{Tokens: 51_000}); err != nil {
+		t.Fatal(err)
+	}
+	if th, _ = s.Thread(ctx, "t1"); th.ContextTokens != 51_000 || th.ContextWindow != 200_000 {
+		t.Fatalf("after windowless reading: %d/%d", th.ContextTokens, th.ContextWindow)
+	}
+	// Another model has another window, so the old one is dropped; the
+	// count belongs to the conversation and stays.
+	if _, err := s.Append(ctx, "t1", domain.ThreadSettingsChanged{Agent: "claude", Model: "opus[1m]"}); err != nil {
+		t.Fatal(err)
+	}
+	if th, _ = s.Thread(ctx, "t1"); th.ContextTokens != 51_000 || th.ContextWindow != 0 {
+		t.Fatalf("after model change: %d/%d", th.ContextTokens, th.ContextWindow)
+	}
+	// Settings saved without touching the model leave it alone.
+	if _, err := s.Append(ctx, "t1", domain.ContextUsed{Tokens: 60_000, Window: 1_000_000},
+		domain.ThreadSettingsChanged{Agent: "claude", Model: "opus[1m]", Effort: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	if th, _ = s.Thread(ctx, "t1"); th.ContextWindow != 1_000_000 {
+		t.Fatalf("after effort change: %d", th.ContextWindow)
+	}
+	if _, err := s.Replay(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if th, _ = s.Thread(ctx, "t1"); th.ContextTokens != 60_000 || th.ContextWindow != 1_000_000 {
+		t.Fatalf("after replay: %d/%d", th.ContextTokens, th.ContextWindow)
 	}
 }
 

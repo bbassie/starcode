@@ -28,15 +28,17 @@ type SettingsData struct {
 // signal pick names the open menu and pickq holds the model search text
 // (see pickKey and pickLabel in layout.templ). onChange is a Datastar
 // action run after a choice (empty for none). The surrounding form owns
-// the signals agent, model, effort and mode.
-templ Chips(d SettingsData, onChange string, disabled bool, agentLocked bool) {
+// the signals agent, model, effort and mode. The chips stay usable while a
+// turn runs: the app applies what it can to the running turn and the rest
+// to the next one.
+templ Chips(d SettingsData, onChange string, agentLocked bool) {
 	<div class="chips">
 		for _, name := range d.Agents {
 			{{ c, ok := d.Caps[name] }}
-			@ModelPick(d, name, c, d.CapsErrs[name], onChange, disabled, agentLocked)
+			@ModelPick(d, name, c, d.CapsErrs[name], onChange, agentLocked)
 			if ok {
-				@EffortPick(d, name, c, onChange, disabled)
-				@ModePick(d, name, c, onChange, disabled)
+				@EffortPick(d, name, c, onChange)
+				@ModePick(d, name, c, onChange)
 			}
 		}
 	</div>
@@ -45,15 +47,17 @@ templ Chips(d SettingsData, onChange string, disabled bool, agentLocked bool) {
 // pickAttrs are shared by every picker: shown for its agent, closed by a
 // click elsewhere or Escape. A click inside any picker is left alone: the
 // hidden pickers of the other agents see every click as outside, and the
-// rail switches agents by making one of them the visible one.
+// rail switches agents by making one of them the visible one. The context
+// meter is left alone too, since it opens the model menu from outside
+// every picker and would otherwise close it in the same click.
 func pickAttrs(d SettingsData, name, kind string) templ.Attributes {
 	return templ.Attributes{
-		"class":                 "pick",
-		"data-show":             "$agent == " + jsq(name),
-		"data-preserve-attr":    "style",
-		"style":                 hiddenUnless(name == d.Agent),
-		"data-on:click__outside": "$pick == '" + kind + "' && !evt.target.closest('.pick') && ($pick = '')",
-		"data-on:keydown":       "pickKey(evt, el) && ($pick = '')",
+		"class":                  "pick",
+		"data-show":              "$agent == " + jsq(name),
+		"data-preserve-attr":     "style",
+		"style":                  hiddenUnless(name == d.Agent),
+		"data-on:click__outside": "$pick == '" + kind + "' && !evt.target.closest('.pick, #context-meter') && ($pick = '')",
+		"data-on:keydown":        "pickKey(evt, el) && ($pick = '')",
 	}
 }
 
@@ -83,10 +87,10 @@ func JSQ(s string) string { return jsq(s) }
 // (when there is a choice to make) and the catalog of the agent shown,
 // with the default first, the groups after, and a row that takes the
 // typed text as a model id for anything outside the catalog.
-templ ModelPick(d SettingsData, name string, c agent.Capabilities, capsErr error, onChange string, disabled bool, agentLocked bool) {
+templ ModelPick(d SettingsData, name string, c agent.Capabilities, capsErr error, onChange string, agentLocked bool) {
 	{{ look := d.Looks[name] }}
 	<div { pickAttrs(d, name, "model")... }>
-		<button type="button" class="chip" title="Model" disabled?={ disabled } data-on:click={ pickToggle("model") } data-class:open="$pick == 'model'">
+		<button type="button" class="chip" title="Model" data-on:click={ pickToggle("model") } data-class:open="$pick == 'model'">
 			<span class="chip-icon" style={ agentMarkStyle(look.Color) }>@Brand(look.Driver, "ui-icon")</span>
 			<span class="chip-label" data-text="pickLabel(el, $model)">{ modelLabel(c, d.Model, capsErr) }</span>
 			@Icon("chevron-down", "ui-icon chip-caret")
@@ -100,7 +104,7 @@ templ ModelPick(d SettingsData, name string, c agent.Capabilities, capsErr error
 				if !agentLocked && len(d.Agents) > 1 {
 					<div class="pick-rail">
 						for _, a := range d.Agents {
-							<button type="button" class={ "pick-agent", templ.KV("sel", a == name) } title={ d.Looks[a].Label } style={ agentMarkStyle(d.Looks[a].Color) } data-on:click={ agentSet(a, onChange) }>@Brand(d.Looks[a].Driver, "ui-icon")</button>
+							<button type="button" class={ "pick-agent", templ.KV("sel", a == name) } title={ d.Looks[a].Label } style={ agentMarkStyle(d.Looks[a].Color) } data-on:click={ agentSet(a, DefaultMode(d.Caps[a]), onChange) }>@Brand(d.Looks[a].Driver, "ui-icon")</button>
 						}
 					</div>
 				}
@@ -109,7 +113,7 @@ templ ModelPick(d SettingsData, name string, c agent.Capabilities, capsErr error
 					if capsErr != nil {
 						<p class="pick-err">Catalog unavailable: { capsErr.Error() }</p>
 					} else {
-						@ModelOption(agent.Model{ID: "", DisplayName: "Default", Description: defaultModelDesc(c)}, defaultModelLabel(c), d.Model == "", onChange)
+						@ModelOption(agent.Model{ID: "", DisplayName: "Default", Description: defaultModelDesc(c), ContextWindow: catalogWindow(c, "")}, defaultModelLabel(c), d.Model == "", onChange)
 						for _, m := range c.Models {
 							if m.ID != "" && m.ID != "default" && m.Group == "" {
 								@ModelOption(m, "", m.ID == d.Model, onChange)
@@ -142,9 +146,9 @@ templ ModelPick(d SettingsData, name string, c agent.Capabilities, capsErr error
 
 // agentSet switches the rail: the other agent's menu takes over (it is
 // shown for the same pick signal) with its own defaults, and the focus
-// moves into it.
-func agentSet(name, onChange string) string {
-	expr := "$agent = " + jsq(name) + "; $model = ''; $effort = ''; $mode = ''; $pickq = ''; pickFocus(el)"
+// moves into it. mode is that agent's default permission mode.
+func agentSet(name, mode, onChange string) string {
+	expr := "$agent = " + jsq(name) + "; $model = ''; $effort = ''; $mode = " + jsq(mode) + "; $pickq = ''; pickFocus(el)"
 	if onChange != "" {
 		expr += "; " + onChange
 	}
@@ -188,14 +192,17 @@ templ ModelOption(m agent.Model, short string, selected bool, onChange string) {
 				<span class="opt-desc" title={ m.Description }>{ m.Description }</span>
 			}
 		</span>
+		if m.ContextWindow > 0 {
+			<span class="opt-ctx" title={ windowLabel(m.ContextWindow) + " token context window" }>{ windowLabel(m.ContextWindow) }</span>
+		}
 		@Icon("check", "ui-icon opt-check")
 	</button>
 }
 
 // EffortPick is the reasoning effort chip and its menu.
-templ EffortPick(d SettingsData, name string, c agent.Capabilities, onChange string, disabled bool) {
+templ EffortPick(d SettingsData, name string, c agent.Capabilities, onChange string) {
 	<div { pickAttrs(d, name, "effort")... }>
-		<button type="button" class="chip" title="Reasoning effort" disabled?={ disabled } data-on:click={ pickToggle("effort") } data-class:open="$pick == 'effort'">
+		<button type="button" class="chip" title="Reasoning effort" data-on:click={ pickToggle("effort") } data-class:open="$pick == 'effort'">
 			<span class="chip-icon">@Icon("brain", "ui-icon")</span>
 			<span class="chip-label" data-text="pickLabel(el, $effort)">{ effortShort(d.Effort) }</span>
 			@Icon("chevron-down", "ui-icon chip-caret")
@@ -216,9 +223,9 @@ templ EffortPick(d SettingsData, name string, c agent.Capabilities, onChange str
 
 // ModePick is the permission mode chip and its menu; each row carries the
 // agent's own explanation of the mode.
-templ ModePick(d SettingsData, name string, c agent.Capabilities, onChange string, disabled bool) {
+templ ModePick(d SettingsData, name string, c agent.Capabilities, onChange string) {
 	<div { pickAttrs(d, name, "mode")... }>
-		<button type="button" class="chip" title="Permission mode" disabled?={ disabled } data-on:click={ pickToggle("mode") } data-class:open="$pick == 'mode'" data-class:loose={ looseModes(c) }>
+		<button type="button" class="chip" title="Permission mode" data-on:click={ pickToggle("mode") } data-class:open="$pick == 'mode'" data-class:loose={ looseModes(c) }>
 			<span class="chip-icon">@Icon("shield-check", "ui-icon")</span>
 			<span class="chip-label" data-text="pickLabel(el, $mode)">{ modeShort(d.Mode) }</span>
 			@Icon("chevron-down", "ui-icon chip-caret")
@@ -403,12 +410,32 @@ func modeIcon(id string) string {
 	return "shield-check"
 }
 
+// looseMode says whether a permission mode never asks. The ids are the
+// agents' own: Claude's bypassPermissions, Codex's full-access, and the
+// fake agent's yolo.
+func looseMode(id string) bool {
+	return id == "bypassPermissions" || id == "full-access" || id == "yolo"
+}
+
+// DefaultMode is the permission mode a new thread starts in: the agent's
+// mode that never asks, when it has one. A console that runs coding agents
+// unattended is the wrong place for a prompt on every edit; anyone who
+// wants the prompts picks a stricter mode on the chip.
+func DefaultMode(c agent.Capabilities) string {
+	for _, m := range c.PermissionModes {
+		if looseMode(m.ID) {
+			return m.ID
+		}
+	}
+	return ""
+}
+
 // looseModes is the chip's expression for the modes that never ask; the
 // chip's icon takes the warning colour on them.
 func looseModes(c agent.Capabilities) string {
 	var parts []string
 	for _, m := range c.PermissionModes {
-		if m.ID == "bypassPermissions" || m.ID == "full-access" {
+		if looseMode(m.ID) {
 			parts = append(parts, "$mode == "+jsq(m.ID))
 		}
 	}

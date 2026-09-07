@@ -1,8 +1,10 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -62,6 +64,14 @@ const (
 
 	lineResultOK  = `{"duration_api_ms":3987,"stop_reason":"end_turn","session_id":"s1","total_cost_usd":0.0244249,"usage":{"input_tokens":18,"cache_creation_input_tokens":9312,"cache_read_input_tokens":38209,"output_tokens":197},"is_error":false,"num_turns":2,"subtype":"success","result":"Done.","type":"result","duration_ms":3567}`
 	lineResultErr = `{"session_id":"s1","total_cost_usd":0.01,"usage":{"input_tokens":5,"output_tokens":1},"is_error":true,"num_turns":1,"subtype":"error_during_execution","result":"API error: overloaded","type":"result","duration_ms":900}`
+
+	// Assistant messages carry the usage of the request that produced them,
+	// which is where the size of the conversation shows up. The result
+	// states the window through modelUsage.
+	lineTextMsgUsage  = `{"type":"assistant","message":{"id":"msg_a","type":"message","role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"one"}],"usage":{"input_tokens":10,"cache_creation_input_tokens":9099,"cache_read_input_tokens":13615,"output_tokens":4}},"session_id":"s1"}`
+	lineTextMsgUsage2 = `{"type":"assistant","message":{"id":"msg_b","type":"message","role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"two"}],"usage":{"input_tokens":12,"cache_creation_input_tokens":9099,"cache_read_input_tokens":20000,"output_tokens":40}},"session_id":"s1"}`
+	lineResultWindow  = `{"session_id":"s1","total_cost_usd":0.02,"usage":{"input_tokens":22,"output_tokens":44},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":22,"outputTokens":44,"contextWindow":200000,"maxOutputTokens":32000}},"is_error":false,"subtype":"success","result":"Done.","type":"result","duration_ms":900}`
+	lineResultSubs    = `{"session_id":"s1","total_cost_usd":0.02,"usage":{"input_tokens":22,"output_tokens":44},"modelUsage":{"claude-haiku-4-5-20251001":{"contextWindow":200000},"claude-sonnet-5":{"contextWindow":999}},"is_error":false,"subtype":"success","result":"Done.","type":"result","duration_ms":900}`
 )
 
 // feed runs lines through the parser and returns everything they emitted.
@@ -348,6 +358,78 @@ func TestParseResult(t *testing.T) {
 	}
 }
 
+func TestParseAssistantReportsContextUsage(t *testing.T) {
+	st := newState(nil)
+	// init names the model, which is enough for a window before any turn
+	// has finished.
+	events := feed(st, lineInit, lineTextMsgUsage)
+	ev := one(t, events, agent.KindContextUsage).ContextUsage
+	if got, want := ev.Tokens, int64(10+9099+13615+4); got != want {
+		t.Errorf("Tokens = %d, want %d", got, want)
+	}
+	if got, want := ev.Window, int64(standardWindow); got != want {
+		t.Errorf("Window = %d, want %d", got, want)
+	}
+	// The same message again is not news; a bigger one is.
+	if got := only(t, feed(st, lineTextMsgUsage), agent.KindContextUsage); len(got) != 0 {
+		t.Errorf("repeated reading emitted %d events", len(got))
+	}
+	next := one(t, feed(st, lineTextMsgUsage2), agent.KindContextUsage).ContextUsage
+	if got, want := next.Tokens, int64(12+9099+20000+40); got != want {
+		t.Errorf("Tokens = %d, want %d", got, want)
+	}
+}
+
+func TestParseResultCorrectsContextWindow(t *testing.T) {
+	st := newState(nil)
+	st.turnID = "turn-1"
+	// A 1M model guessed from the id, corrected to what the turn ran with.
+	feed(st, `{"type":"system","subtype":"init","session_id":"s1","model":"claude-haiku-4-5-20251001"}`)
+	st.window = longWindow
+	feed(st, lineTextMsgUsage)
+	ev := one(t, feed(st, lineResultWindow), agent.KindContextUsage).ContextUsage
+	if got, want := ev.Window, int64(200000); got != want {
+		t.Errorf("Window = %d, want %d", got, want)
+	}
+	if got, want := ev.Tokens, int64(10+9099+13615+4); got != want {
+		t.Errorf("Tokens = %d, want the last message's %d", got, want)
+	}
+	// A second identical result says nothing new.
+	if got := only(t, feed(st, lineResultWindow), agent.KindContextUsage); len(got) != 0 {
+		t.Errorf("unchanged window emitted %d events", len(got))
+	}
+}
+
+func TestParseResultPicksTheThreadsModelWindow(t *testing.T) {
+	st := newState(nil)
+	// A subagent ran on another model; the window of the one the
+	// conversation is on is the one that counts.
+	feed(st, lineTextMsgUsage, lineResultSubs)
+	if got, want := st.window, int64(200000); got != want {
+		t.Errorf("window = %d, want %d", got, want)
+	}
+}
+
+func TestContextWindowFor(t *testing.T) {
+	cases := []struct {
+		names []string
+		want  int64
+	}{
+		{[]string{"claude-opus-5[1m]"}, longWindow},
+		{[]string{"opus[1m]", "claude-opus-5[1m]"}, longWindow},
+		{[]string{"claude-fable-5-1[1m]", "claude-fable-5-1"}, longWindow},
+		{[]string{"default", "claude-opus-5", "Opus 5 with 1M context · Best for everyday tasks"}, longWindow},
+		{[]string{"sonnet", "claude-sonnet-5", "Sonnet 5 · Efficient for routine tasks"}, standardWindow},
+		{[]string{"haiku"}, standardWindow},
+		{nil, standardWindow},
+	}
+	for _, c := range cases {
+		if got := contextWindowFor(c.names...); got != c.want {
+			t.Errorf("contextWindowFor(%q) = %d, want %d", c.names, got, c.want)
+		}
+	}
+}
+
 func TestParseResultError(t *testing.T) {
 	st := newState(nil)
 	st.turnID = "turn-2"
@@ -479,6 +561,11 @@ func TestOutgoingMessageShapes(t *testing.T) {
 			`{"request":{"subtype":"interrupt"},"request_id":"int-1","type":"control_request"}`,
 		},
 		{
+			"set permission mode",
+			setModeRequest("mode-1", "acceptEdits"),
+			`{"request":{"mode":"acceptEdits","subtype":"set_permission_mode"},"request_id":"mode-1","type":"control_request"}`,
+		},
+		{
 			"control error",
 			controlError("hook-7", "unsupported"),
 			`{"response":{"error":"unsupported","request_id":"hook-7","subtype":"error"},"type":"control_response"}`,
@@ -493,6 +580,44 @@ func TestOutgoingMessageShapes(t *testing.T) {
 				t.Errorf("got  %s\nwant %s", got, c.want)
 			}
 		})
+	}
+}
+
+type nopWriteCloser struct{ *bytes.Buffer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+func TestSetPermissionModeOnlyReturnsToBypass(t *testing.T) {
+	var out bytes.Buffer
+	s := &session{stdin: nopWriteCloser{&out}, dying: make(chan struct{}), exited: make(chan struct{})}
+
+	// The CLI ignores a switch into bypassPermissions unless it started
+	// there, so the adapter says so instead of pretending it happened.
+	if err := s.SetPermissionMode(context.Background(), "bypassPermissions"); !errors.Is(err, agent.ErrModeNextTurn) {
+		t.Fatalf("SetPermissionMode(bypass) err = %v, want ErrModeNextTurn", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("wrote %q for a refused switch", out.String())
+	}
+	if err := s.SetPermissionMode(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"mode":"default","subtype":"set_permission_mode"`) {
+		t.Errorf("empty mode wrote %q, want default", out.String())
+	}
+
+	out.Reset()
+	s.bypassOK = true
+	if err := s.SetPermissionMode(context.Background(), "bypassPermissions"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"mode":"bypassPermissions"`) {
+		t.Errorf("wrote %q", out.String())
+	}
+
+	close(s.exited)
+	if err := s.SetPermissionMode(context.Background(), "plan"); err == nil {
+		t.Error("SetPermissionMode on an exited session did not fail")
 	}
 }
 

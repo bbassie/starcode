@@ -109,6 +109,7 @@ type conn struct {
 	gitDirty  bool
 	sideDirty bool
 	homeDirty bool
+	ctxDirty  bool
 	projectID string
 	lastGit   time.Time
 	// work is the id of the first item of the open "worked for" block, or
@@ -168,7 +169,7 @@ func (c *conn) renderHome(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	home := views.HomeData{Projects: ps, Threads: ts, Looks: c.s.agentLooks(), Seen: seen, Settings: views.SettingsData{Agents: c.s.agentNames(), Looks: c.s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: views.FirstOr(c.s.agentNames(), "claude")}}
+	home := views.HomeData{Projects: ps, Threads: ts, Looks: c.s.agentLooks(), Seen: seen, Settings: c.s.homeSettings(caps, capsErrs)}
 	return c.sse.PatchElementTempl(views.Home(home))
 }
 
@@ -212,6 +213,17 @@ func (c *conn) renderHead(ctx context.Context) error {
 	return c.sse.PatchElementTempl(views.PageTitle(views.TabTitle(d.Thread)))
 }
 
+// renderContextMeter redraws the window gauge in the composer. It moves
+// several times a turn, so it is patched on its own rather than with the
+// whole composer.
+func (c *conn) renderContextMeter(ctx context.Context) error {
+	d, err := c.s.contextData(ctx, c.threadID)
+	if err != nil {
+		return nil
+	}
+	return c.sse.PatchElementTempl(views.ContextMeter(d))
+}
+
 func (c *conn) renderGit(ctx context.Context) error {
 	c.gitDirty = false
 	c.lastGit = time.Now()
@@ -249,6 +261,12 @@ func (c *conn) flushDirty(ctx context.Context) error {
 			return err
 		}
 	}
+	if c.ctxDirty {
+		c.ctxDirty = false
+		if err := c.renderContextMeter(ctx); err != nil {
+			return err
+		}
+	}
 	if c.sideDirty {
 		c.sideDirty = false
 		if err := c.renderSidebar(ctx); err != nil {
@@ -274,13 +292,17 @@ func (c *conn) renderWorkSummary(ctx context.Context, firstID string) error {
 	if err != nil {
 		return err
 	}
+	aps, err := c.s.App.Store.Approvals(ctx, c.threadID)
+	if err != nil {
+		return err
+	}
 	for _, b := range views.GroupItems(items) {
 		if b.Item == nil && b.Work[0].ID == firstID {
-			if running, _, _ := views.WorkState(b.Work); running {
-				return c.sse.PatchElementTempl(views.WorkSummary(b.Work))
+			if running, _, _ := views.WorkState(b.Work, aps); running {
+				return c.sse.PatchElementTempl(views.WorkSummary(b.Work, aps))
 			}
 			// Finished: morph the whole block so it also folds shut.
-			return c.sse.PatchElementTempl(views.Work(b.Work))
+			return c.sse.PatchElementTempl(views.Work(b.Work, aps))
 		}
 	}
 	return nil
@@ -375,7 +397,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		}
 		if c.work == "" {
 			c.work = it.ID
-			return c.sse.PatchElementTempl(views.Work([]store.Item{it}), datastar.WithSelector("#items .items-inner"), datastar.WithModeAppend())
+			return c.sse.PatchElementTempl(views.Work([]store.Item{it}, nil), datastar.WithSelector("#items .items-inner"), datastar.WithModeAppend())
 		}
 		if err := c.sse.PatchElementTempl(views.Item(it), datastar.WithSelector("#work-"+c.work+" .work-body"), datastar.WithModeAppend()); err != nil {
 			return err
@@ -414,6 +436,10 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 	case domain.RuleRevoked:
 		if mine {
 			return c.renderHead(ctx)
+		}
+	case domain.ContextUsed:
+		if mine {
+			c.ctxDirty = true
 		}
 	case domain.TurnCompleted:
 		if c.view == "usage" {

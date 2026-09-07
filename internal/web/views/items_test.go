@@ -6,6 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"starcode/internal/agent"
+	"starcode/internal/domain"
+	"starcode/internal/store"
 )
 
 func TestSplitAttachments(t *testing.T) {
@@ -61,6 +65,65 @@ func TestUsageChartAndFormatting(t *testing.T) {
 	}
 }
 
+func TestContextMeterNumbers(t *testing.T) {
+	cases := []struct {
+		used, window int64
+		pct          int
+		level        string
+	}{
+		{0, 200_000, 0, ""},
+		{1, 200_000, 1, ""}, // anything in the window is not 0%
+		{100_000, 200_000, 50, ""},
+		{150_000, 200_000, 75, "warn"},
+		{199_999, 200_000, 100, "full"}, // and nearly full is not 99%
+		{300_000, 200_000, 100, "full"}, // a shrunken window does not overflow
+		{50_000, 0, 0, ""},              // window unknown
+	}
+	for _, c := range cases {
+		pct := contextPct(c.used, c.window)
+		if pct != c.pct {
+			t.Errorf("contextPct(%d, %d) = %d, want %d", c.used, c.window, pct, c.pct)
+		}
+		if got := contextLevel(pct); got != c.level {
+			t.Errorf("contextLevel(%d) = %q, want %q", pct, got, c.level)
+		}
+	}
+	for n, want := range map[int64]string{200_000: "200K", 1_000_000: "1M", 272_000: "272K", 131_072: "131.1K", 0: ""} {
+		if got := windowLabel(n); got != want {
+			t.Errorf("windowLabel(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestContextWindowPrefersWhatTheAgentReported(t *testing.T) {
+	caps := agent.Capabilities{Models: []agent.Model{
+		{ID: "", DisplayName: "Default", Default: true, ContextWindow: 200_000},
+		{ID: "opus[1m]", DisplayName: "Opus (1M)", ContextWindow: 1_000_000},
+	}}
+	d := ThreadData{
+		Thread:   store.Thread{Agent: "claude", Model: "opus[1m]"},
+		Settings: SettingsData{Caps: map[string]agent.Capabilities{"claude": caps}},
+	}
+	// Nothing reported yet: the catalog answers for the model selected.
+	if got := contextWindow(d); got != 1_000_000 {
+		t.Errorf("catalog window = %d, want 1000000", got)
+	}
+	d.Thread.Model = ""
+	if got := contextWindow(d); got != 200_000 {
+		t.Errorf("default model window = %d, want 200000", got)
+	}
+	// What the agent said about the model that ran wins.
+	d.Thread.ContextWindow = 400_000
+	if got := contextWindow(d); got != 400_000 {
+		t.Errorf("reported window = %d, want 400000", got)
+	}
+	// An agent with no catalog and nothing reported has no window.
+	empty := ThreadData{Thread: store.Thread{Agent: "codex"}}
+	if got := contextWindow(empty); got != 0 {
+		t.Errorf("unknown window = %d, want 0", got)
+	}
+}
+
 func TestToolSummaryPrefersDescription(t *testing.T) {
 	input, _ := json.Marshal(map[string]string{"command": "go test ./...", "description": "Run the test suite"})
 	m := toolMeta{Input: input, Summary: "go test ./..."}
@@ -105,5 +168,47 @@ func TestSplitMatchesFoldsRunesOneToOne(t *testing.T) {
 	}
 	if parts := splitMatches("a-b-a", "A"); len(parts) != 3 || !parts[0].hit || parts[1].text != "-b-" || !parts[2].hit {
 		t.Fatalf("parts = %+v", parts)
+	}
+}
+
+func TestWorkStateLeavesOutApprovalWaits(t *testing.T) {
+	t0 := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	items := []store.Item{
+		{ID: "i1", Kind: domain.KindTool, Status: domain.ItemDone, CreatedAt: t0, UpdatedAt: t0.Add(5 * time.Second)},
+		{ID: "i2", Kind: domain.KindTool, Status: domain.ItemDone, CreatedAt: t0.Add(5 * time.Second), UpdatedAt: t0.Add(2 * time.Minute)},
+	}
+	aps := []store.Approval{
+		// Two minutes of the span went by waiting for this one, some of it
+		// before the block started.
+		{ID: "a1", Decision: domain.DecisionAllow, CreatedAt: t0.Add(-30 * time.Second), ResolvedAt: t0.Add(90 * time.Second)},
+		// Answered before the store kept answer times: counts for nothing.
+		{ID: "a0", Decision: domain.DecisionDeny, CreatedAt: t0.Add(2 * time.Second)},
+		// A later turn's approval does not touch this block.
+		{ID: "a2", Decision: domain.DecisionAllow, CreatedAt: t0.Add(10 * time.Minute), ResolvedAt: t0.Add(11 * time.Minute)},
+	}
+	running, steps, dur := WorkState(items, aps)
+	if running || steps != 2 {
+		t.Fatalf("running=%v steps=%d", running, steps)
+	}
+	if dur != 30*time.Second {
+		t.Fatalf("dur = %s, want 30s", dur)
+	}
+	if _, _, dur := WorkState(items, nil); dur != 2*time.Minute {
+		t.Fatalf("without approvals dur = %s, want 2m", dur)
+	}
+}
+
+func TestElapsedText(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		-time.Second:                    "0s",
+		12 * time.Second:                "12s",
+		65 * time.Second:                "1m 05s",
+		59*time.Minute + 59*time.Second: "59m 59s",
+		time.Hour:                       "1h 00m 00s",
+		3*time.Hour + 2*time.Minute + 5*time.Second: "3h 02m 05s",
+	} {
+		if got := elapsedText(d); got != want {
+			t.Errorf("elapsedText(%s) = %q, want %q", d, got, want)
+		}
 	}
 }

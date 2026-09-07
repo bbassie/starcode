@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"starcode/internal/agent"
 	"starcode/internal/domain"
 	"starcode/internal/store"
 	"strings"
@@ -13,7 +14,7 @@ type ThreadData struct {
 	Project   store.Project
 	Items     []store.Item
 	Queued    []store.QueuedPrompt
-	Approvals []store.Approval // pending
+	Approvals []store.Approval // every approval of the thread, oldest first
 	Rules     []string
 	Settings  SettingsData
 	Branch    string
@@ -58,7 +59,22 @@ func GroupItems(items []store.Item) []Block {
 }
 
 // WorkState summarizes a work block for its header.
-func WorkState(items []store.Item) (running bool, steps int, dur time.Duration) {
+// pendingApprovals is the subset that still wants an answer.
+func pendingApprovals(aps []store.Approval) []store.Approval {
+	var out []store.Approval
+	for _, a := range aps {
+		if a.Decision == "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// WorkState sums up a work block: whether it is still going, how many
+// tool calls it holds, and how long the agent spent on it. Time the turn
+// stood still waiting for an approval is left out, since nothing was
+// being worked on then.
+func WorkState(items []store.Item, aps []store.Approval) (running bool, steps int, dur time.Duration) {
 	first, last := items[0].CreatedAt, items[0].UpdatedAt
 	for _, it := range items {
 		if it.Status == domain.ItemRunning {
@@ -74,7 +90,33 @@ func WorkState(items []store.Item) (running bool, steps int, dur time.Duration) 
 	if running {
 		last = time.Now()
 	}
-	return running, steps, last.Sub(first)
+	return running, steps, last.Sub(first) - waited(first, last, aps)
+}
+
+// waited is how much of the span from..to went by with an approval open.
+// An approval still pending counts up to now; one answered before the
+// store recorded answer times (or never, in a thread that ended without
+// one) counts for nothing.
+func waited(from, to time.Time, aps []store.Approval) time.Duration {
+	var total time.Duration
+	for _, a := range aps {
+		start, end := a.CreatedAt, a.ResolvedAt
+		if a.Decision == "" {
+			end = time.Now()
+		} else if end.IsZero() {
+			continue
+		}
+		if start.Before(from) {
+			start = from
+		}
+		if end.After(to) {
+			end = to
+		}
+		if end.After(start) {
+			total += end.Sub(start)
+		}
+	}
+	return total
 }
 
 templ Thread(d ThreadData) {
@@ -87,10 +129,10 @@ templ Thread(d ThreadData) {
 					if b.Item != nil {
 						@Item(*b.Item)
 					} else {
-						@Work(b.Work)
+						@Work(b.Work, d.Approvals)
 					}
 				}
-				for _, a := range d.Approvals {
+				for _, a := range pendingApprovals(d.Approvals) {
 					@Approval(a)
 				}
 			</div>
@@ -108,26 +150,42 @@ templ Thread(d ThreadData) {
 // BusyBar sits between the transcript and the composer while a turn runs.
 // Streaming already shows movement; this covers the quiet stretches (the
 // model thinking, a long tool call) with a shimmering word that the
-// layout's clock script rotates, and the time since the turn started.
+// layout's clock script rotates, and the time the turn has been working.
+// The bar hides while an approval is open, and the time it shows leaves
+// those waits out: it counts from the turn's start moved forward by the
+// time spent waiting, so the clock script can keep ticking from one
+// timestamp.
 templ BusyBar(d ThreadData) {
 	<div id="busybar" class={ "busybar", templ.KV("on", d.Thread.Status == domain.StatusRunning) }>
 		if d.Thread.Status == domain.StatusRunning {
+			{{ since := workingSince(d) }}
 			<span class="shimmer" data-busy-word>Working…</span>
-			<span class="dim tiny-text" data-since={ turnStartedAt(d).UTC().Format(time.RFC3339) }>{ elapsedText(time.Since(turnStartedAt(d))) }</span>
+			<span class="dim tiny-text" data-since={ since.UTC().Format(time.RFC3339) }>{ elapsedText(time.Since(since)) }</span>
 		}
 	</div>
 }
 
-// elapsedText matches the clock script's format: "12s", "1m 05s".
+// workingSince is the moment the running turn would have started had it
+// never waited for an approval.
+func workingSince(d ThreadData) time.Time {
+	start := turnStartedAt(d)
+	return start.Add(waited(start, time.Now(), d.Approvals))
+}
+
+// elapsedText matches the clock script's format: "12s", "1m 05s",
+// "1h 02m 05s".
 func elapsedText(d time.Duration) string {
-	s := int(d.Seconds())
+	s := int(d.Round(time.Second).Seconds())
 	if s < 0 {
 		s = 0
 	}
-	if s < 60 {
+	switch {
+	case s < 60:
 		return fmt.Sprintf("%ds", s)
+	case s < 3600:
+		return fmt.Sprintf("%dm %02ds", s/60, s%60)
 	}
-	return fmt.Sprintf("%dm %02ds", s/60, s%60)
+	return fmt.Sprintf("%dh %02dm %02ds", s/3600, s%3600/60, s%60)
 }
 
 // turnStartedAt is when the running turn began: the last prompt's time,
@@ -226,10 +284,10 @@ func statusLabel(s string) string {
 }
 
 // Work is a folded run of agent activity. Open while it is still going.
-templ Work(items []store.Item) {
-	{{ running, _, _ := WorkState(items) }}
+templ Work(items []store.Item, aps []store.Approval) {
+	{{ running, _, _ := WorkState(items, aps) }}
 	<details id={ "work-" + items[0].ID } class={ "work", templ.KV("running", running) } open?={ running } data-preserve-attr="open">
-		@WorkSummary(items)
+		@WorkSummary(items, aps)
 		<div class="work-body">
 			for _, it := range items {
 				@Item(it)
@@ -238,13 +296,13 @@ templ Work(items []store.Item) {
 	</details>
 }
 
-templ WorkSummary(items []store.Item) {
-	{{ running, steps, dur := WorkState(items) }}
+templ WorkSummary(items []store.Item, aps []store.Approval) {
+	{{ running, steps, dur := WorkState(items, aps) }}
 	<summary id={ "wsum-" + items[0].ID } class="work-head">
 		if running {
 			<span class="shimmer">Working…</span>
 		} else {
-			<span>Worked for { dur.Round(time.Second).String() }</span>
+			<span>Worked for { elapsedText(dur) }</span>
 		}
 		if steps > 0 {
 			<span class="dim">· { fmt.Sprintf("%d %s", steps, plural(steps, "step", "steps")) }</span>
@@ -322,8 +380,108 @@ templ AttachStrip() {
 	</div>
 }
 
-// Composer is the prompt card. Its setting chips post on change; they are
-// disabled while a turn runs since changes only apply to the next one.
+// ContextMeter is the gauge next to the setting chips: how much of the
+// model's context window this conversation already takes up. It reads the
+// last number the agent sent, so it is empty until the first turn and
+// climbs while one runs. Clicking it opens the model picker, since a
+// window that is filling up is the moment to move to a model with a
+// bigger one.
+templ ContextMeter(d ThreadData) {
+	{{ used, window := d.Thread.ContextTokens, contextWindow(d) }}
+	{{ pct := contextPct(used, window) }}
+	<div id="context-meter" class={ "ctx", templ.KV("empty", used <= 0) }>
+		if used > 0 {
+			<button type="button" class={ "chip", "ctx-chip", contextLevel(pct) } title={ contextTitle(used, window, pct) } data-on:click="$pick = 'model'; pickFocus(el)">
+				if window > 0 {
+					<span class="ctx-track"><span class="ctx-fill" style={ barWidth(pct) }></span></span>
+					<span class="chip-label">{ fmt.Sprintf("%d%%", pct) }</span>
+				} else {
+					@Icon("gauge", "ui-icon")
+					<span class="chip-label">{ formatTokens(used) }</span>
+				}
+			</button>
+		}
+	</div>
+}
+
+// contextWindow is what the thread is measured against: the limit the
+// agent reported for the model that ran, or failing that the one the
+// catalog gives the model now selected. 0 when neither knows.
+func contextWindow(d ThreadData) int64 {
+	if d.Thread.ContextWindow > 0 {
+		return d.Thread.ContextWindow
+	}
+	return catalogWindow(d.Settings.Caps[d.Thread.Agent], d.Thread.Model)
+}
+
+// catalogWindow is a model's window as its agent's catalog states it. An
+// empty id means the agent's default model.
+func catalogWindow(c agent.Capabilities, id string) int64 {
+	if id == "" {
+		m, ok := defaultModel(c)
+		if !ok {
+			return 0
+		}
+		return m.ContextWindow
+	}
+	for _, m := range c.Models {
+		if m.ID == id {
+			return m.ContextWindow
+		}
+	}
+	return 0
+}
+
+// contextPct rounds the fill up, so a window with anything in it never
+// reads as 0% and a full one never as 99%.
+func contextPct(used, window int64) int {
+	if used <= 0 || window <= 0 {
+		return 0
+	}
+	pct := int((used*100 + window - 1) / window)
+	return min(pct, 100)
+}
+
+// contextLevel colours the bar. Agents start compacting somewhere past
+// three quarters, so warn there and call it full close to the limit.
+func contextLevel(pct int) string {
+	switch {
+	case pct >= 90:
+		return "full"
+	case pct >= 75:
+		return "warn"
+	}
+	return ""
+}
+
+func barWidth(pct int) string {
+	return fmt.Sprintf("width: %d%%", max(pct, 2))
+}
+
+func contextTitle(used, window int64, pct int) string {
+	if window <= 0 {
+		return formatTokens(used) + " tokens in the context window. This agent does not say how big it is.\nClick to pick another model."
+	}
+	return fmt.Sprintf("%s of %s tokens in the context window (%d%%).\nClick to pick a model with a bigger one.", formatTokens(used), windowLabel(window), pct)
+}
+
+// windowLabel writes a context size the way the model cards do: 200K, 1M.
+// A size that is not round falls back to the usage page's format.
+func windowLabel(n int64) string {
+	switch {
+	case n <= 0:
+		return ""
+	case n%1_000_000 == 0:
+		return fmt.Sprintf("%dM", n/1_000_000)
+	case n%1_000 == 0:
+		return fmt.Sprintf("%dK", n/1_000)
+	}
+	return formatTokens(n)
+}
+
+// Composer is the prompt card. Its setting chips post on change, also
+// while a turn runs: the permission mode reaches the running agent when it
+// can take one, the rest applies from the next turn.
 templ Composer(d ThreadData) {
 	{{ t := d.Thread }}
 	{{ locked := busy(t) }}
@@ -349,7 +507,8 @@ templ Composer(d ThreadData) {
 		@AttachStrip()
 		<div class="composer-row">
 			@AttachButton()
-			@Chips(d.Settings, "@post('/api/threads/"+t.ID+"/settings')", locked, len(d.Items) > 0)
+			@Chips(d.Settings, "@post('/api/threads/"+t.ID+"/settings')", len(d.Items) > 0)
+			@ContextMeter(d)
 			<span class="spacer"></span>
 			if locked {
 				<button class="btn round warn" type="button" data-on:click={ "@post('/api/threads/" + t.ID + "/interrupt')" } title="Stop">@Icon("square", "ui-icon")</button>

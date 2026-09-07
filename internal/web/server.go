@@ -398,6 +398,22 @@ func (s *Server) sidebarData(ctx context.Context, current string, settings bool)
 	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), Settings: settings, Updates: s.updateCount(), Looks: s.agentLooks(), Seen: seen}, nil
 }
 
+// contextData is the little the window gauge needs: the thread and the
+// catalog its model is looked up in. threadData reads the transcript and
+// shells out for the branch, which is too much for a number that moves
+// several times a turn.
+func (s *Server) contextData(ctx context.Context, id string) (views.ThreadData, error) {
+	t, err := s.App.Store.Thread(ctx, id)
+	if err != nil {
+		return views.ThreadData{}, err
+	}
+	caps, capsErrs := s.capabilities(ctx)
+	return views.ThreadData{Thread: t, Settings: views.SettingsData{
+		Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs,
+		Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode,
+	}}, nil
+}
+
 func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, error) {
 	t, err := s.App.Store.Thread(ctx, id)
 	if err != nil {
@@ -415,7 +431,7 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 	if err != nil {
 		return views.ThreadData{}, err
 	}
-	aps, err := s.App.Store.PendingApprovals(ctx, id)
+	aps, err := s.App.Store.Approvals(ctx, id)
 	if err != nil {
 		return views.ThreadData{}, err
 	}

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/starfederation/datastar-go/datastar"
 
+	"starcode/internal/agent"
 	"starcode/internal/app"
 	"starcode/internal/domain"
 	"starcode/internal/gitx"
@@ -22,23 +24,48 @@ import (
 // the caller: clearing the composer, showing an error, redirecting.
 
 type signals struct {
-	Path    string       `json:"path"`
-	Prompt  string       `json:"prompt"`
-	Agent   string       `json:"agent"`
-	Model   string       `json:"model"`
-	Project string       `json:"project"`
-	Theme   string       `json:"theme"`
-	Effort  string       `json:"effort"`
-	Mode    string       `json:"mode"`
-	File    string       `json:"file"`
-	Title   string       `json:"title"`
-	Attach  []UploadFile `json:"attach"`
+	Path    string `json:"path"`
+	Prompt  string `json:"prompt"`
+	Agent   string `json:"agent"`
+	Model   string `json:"model"`
+	Project string `json:"project"`
+	Theme   string `json:"theme"`
+	Effort  string `json:"effort"`
+	// Mode is nil when the page carried no mode signal at all (a "new
+	// thread" hotkey on the settings page, say), which is different from
+	// the agent's default mode picked on purpose.
+	Mode   *string      `json:"mode"`
+	File   string       `json:"file"`
+	Title  string       `json:"title"`
+	Attach []UploadFile `json:"attach"`
 }
 
 func (s *Server) readSignals(r *http.Request) signals {
 	var sig signals
 	datastar.ReadSignals(r, &sig)
 	return sig
+}
+
+// modeOr is the mode signal, or def when the page had none.
+func (sig signals) modeOr(def string) string {
+	if sig.Mode == nil {
+		return def
+	}
+	return *sig.Mode
+}
+
+// defaultMode is the permission mode a new thread gets when the request
+// did not say: the agent's never-ask mode (see views.DefaultMode).
+func (s *Server) defaultMode(ctx context.Context, agent string) string {
+	caps, _ := s.capabilities(ctx)
+	return views.DefaultMode(caps[agent])
+}
+
+// homeSettings is the composer state of the home page: the first agent
+// with its default permission mode.
+func (s *Server) homeSettings(caps map[string]agent.Capabilities, capsErrs map[string]error) views.SettingsData {
+	first := views.FirstOr(s.agentNames(), "claude")
+	return views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: first, Mode: views.DefaultMode(caps[first])}
 }
 
 func newSSE(w http.ResponseWriter, r *http.Request) *datastar.ServerSentEventGenerator {
@@ -147,7 +174,7 @@ func (s *Server) newThread(w http.ResponseWriter, r *http.Request) {
 
 // createThread makes a thread, applies settings, and when the home
 // composer carried a prompt, sends it as the first turn before redirecting.
-func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID, agent, model, effort, mode, prompt string, attach []UploadFile) {
+func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID, agent, model, effort string, mode *string, prompt string, attach []UploadFile) {
 	if agent == "" {
 		agent = views.FirstOr(s.agentNames(), "")
 		if agent == "" {
@@ -155,13 +182,17 @@ func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID,
 			return
 		}
 	}
+	if mode == nil {
+		m := s.defaultMode(r.Context(), agent)
+		mode = &m
+	}
 	id, err := s.App.CreateThread(r.Context(), projectID, agent, model)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	if effort != "" || mode != "" {
-		if err := s.App.SetThreadSettings(r.Context(), id, app.ThreadSettings{Agent: agent, Model: model, Effort: effort, PermissionMode: mode}); err != nil {
+	if effort != "" || *mode != "" {
+		if err := s.App.SetThreadSettings(r.Context(), id, app.ThreadSettings{Agent: agent, Model: model, Effort: effort, PermissionMode: *mode}); err != nil {
 			s.fail(w, r, err)
 			return
 		}
@@ -249,7 +280,7 @@ func (s *Server) removeQueuedPrompt(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setThreadSettings(w http.ResponseWriter, r *http.Request) {
 	sig := s.readSignals(r)
-	st := app.ThreadSettings{Agent: sig.Agent, Model: sig.Model, Effort: sig.Effort, PermissionMode: sig.Mode}
+	st := app.ThreadSettings{Agent: sig.Agent, Model: sig.Model, Effort: sig.Effort, PermissionMode: sig.modeOr("")}
 	if err := s.App.SetThreadSettings(r.Context(), r.PathValue("id"), st); err != nil {
 		s.fail(w, r, err)
 		return
