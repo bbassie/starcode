@@ -181,9 +181,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .side-label { padding: 8px 6px 2px; color: var(--fg-dim); font-size: 0.85em; }
 .project > summary { list-style: none; }
 .project > summary::-webkit-details-marker { display: none; }
-.project-head { display: flex; align-items: center; gap: 4px; padding: 8px 6px 4px; font-weight: 600; cursor: pointer; }
-.project-head::before { content: "▸"; color: var(--fg-dim); font-size: 0.8em; width: 1em; }
-.project[open] > .project-head::before { content: "▾"; }
+.project-head { display: flex; align-items: center; gap: 4px; margin-top: 4px; padding: 6px 6px 6px 4px; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; user-select: none; }
+.project-head:hover { background: var(--bg-3); }
+.project-caret { color: var(--fg-dim); transition: transform 0.12s; }
+.project[open] > .project-head .project-caret { transform: rotate(90deg); }
+.project-count { min-width: 1.4em; padding: 0 5px; border-radius: 999px; background: var(--bg-3); text-align: center; font-weight: 500; }
+.project-head:hover .project-count { background: var(--bg-2); }
+/* The head's buttons show on hover and on touch screens, where there is
+   no hover; the caret and count stay out of their way. */
+.project-head > .btn { visibility: hidden; }
+.project-head:hover > .btn, .project-head:focus-within > .btn { visibility: visible; }
+@media (hover: none) { .project-head > .btn { visibility: visible; } }
 .project.archived > .project-head { color: var(--fg-dim); font-weight: 500; }
 .thread-row a {
   display: flex;
@@ -211,10 +219,14 @@ button .ui-icon { display: block; margin: auto; }
 .st-failed, .st-declined, .st-interrupted { color: var(--err); }
 .glyph.st-running { animation: blink 1s steps(2) infinite; }
 @keyframes blink { to { opacity: 0.25; } }
-.side-foot { padding: 8px; border-top: var(--border-w) solid var(--border); }
-.side-settings { display: flex; align-items: center; gap: 9px; min-height: var(--tap); padding: 7px 9px; border-radius: var(--radius-sm); color: var(--fg-dim); }
+.side-foot { display: flex; align-items: center; gap: 2px; padding: 8px; border-top: var(--border-w) solid var(--border); }
+.side-settings { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; min-height: var(--tap); padding: 7px 9px; border-radius: var(--radius-sm); color: var(--fg-dim); }
 .side-settings:hover { color: var(--fg); background: var(--bg-3); }
 .side-settings.current { color: var(--fg); background: var(--sel); }
+.side-quick { position: relative; color: var(--fg-dim); }
+.side-quick:hover { color: var(--fg); }
+.side-quick.current { color: var(--fg); background: var(--sel); }
+.side-quick .side-badge { position: absolute; top: 0; right: 0; min-width: 13px; height: 13px; padding: 0 3px; font-size: 0.6em; margin: 0; box-shadow: 0 0 0 2px var(--bg); }
 
 /* ---- controls ---- */
 

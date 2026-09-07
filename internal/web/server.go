@@ -383,7 +383,7 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 
 // ---- helpers shared by events and commands ----
 
-func (s *Server) sidebarData(ctx context.Context, current string, settings bool) (views.SidebarData, error) {
+func (s *Server) sidebarData(ctx context.Context, current, view string) (views.SidebarData, error) {
 	ps, err := s.App.Store.Projects(ctx)
 	if err != nil {
 		return views.SidebarData{}, err
@@ -396,7 +396,7 @@ func (s *Server) sidebarData(ctx context.Context, current string, settings bool)
 	if err != nil {
 		return views.SidebarData{}, err
 	}
-	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), Settings: settings, Updates: s.updateCount(), Looks: s.agentLooks(), Seen: seen}, nil
+	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), View: view, Updates: s.updateCount(), Looks: s.agentLooks(), Seen: seen}, nil
 }
 
 // contextData is the little the window gauge needs: the thread and the

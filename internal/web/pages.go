@@ -17,7 +17,7 @@ import (
 // stream can seat its bookkeeping.
 func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 	var pt views.Parts
-	side, err := s.sidebarData(ctx, p.ThreadID, p.View == "settings" || p.View == "usage" || p.View == "providers" || p.View == "keys")
+	side, err := s.sidebarData(ctx, p.ThreadID, p.View)
 	if err != nil {
 		return pt, err
 	}
