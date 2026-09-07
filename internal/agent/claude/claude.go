@@ -216,9 +216,11 @@ const (
 // contextWindowFor is the token limit of a Claude model, guessed from any
 // of the names the CLI gives it. The model list carries no number, so the
 // long-context variants are recognized by the "[1m]" suffix on their id or
-// by their description, and everything else gets the standard window. A
-// turn's result states the real number for the model it ran on and
-// replaces this.
+// by their description, and everything else gets the standard window. Only
+// the catalog uses it. A session reports no window until a turn's result
+// states one: the id a session sees ("claude-fable-5-1", no suffix) is
+// not enough to guess from, and a guess written into the thread would
+// hide the catalog's better one.
 func contextWindowFor(names ...string) int64 {
 	for _, n := range names {
 		s := strings.ToLower(n)
@@ -865,8 +867,9 @@ type state struct {
 
 	// model is the model the conversation runs on, so the result's
 	// per-model usage can be read for the right one. window is its context
-	// limit; ctxTokens and ctxWindow are the last reading passed on, so the
-	// same numbers are not reported twice.
+	// limit as the last result stated it, 0 until then; ctxTokens and
+	// ctxWindow are the last reading passed on, so the same numbers are not
+	// reported twice.
 	model                        string
 	window, ctxTokens, ctxWindow int64
 
@@ -1151,7 +1154,6 @@ func parseSystem(out *outLine, st *state) []agent.Event {
 		st.sessionID = out.SessionID
 		if out.Model != "" {
 			st.model = out.Model
-			st.window = contextWindowFor(out.Model)
 		}
 		return []agent.Event{{
 			Kind:        agent.KindSessionInfo,

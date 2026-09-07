@@ -366,15 +366,15 @@ func TestParseResult(t *testing.T) {
 
 func TestParseAssistantReportsContextUsage(t *testing.T) {
 	st := newState(nil)
-	// init names the model, which is enough for a window before any turn
-	// has finished.
+	// init names the model but not its window: that waits for a result,
+	// and the catalog covers the gap.
 	events := feed(st, lineInit, lineTextMsgUsage)
 	ev := one(t, events, agent.KindContextUsage).ContextUsage
 	if got, want := ev.Tokens, int64(10+9099+13615+4); got != want {
 		t.Errorf("Tokens = %d, want %d", got, want)
 	}
-	if got, want := ev.Window, int64(standardWindow); got != want {
-		t.Errorf("Window = %d, want %d", got, want)
+	if ev.Window != 0 {
+		t.Errorf("Window = %d before any result, want 0", ev.Window)
 	}
 	// The same message again is not news; a bigger one is.
 	if got := only(t, feed(st, lineTextMsgUsage), agent.KindContextUsage); len(got) != 0 {
@@ -395,7 +395,7 @@ func TestParseCompactionMovesTheMeter(t *testing.T) {
 	if got := kinds(events); !slices.Equal(got, want) {
 		t.Fatalf("compaction events = %v, want %v", got, want)
 	}
-	if got := one(t, events, agent.KindContextUsage).ContextUsage; got.Tokens != 1046 || got.Window != standardWindow {
+	if got := one(t, events, agent.KindContextUsage).ContextUsage; got.Tokens != 1046 || got.Window != 0 {
 		t.Errorf("reading after compaction = %+v", got)
 	}
 	if got := one(t, events, agent.KindTurnCompleted).TurnCompleted; got.Status != "done" || got.InputTokens != 0 {
@@ -407,13 +407,12 @@ func TestParseCompactionMovesTheMeter(t *testing.T) {
 	}
 }
 
-func TestParseResultCorrectsContextWindow(t *testing.T) {
+func TestParseResultNamesTheContextWindow(t *testing.T) {
 	st := newState(nil)
 	st.turnID = "turn-1"
-	// A 1M model guessed from the id, corrected to what the turn ran with.
-	feed(st, `{"type":"system","subtype":"init","session_id":"s1","model":"claude-haiku-4-5-20251001"}`)
-	st.window = longWindow
-	feed(st, lineTextMsgUsage)
+	// The result is the first place the window is stated; the reading
+	// that follows carries it with the last message's count.
+	feed(st, lineInit, lineTextMsgUsage)
 	ev := one(t, feed(st, lineResultWindow), agent.KindContextUsage).ContextUsage
 	if got, want := ev.Window, int64(200000); got != want {
 		t.Errorf("Window = %d, want %d", got, want)
