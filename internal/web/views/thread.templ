@@ -352,7 +352,6 @@ templ MainHead(d ThreadData) {
 			}
 			<button class="btn icon ghost tiny dim pr-unlink" data-on:click={ "confirm('Unlink pull request #" + strconv.Itoa(pr.Number) + " from this thread?') && @post('/api/threads/" + d.Thread.ID + "/pr/unlink')" } title="Unlink the pull request from this thread" aria-label="Unlink the pull request">@Icon("unlink", "ui-icon")</button>
 		}
-		<span class="dim tiny-text hide-sm ellipsis" title="Model reported by the agent">@Icon("bot", "ui-icon") <span class="ellipsis">{ modelShown(d.Thread) }</span></span>
 		<span class="spacer"></span>
 		if d.Branch != "" {
 			<span class="dim tiny-text hide-sm" title={ branchTitle(d) }>
@@ -371,9 +370,8 @@ templ MainHead(d ThreadData) {
 		<button class="btn ghost vscode-open" type="button" data-on:click={ VSCodeOpen(dir) } title={ "Open " + dir + " in VS Code" }>@Icon("brand-vscode", "ui-icon") <span class="hide-sm">VS Code</span></button>
 		<button class="btn ghost" data-on:click="$term = !$term" title="Toggle terminal">@Icon("terminal", "ui-icon") <span class="hide-sm">terminal</span></button>
 		<button class="btn ghost gittoggle" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
-		// Archive and delete are inline on a wide window (the wrapper
-		// renders as display: contents) and a menu behind this button on
-		// a phone.
+		// Pin, the worktree actions, settle and delete live behind this
+		// button on every screen; terminal and changes stay in the row.
 		<button class="btn icon ghost more-toggle" type="button" data-on:click="$more = !$more" title="More" aria-label="More actions">@Icon("ellipsis-vertical", "ui-icon")</button>
 		<div class="head-more" data-class:open="$more" data-on:click__outside="$more && !evt.target.closest('.more-toggle') && ($more = false)" data-on:click="$more = false">
 			if d.Thread.Pinned {
@@ -383,7 +381,7 @@ templ MainHead(d ThreadData) {
 			}
 			if d.Thread.Worktree != "" {
 				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/worktree/thread')" } title={ "Open another thread on " + d.Thread.Worktree }>@Icon("message-square-plus", "ui-icon") <span class="hide-sm">new thread in this worktree</span></button>
-				<button class="btn ghost dim" data-on:click={ "confirm('Remove the worktree at " + d.Thread.Worktree + "? Its branch stays; a checkout with uncommitted changes is refused.') && @post('/api/threads/" + d.Thread.ID + "/worktree/remove')" } title={ "Remove the worktree " + d.Thread.Worktree + " and work on the project's checkout" }>@Icon("folder-git-2", "ui-icon") <span class="hide-sm">remove worktree</span></button>
+				<button class="btn ghost dim" data-on:click={ "confirm(" + jsq("Remove this thread's worktree and work on the project checkout instead?\n\nThe branch "+d.Thread.WorktreeBranch+" is kept. If the worktree has uncommitted changes, nothing is removed.") + ") && @post('/api/threads/" + d.Thread.ID + "/worktree/remove')" } title={ "Remove the worktree " + d.Thread.Worktree + " and work on the project's checkout" }>@Icon("folder-git-2", "ui-icon") <span class="hide-sm">remove worktree</span></button>
 			}
 			if d.Thread.Archived {
 				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unarchive')" } title="Bring this thread back into the list">@Icon("archive-restore", "ui-icon") <span class="hide-sm">unsettle</span></button>

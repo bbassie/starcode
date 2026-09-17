@@ -366,10 +366,15 @@ button.status-pill { cursor: pointer; font-family: inherit; color: inherit; }
    reason behind it opens under the header, since a title attribute never
    shows on a phone. */
 .status-detail { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; padding: 8px var(--pad); background: var(--bg-3); border-bottom: var(--border-w) solid var(--border); box-shadow: var(--shadow); font-size: 0.9em; color: var(--fg-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
-/* Archive and delete sit in the header on a wide window and fold into
-   the "more" menu on a phone, where the title had no room left. */
-.head-more { display: contents; }
-.more-toggle { display: none; }
+/* Pin, worktree actions, settle and delete fold into the "more" menu on
+   every screen; the header keeps the title, the status and two buttons. */
+.mainhead { overflow: visible; }
+.head-more { display: none; position: absolute; top: calc(100% + 4px); right: 8px; z-index: 20; flex-direction: column; align-items: stretch; gap: 2px; min-width: 200px; padding: 6px; background: var(--bg-3); border: var(--border-w) solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+.head-more.open { display: flex; }
+.head-more .btn { justify-content: flex-start; min-height: 34px; }
+.head-more .btn .ui-icon { margin: 0; }
+.head-more .hide-sm { display: inline; }
+.head-more .show-sm { display: none; }
 .status-pill.st-running { border-color: var(--accent); }
 .status-pill.st-awaiting_approval { border-color: var(--warn); }
 .status-pill.st-error { border-color: var(--err); }
@@ -1269,14 +1274,7 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   /* 16px is the size below which iOS zooms in on a focused field. */
   .composer .prompt, .in { font-size: 16px; }
   .mainhead .btn { min-height: var(--tap); min-width: var(--tap); padding: 0 8px; }
-  .mainhead { overflow: visible; }
-  .more-toggle { display: inline-flex; }
-  .head-more { display: none; position: absolute; top: calc(100% + 4px); right: 8px; z-index: 20; flex-direction: column; align-items: stretch; gap: 2px; min-width: 180px; padding: 6px; background: var(--bg-3); border: var(--border-w) solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
-  .head-more.open { display: flex; }
-  .head-more .btn { justify-content: flex-start; }
-  .head-more .btn .ui-icon { margin: 0; }
-  .head-more .hide-sm { display: inline; }
-  .head-more .show-sm { display: none; }
+  .head-more .btn { min-height: var(--tap); }
   /* Touch targets: the 24px controls are a coin flip under a thumb. */
   .btn.tiny { min-height: 36px; min-width: 36px; }
   .panel-tab { min-height: var(--tap); padding: 4px 10px; }

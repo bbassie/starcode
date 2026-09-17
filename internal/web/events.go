@@ -632,7 +632,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		if c.view == "home" {
 			return c.renderAll(ctx)
 		}
-	case domain.ThreadRenamed, domain.ThreadStatusChanged, domain.ThreadSettingsChanged, domain.AgentSessionBound, domain.ThreadArchived, domain.ThreadUnarchived, domain.ThreadPinned, domain.ThreadUnpinned, domain.ThreadPRLinked, domain.ThreadPRUnlinked:
+	case domain.ThreadRenamed, domain.ThreadStatusChanged, domain.ThreadSettingsChanged, domain.AgentSessionBound, domain.ThreadArchived, domain.ThreadUnarchived, domain.ThreadPinned, domain.ThreadUnpinned, domain.ThreadWorktreeSet, domain.ThreadPRLinked, domain.ThreadPRUnlinked:
 		c.sideDirty = true
 		// The project cards on the home page show the same glyphs and
 		// titles as the sidebar; a burst of changes costs one redraw.
@@ -652,10 +652,13 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 				}
 			}
 			// Settings and the bound session change what the chips show;
-			// the rest only moves the status.
+			// the rest only moves the status. A worktree change moves the
+			// panel to the other checkout as well.
 			switch p.(type) {
 			case domain.ThreadSettingsChanged, domain.AgentSessionBound:
 				return c.renderHead(ctx, true)
+			case domain.ThreadWorktreeSet:
+				c.gitDirty = true
 			}
 			return c.renderHead(ctx, false)
 		}
