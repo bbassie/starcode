@@ -1,0 +1,95 @@
+package views
+
+import (
+	"fmt"
+	"starcode/internal/agent"
+	"time"
+)
+
+// LimitsRow is one instance's subscription windows for the Usage page.
+type LimitsRow struct {
+	Agent     string
+	Look      AgentLook
+	Windows   []agent.LimitWindow
+	CheckedAt time.Time
+	// Pending is a first read still under way; Unsupported an agent (or
+	// an API-key account) with no windows to report; Err the last read's
+	// failure, with the previous windows still shown.
+	Pending     bool
+	Unsupported bool
+	Err         string
+}
+
+// LimitsSection heads the Usage page: how much of each plan's windows
+// is used and when they reset, which answers "can I start another task"
+// before the reset, where the cost chart cannot.
+templ LimitsSection(rows []LimitsRow) {
+	<section class="limits">
+		<header class="limits-head">
+			<h2>Plan limits</h2>
+			<button class="btn icon ghost tiny" type="button" data-on:click="@post('/api/limits/refresh')" title="Read the limits again" aria-label="Refresh limits">@Icon("refresh-cw", "ui-icon")</button>
+		</header>
+		<div class="limits-grid">
+			for _, r := range rows {
+				<div class="limits-card">
+					<div class="limits-name"><span class="agent-mark" style={ agentMarkStyle(r.Look.Color) }>@Brand(r.Look.Driver, "ui-icon")</span> <span>{ agentLabel(r) }</span></div>
+					if len(r.Windows) > 0 {
+						@LimitBars(r.Windows)
+						if r.Err != "" {
+							<p class="dim tiny-text">last read failed: { r.Err }</p>
+						}
+					} else if r.Pending {
+						<p class="dim tiny-text">reading…</p>
+					} else if r.Unsupported {
+						<p class="dim tiny-text">no plan windows to show</p>
+					} else if r.Err != "" {
+						<p class="err tiny-text">{ r.Err }</p>
+					} else {
+						<p class="dim tiny-text">no windows reported</p>
+					}
+				</div>
+			}
+		</div>
+	</section>
+}
+
+func agentLabel(r LimitsRow) string {
+	if r.Look.Label != "" {
+		return r.Look.Label
+	}
+	return r.Agent
+}
+
+// LimitBars draws the windows: a label, a bar in the context meter's
+// colours, the percentage and the reset.
+templ LimitBars(ws []agent.LimitWindow) {
+	<div class="limit-bars">
+		for _, w := range ws {
+			{{ pct := int(w.Percent + 0.5) }}
+			<div class="limit-row" title={ fmt.Sprintf("%s: %d%% used", w.Label, pct) }>
+				<span class="limit-label ellipsis">{ w.Label }</span>
+				<span class={ "ctx-track", "limit-track", contextLevel(pct) }><span class="ctx-fill" style={ barWidth(pct) }></span></span>
+				<span class="limit-pct">{ fmt.Sprintf("%d%%", pct) }</span>
+				<span class="dim limit-reset">{ resetsText(w.ResetsAt) }</span>
+			</div>
+		}
+	</div>
+}
+
+// resetsText says when a window resets: "resets in 2h 10m" within a day,
+// the weekday and time beyond that, nothing when unknown.
+func resetsText(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	d := time.Until(at)
+	switch {
+	case d <= 0:
+		return "resetting"
+	case d < time.Hour:
+		return fmt.Sprintf("resets in %dm", int(d.Minutes())+1)
+	case d < 24*time.Hour:
+		return fmt.Sprintf("resets in %dh %02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	return "resets " + at.Local().Format("Mon 15:04")
+}

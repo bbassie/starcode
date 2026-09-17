@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -22,9 +23,9 @@ import (
 const (
 	lineInit = `{"type":"system","subtype":"init","cwd":"/tmp/work","session_id":"35450ae3-148d-4cc0-9493-76ae6036b29d","tools":["Bash","Write"],"mcp_servers":[],"model":"claude-haiku-4-5-20251001","permissionMode":"default","apiKeySource":"none","claude_code_version":"2.1.252","uuid":"32c47e91-3cf9-4ac0-af62-55654551ff02"}`
 
-	lineStatus        = `{"type":"system","subtype":"status","status":"requesting","session_id":"s1","uuid":"cd5766f6-903f-418b-9661-6b50bb34288d"}`
-	lineThinkingToks  = `{"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"estimated_tokens_delta":50,"session_id":"s1","uuid":"4d1a3d25-ae14-46d3-991c-d7a9fe1ddca5"}`
-	lineCompact       = `{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"auto"}}`
+	lineStatus       = `{"type":"system","subtype":"status","status":"requesting","session_id":"s1","uuid":"cd5766f6-903f-418b-9661-6b50bb34288d"}`
+	lineThinkingToks = `{"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"estimated_tokens_delta":50,"session_id":"s1","uuid":"4d1a3d25-ae14-46d3-991c-d7a9fe1ddca5"}`
+	lineCompact      = `{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"auto"}}`
 	// A manual /compact, recorded from claude 2.1.263: the status pair, the
 	// boundary with sizes, then a result with no usage.
 	lineCompacting    = `{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}`
@@ -705,6 +706,79 @@ func TestPersistedTitle(t *testing.T) {
 			t.Fatalf("persistedTitle(%q) = %q", invalid, got)
 		}
 	}
+}
+
+// The CLI names a session seconds after the first prompt, after the init
+// line but long before the result line. The reader loop must surface that
+// name while the turn is still streaming, or a long first turn shows the
+// prompt text for its whole duration.
+func TestReadLoopSurfacesTitleMidTurn(t *testing.T) {
+	config := t.TempDir()
+	sessionID := "35450ae3-148d-4cc0-9493-76ae6036b29d" // matches lineInit
+	dir := filepath.Join(config, "projects", "-tmp-work")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	defer func(d time.Duration) { titlePollInterval = d }(titlePollInterval)
+	titlePollInterval = 0
+
+	pr, pw := io.Pipe()
+	s := &session{
+		log:    slog.New(slog.DiscardHandler),
+		config: config,
+		stdout: pr,
+		events: make(chan agent.Event, eventBuffer),
+		dying:  make(chan struct{}),
+		exited: make(chan struct{}),
+		st:     newState(nil),
+	}
+	done := make(chan struct{})
+	go func() {
+		s.readLoop()
+		s.closeEvents()
+		close(done)
+	}()
+	next := func(kind agent.EventKind) agent.Event {
+		t.Helper()
+		for {
+			select {
+			case ev, ok := <-s.events:
+				if !ok {
+					t.Fatalf("events closed before %s", kind)
+				}
+				if ev.Kind == agent.KindTurnCompleted {
+					t.Fatal("turn completed unexpectedly")
+				}
+				if ev.Kind == kind {
+					return ev
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("no %s event", kind)
+			}
+		}
+	}
+	write := func(lines ...string) {
+		if _, err := io.WriteString(pw, strings.Join(lines, "\n")+"\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(lineInit)
+	next(agent.KindSessionInfo)
+
+	// The name lands on disk after init, while the turn streams.
+	transcript := `{"type":"ai-title","aiTitle":"Named early","sessionId":"` + sessionID + `"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write(lineMsgStart, lineThinkStart, lineThinkDelta)
+	if ev := next(agent.KindThreadTitle); ev.ThreadTitle.Title != "Named early" {
+		t.Fatalf("title = %q", ev.ThreadTitle.Title)
+	}
+
+	pw.Close()
+	<-done
 }
 
 func TestTitleReaderReadsOnlyNewBytes(t *testing.T) {

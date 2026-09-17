@@ -65,7 +65,7 @@ func (s *Server) termProjectDir(r *http.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return p.Path, nil
+	return t.Dir(p), nil
 }
 
 func (s *Server) termStream(w http.ResponseWriter, r *http.Request) {

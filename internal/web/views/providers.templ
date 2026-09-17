@@ -20,6 +20,14 @@ type ProviderRow struct {
 	UpdateLog       string
 	UpdateErr       string
 	UpdatedAt       time.Time
+	// CanSignIn is whether the CLI signs in without a terminal; the rest
+	// describes the sign-in started from the page, if any.
+	CanSignIn bool
+	SigningIn bool
+	LoginURL  string
+	LoginErr  string
+	LoginOK   bool
+	LoginAt   time.Time
 }
 
 type ProvidersData struct {
@@ -34,6 +42,7 @@ type ProvidersData struct {
 	Drivers   []string
 	Colors    []string
 	Updates   int
+	SignedOut int
 }
 
 func providerURL(sel, tab string) string {
@@ -179,12 +188,17 @@ templ ProviderDetail(d ProvidersData, r ProviderRow) {
 					if r.Info.Account != "" {
 						· { r.Info.Account }
 					}
+				} else if r.CanSignIn {
+					<span class="err">Not signed in.</span> Use the sign-in button, or run <code>{ r.Binary } /login</code> in a terminal and check again.
 				} else {
-					<span class="err">Not signed in.</span> Run <code>{ r.Binary } /login</code> in a terminal, then check again.
+					<span class="err">Not signed in.</span> Run <code>{ r.Binary } login</code> in a terminal, then check again.
 				}
 			</span>
 		</div>
 		<span class="spacer"></span>
+		if r.CanSignIn && !r.SigningIn && r.Inst.Enabled {
+			<button class={ "btn tiny", templ.KV("primary", r.Info.LoggedIn != nil && !*r.Info.LoggedIn) } data-on:click={ "@post('/api/providers/" + r.Inst.Name + "/login')" } title="Runs the CLI's sign-in: a link to open on any device and a box for the code it shows">@Icon("log-in", "ui-icon") sign in</button>
+		}
 		if r.Updating {
 			<span class="dim tiny-text">@Icon("loader-circle", "ui-icon spin-icon") updating…</span>
 		} else if r.UpdateAvailable {
@@ -196,6 +210,19 @@ templ ProviderDetail(d ProvidersData, r ProviderRow) {
 			<button class="btn ghost tiny dim" data-on:click={ "confirm('Remove instance " + r.Inst.DisplayName() + "? Its threads stay but cannot run until an instance with the same name exists.') && @post('/api/providers/" + r.Inst.Name + "/delete')" } title="Remove this instance">@Icon("trash-2", "ui-icon")</button>
 		}
 	</div>
+	if r.SigningIn {
+		@ProviderLogin(r)
+	} else if r.LoginErr != "" || r.LoginOK {
+		<div class={ "prov-login", templ.KV("failed", r.LoginErr != "") }>
+			<div class="dim tiny-text">
+				if r.LoginErr != "" {
+					{ r.LoginErr } ({ r.LoginAt.Local().Format("15:04") }). Start the sign-in again to retry.
+				} else {
+					Signed in at { r.LoginAt.Local().Format("15:04") }. Threads that failed on the old session run again on their next prompt.
+				}
+			</div>
+		</div>
+	}
 	if r.UpdateLog != "" || r.UpdateErr != "" {
 		<div class={ "prov-update-log", templ.KV("failed", r.UpdateErr != "") }>
 			<div class="dim tiny-text">
@@ -219,6 +246,29 @@ templ ProviderDetail(d ProvidersData, r ProviderRow) {
 	} else {
 		@ProviderConfig(d, r)
 	}
+}
+
+// ProviderLogin is the running sign-in: the link the CLI printed (with a
+// copy button, since the browser that opens it may be on another
+// device) and the box for the code the page shows at the end.
+templ ProviderLogin(r ProviderRow) {
+	<div class="prov-login" data-signals="{pvCode: ''}">
+		if r.LoginURL == "" {
+			<span class="dim tiny-text">@Icon("loader-circle", "ui-icon spin-icon") starting the CLI's sign-in…</span>
+		} else {
+			<div class="tiny-text">1. Open the sign-in page, on this device or any other, and sign in.</div>
+			<div class="row">
+				<a class="btn primary tiny" href={ templ.SafeURL(r.LoginURL) } target="_blank" rel="noopener">@Icon("external-link", "ui-icon") open sign-in page</a>
+				<button class="btn ghost tiny" data-on:click={ "copyText(" + jsq(r.LoginURL) + ", el)" } title="Copy the link, to open it on another device">@Icon("copy", "ui-icon") copy link</button>
+			</div>
+			<div class="tiny-text">2. Paste the code it shows here.</div>
+			<form class="row" data-on:submit={ "evt.preventDefault(); @post('/api/providers/" + r.Inst.Name + "/login/code')" }>
+				<input class="in mono" type="text" data-bind:pv-code placeholder="code from the sign-in page" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" enterkeyhint="done"/>
+				<button class="btn primary tiny" type="submit">@Icon("check", "ui-icon") submit</button>
+				<button class="btn ghost tiny" type="button" data-on:click={ "@post('/api/providers/" + r.Inst.Name + "/login/cancel')" }>cancel</button>
+			</form>
+		}
+	</div>
 }
 
 // ProviderConfig is the settings form; the signals carry the current values
@@ -247,7 +297,7 @@ templ ProviderFields(d ProvidersData, in providers.Instance, defaultBinary strin
 	if adding {
 		<label class="prov-field">
 			<span>Instance name</span>
-			<input class="in mono" type="text" data-bind:pv-name placeholder="from the display name when empty" spellcheck="false"/>
+			<input class="in mono" type="text" data-bind:pv-name placeholder="from the display name when empty" spellcheck="false" autocapitalize="off" autocorrect="off"/>
 			<small class="dim">Lowercase letters, digits, - and _. Threads store it, so it cannot change later.</small>
 		</label>
 	}
@@ -263,17 +313,17 @@ templ ProviderFields(d ProvidersData, in providers.Instance, defaultBinary strin
 	</div>
 	<label class="prov-field">
 		<span>Binary path</span>
-		<input class="in mono" type="text" data-bind:pv-binary placeholder={ defaultBinary } spellcheck="false"/>
+		<input class="in mono" type="text" data-bind:pv-binary placeholder={ defaultBinary } spellcheck="false" autocapitalize="off" autocorrect="off"/>
 		<small class="dim">Empty runs the default ({ defaultBinary }, from the -{ in.Driver } flag or PATH).</small>
 	</label>
 	<label class="prov-field">
 		<span>{ configDirLabel(in.Driver) }</span>
-		<input class="in mono" type="text" data-bind:pv-config-dir placeholder={ configDirPlaceholder(in.Driver) } spellcheck="false"/>
+		<input class="in mono" type="text" data-bind:pv-config-dir placeholder={ configDirPlaceholder(in.Driver) } spellcheck="false" autocapitalize="off" autocorrect="off"/>
 		<small class="dim">A separate directory gives this instance its own sign-in, settings and transcripts. Absolute path; empty inherits.</small>
 	</label>
 	<label class="prov-field">
 		<span>Environment variables</span>
-		<textarea class="in mono" rows="3" data-bind:pv-env placeholder="ANTHROPIC_BASE_URL=https://…&#10;ONE=per line" spellcheck="false"></textarea>
+		<textarea class="in mono" rows="3" data-bind:pv-env placeholder="ANTHROPIC_BASE_URL=https://…&#10;ONE=per line" spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
 		<small class="dim">KEY=value, one per line, added to every process of this instance. Stored in providers.json (owner-readable only) and shown here as typed.</small>
 	</label>
 }
@@ -362,7 +412,7 @@ templ ProviderModels(d ProvidersData, r ProviderRow) {
 				}
 			</ul>
 			<form class="row prov-model-add" data-on:submit={ "evt.preventDefault(); @post('/api/providers/" + r.Inst.Name + "/models/add')" }>
-				<input class="in mono" type="text" data-bind:pv-model placeholder="model id the CLI accepts, e.g. claude-opus-4-6" spellcheck="false"/>
+				<input class="in mono" type="text" data-bind:pv-model placeholder="model id the CLI accepts, e.g. claude-opus-4-6" spellcheck="false" autocapitalize="off" autocorrect="off"/>
 				<button class="btn" type="submit">@Icon("plus", "ui-icon") add</button>
 			</form>
 		}

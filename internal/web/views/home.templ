@@ -12,6 +12,7 @@ type HomeData struct {
 	Looks    map[string]AgentLook
 	Seen     map[string]time.Time
 	Settings SettingsData
+	PRs      map[store.PR]store.PRState
 }
 
 // Home is the projects overview: a composer that starts a thread with its
@@ -30,24 +31,25 @@ templ Home(d HomeData) {
 					<h1 class="h">What should we work on?</h1>
 					<form
 						class="composer start"
-						data-signals={ signalsJSON(d.Settings.Agent, "", "", d.Settings.Mode, fmt.Sprintf("project: %q", d.Projects[0].ID)) }
-						data-on:submit="evt.preventDefault(); @post('/api/threads')"
+						data-signals={ signalsJSON(d.Settings.Agent, "", "", d.Settings.Mode, fmt.Sprintf("project: %q, wt: '', wtbase: '', wtfrom: ''", d.Projects[0].ID)) }
+						data-on:submit={ "evt.preventDefault(); @post('/api/threads', " + withSignal("_attach") + ")" }
 					>
 						<textarea
 							class="prompt"
 							rows="1"
-							placeholder="Describe the task. Sending starts a new thread with it; send nothing to just open one."
+							placeholder="Describe the task, or send nothing to just open a thread."
 							data-bind:prompt
-							data-on:keydown="sendKey(evt) && (evt.preventDefault(), @post('/api/threads'))"
+							data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads', " + withSignal("_attach") + "))" }
 							data-on:input__debounce.600ms={ draftPost("home") }
 							data-effect="$prompt; autoGrow(el)"
 							autocomplete="off"
-							spellcheck="false"
+							autocapitalize="sentences"
+							enterkeyhint="enter"
 						></textarea>
 						@AttachStrip()
 						<div class="composer-row">
 							@AttachButton()
-							@ProjectPick(d.Projects)
+							@ProjectPick(d.Projects, d.Threads)
 							@Chips(d.Settings, "", false)
 							<span class="spacer"></span>
 							<button class="btn round primary" type="submit" title="Start thread">@Icon("arrow-up", "ui-icon")</button>
@@ -65,14 +67,18 @@ templ Home(d HomeData) {
 							<span class="project-name">{ p.Name }</span>
 							<span class="dim tiny-text ellipsis">{ p.Path }</span>
 							<span class="spacer"></span>
+							// New threads start in a worktree of their own when this
+							// is on; the setting is the project's, on every device.
+							<button class={ "btn ghost tiny wt-toggle", templ.KV("on", p.Worktrees) } type="button" data-on:click={ "@post('/api/projects/" + p.ID + "/worktrees/toggle')" } title={ worktreesTitle(p.Worktrees) } aria-pressed={ fmt.Sprint(p.Worktrees) }>@Icon("folder-git-2", "ui-icon") <span class="hide-sm">worktrees</span></button>
 							<button class="btn ghost" data-on:click={ "@post('/api/projects/" + p.ID + "/threads')" }>@Icon("plus", "ui-icon") new thread</button>
+							<button class="btn icon ghost tiny dim" data-on:click={ "confirm('Remove project " + p.Name + " from starcode? Files are not touched.') && @post('/api/projects/" + p.ID + "/remove')" } title="Remove project from starcode" aria-label="Remove project">@Icon("x", "ui-icon")</button>
 						</header>
 						<ul class="threads">
 							{{ n := 0 }}
 							for _, t := range d.Threads {
 								if t.ProjectID == p.ID && listed(t) && n < 8 {
 									{{ n++ }}
-									@ThreadRow(t, p, false, false, d.Looks[t.Agent], unread(t, "", d.Seen))
+									@ThreadRow(t, p, false, false, d.Looks[t.Agent], unread(t, "", d.Seen), prOf(t, d.PRs))
 								}
 							}
 						</ul>
@@ -103,9 +109,22 @@ func FirstOr(xs []string, def string) string {
 	return def
 }
 
+func worktreesTitle(on bool) string {
+	if on {
+		return "New threads start in a worktree of their own (a checkout on a new branch). Click to turn off."
+	}
+	return "New threads work on the project's checkout. Click to give each its own worktree."
+}
+
 // ProjectPick is the home composer's project chip: the same menu as the
-// setting pickers, over the $project signal.
-templ ProjectPick(projects []store.Project) {
+// setting pickers, over the $project signal. Under the projects a "Start
+// in" section picks the thread's checkout for this one thread (the wt
+// signal; empty takes the project's default): the project checkout, a
+// new worktree from a branch chosen in a select the server fills, or the
+// worktree of the project's last thread that has one. The rows are
+// rendered per project and shown for the picked one, since the default
+// and the previous worktree differ per project.
+templ ProjectPick(projects []store.Project, threads []store.Thread) {
 	<div class="pick" data-on:click__outside="$pick == 'project' && !evt.target.closest('.pick') && ($pick = '')" data-on:keydown="pickKey(evt, el) && ($pick = '')">
 		<button type="button" class="chip" title="Project" data-on:click={ pickToggle("project") } data-class:open="$pick == 'project'">
 			<span class="chip-icon">@Icon("folder", "ui-icon")</span>
@@ -116,15 +135,94 @@ templ ProjectPick(projects []store.Project) {
 			<div class="pick-list" role="listbox">
 				<div class="pick-head">Project</div>
 				for i, p := range projects {
-					<button type="button" class={ "opt", templ.KV("sel", i == 0) } role="option" data-value={ p.ID } data-class:sel={ "$project == " + jsq(p.ID) } data-on:click={ pickSet("project", p.ID, "") }>
+					// Switching projects drops the "Start in" choice: the previous
+					// worktree belongs to the old project and the default differs.
+					<button type="button" class={ "opt", templ.KV("sel", i == 0) } role="option" data-value={ p.ID } data-class:sel={ "$project == " + jsq(p.ID) } data-on:click={ pickSet("project", p.ID, "$wt = ''; $wtbase = ''; $wtfrom = ''") }>
 						<span class="opt-text">
-							<span class="opt-name"><span class="ellipsis">{ p.Name }</span></span>
+							<span class="opt-name"><span class="ellipsis">{ p.Name }</span>
+								if p.Worktrees {
+									<span class="opt-badge" title="New threads start in a worktree">worktree</span>
+								}
+							</span>
 							<span class="opt-desc" title={ p.Path }>{ p.Path }</span>
 						</span>
 						@Icon("check", "ui-icon opt-check")
 					</button>
 				}
+				<div class="pick-group">Start in</div>
+				for i, p := range projects {
+					{{ prev, hasPrev := lastWorktree(threads, p.ID) }}
+					<div class="wt-start" data-show={ "$project == " + jsq(p.ID) } data-preserve-attr="style" style={ hiddenUnless(i == 0) }>
+						<button type="button" class={ "opt", templ.KV("sel", !p.Worktrees) } role="option" data-class:sel={ "$wt == 'local' || ($wt == '' && " + fmt.Sprint(!p.Worktrees) + ")" } data-on:click="$wt = 'local'">
+							@Icon("folder", "ui-icon opt-icon")
+							<span class="opt-text">
+								<span class="opt-name"><span>Project checkout</span></span>
+								<span class="opt-desc">Work on the project's own working tree</span>
+							</span>
+							@Icon("check", "ui-icon opt-check")
+						</button>
+						if hasPrev {
+							<button type="button" class="opt" role="option" data-class:sel="$wt == 'reuse'" data-on:click={ "$wt = 'reuse'; $wtfrom = " + jsq(prev.ID) }>
+								@Icon("rotate-ccw", "ui-icon opt-icon")
+								<span class="opt-text">
+									<span class="opt-name"><span class="ellipsis">Previous worktree: { prev.WorktreeBranch }</span></span>
+									<span class="opt-desc" title={ prev.Worktree }>{ prev.Title }</span>
+								</span>
+								@Icon("check", "ui-icon opt-check")
+							</button>
+						}
+						<button type="button" class={ "opt", templ.KV("sel", p.Worktrees) } role="option" data-class:sel={ "$wt == 'worktree' || ($wt == '' && " + fmt.Sprint(p.Worktrees) + ")" } data-on:click="$wt = 'worktree'; @get('/api/projects/' + $project + '/branches')">
+							@Icon("folder-git-2", "ui-icon opt-icon")
+							<span class="opt-text">
+								<span class="opt-name"><span>New worktree</span></span>
+								<span class="opt-desc">A checkout of its own on a new branch</span>
+							</span>
+							@Icon("check", "ui-icon opt-check")
+						</button>
+					</div>
+				}
+				// The base branch select, filled by GET /api/projects/{id}/branches
+				// when "New worktree" is picked; one mount for every project.
+				<div class="wt-base" data-show="$wt == 'worktree'" data-preserve-attr="style" style="display: none">
+					<div id="wt-base"></div>
+				</div>
 			</div>
 		</div>
+	</div>
+}
+
+// lastWorktree is the project's newest thread that is not archived and
+// has a worktree; threads come newest first.
+func lastWorktree(threads []store.Thread, projectID string) (store.Thread, bool) {
+	for _, t := range threads {
+		if t.ProjectID == projectID && !t.Archived && t.Worktree != "" {
+			return t, true
+		}
+	}
+	return store.Thread{}, false
+}
+
+// branchLabel marks the default branch in the base select.
+func branchLabel(b, def string) string {
+	if b == def {
+		return b + " (default)"
+	}
+	return b
+}
+
+// BranchOptions is the base branch select under "New worktree" in the
+// project sheet; the server patches it into #wt-base. Keydown stops
+// here so the sheet's arrow-key handling leaves the select alone.
+templ BranchOptions(branches []string, selected string) {
+	<div id="wt-base">
+		if len(branches) == 0 {
+			<span class="dim tiny-text">Not a git repository, or no branches yet.</span>
+		} else {
+			<select class="in" data-bind:wtbase aria-label="Base branch" data-on:keydown="evt.stopPropagation()">
+				for _, b := range branches {
+					<option value={ b } selected?={ b == selected }>{ branchLabel(b, selected) }</option>
+				}
+			</select>
+		}
 	</div>
 }

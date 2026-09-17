@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 )
 
 // Config describes how to start or resume one thread's session.
@@ -94,6 +95,7 @@ type Event struct {
 	ContextUsage  *ContextUsage
 	TurnCompleted *TurnCompleted
 	Notice        *Notice
+	Limits        *Limits
 	Closed        *Closed
 }
 
@@ -112,6 +114,7 @@ const (
 	KindContextUsage  EventKind = "context_usage"
 	KindTurnCompleted EventKind = "turn_completed"
 	KindNotice        EventKind = "notice"
+	KindLimits        EventKind = "limits"
 	KindClosed        EventKind = "closed"
 )
 
@@ -137,11 +140,15 @@ type TurnStarted struct {
 type TextDelta struct {
 	MessageID string
 	Text      string
+	// Parent is the tool call of the subagent this text belongs to, empty
+	// for the main conversation.
+	Parent string
 }
 
 type ThinkingDelta struct {
 	MessageID string
 	Text      string
+	Parent    string
 }
 
 // ToolStarted announces a tool call. Input may be incomplete for adapters
@@ -153,6 +160,9 @@ type ToolStarted struct {
 	Input json.RawMessage
 	// Summary is a one-line human description (command, file path). Optional.
 	Summary string
+	// Parent is the tool call (a Task) whose subagent made this call,
+	// empty for the main conversation.
+	Parent string
 }
 
 type ToolOutput struct {
@@ -208,6 +218,33 @@ type Notice struct {
 // Closed is the last event; Err is nil on a clean exit.
 type Closed struct {
 	Err error
+}
+
+// Limits is what the account's subscription allows, as the CLI reports it:
+// each window with how much of it is used and when it resets.
+//
+// On a KindLimits event it is a streamed update naming only the windows the
+// CLI just reported mid-turn; the receiver merges them by ID into what a
+// LimitReader probe returned earlier.
+type Limits struct {
+	CheckedAt time.Time
+	Windows   []LimitWindow
+}
+
+// LimitWindow is one allowance: the 5-hour session, the week, a
+// model-scoped week ("Weekly · Fable"), or a monthly one on some Codex plans.
+type LimitWindow struct {
+	ID       string    // stable per agent: "session", "weekly", "weekly_fable", "primary", ...
+	Kind     string    // "session" | "weekly" | "monthly" | "other"
+	Label    string    // "Session", "Weekly", "Weekly · Fable"
+	Percent  float64   // 0..100 used
+	ResetsAt time.Time // zero when unknown
+}
+
+// LimitReader is an agent that can read its account's limits without a
+// conversation. Costs a process launch, no tokens.
+type LimitReader interface {
+	Limits(ctx context.Context) (Limits, error)
 }
 
 // Model is one entry an agent offers in the model picker.
@@ -270,4 +307,26 @@ type ProviderInfo struct {
 // Prober is implemented by agents that can report on their installation.
 type Prober interface {
 	Provider(ctx context.Context) (ProviderInfo, error)
+}
+
+// Login is one sign-in driven through the CLI: the CLI prints a page to
+// open, the page shows a code, and Submit hands the code back. Done
+// closes when the CLI exits; Err then says whether it signed in.
+type Login interface {
+	// URL is the page to open, empty until the CLI has printed it.
+	URL() string
+	// Submit gives the CLI the code the page showed.
+	Submit(code string) error
+	// Output is what the CLI printed so far, for the page.
+	Output() string
+	Done() <-chan struct{}
+	Err() error
+	// Cancel ends the CLI early; Done closes and Err reports the cancel.
+	Cancel()
+}
+
+// SignInner is implemented by agents whose CLI can sign in without a
+// terminal, so the console can drive it from a page.
+type SignInner interface {
+	SignIn(ctx context.Context) (Login, error)
 }

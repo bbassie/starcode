@@ -23,6 +23,7 @@ import (
 	"starcode/internal/agent"
 	"starcode/internal/bus"
 	"starcode/internal/domain"
+	"starcode/internal/gitx"
 	"starcode/internal/store"
 )
 
@@ -39,13 +40,41 @@ type App struct {
 	mu       sync.Mutex
 	sessions map[string]*live
 	promptMu sync.Mutex // serializes send-vs-turn-complete queue handoffs
+
+	// WorktreeRoot is where threads' own checkouts go (<data>/worktrees),
+	// one directory per project; empty disables worktrees.
+	WorktreeRoot string
+
+	// idleTimeout is how long a session may sit between turns before
+	// reapIdle closes its process; stop ends the sweeper.
+	idleTimeout time.Duration
+	stop        chan struct{}
+	stopOnce    sync.Once
 }
+
+// idleTimeout is how long a thread's agent process stays alive after its
+// turn ends. Every live process shares the CLI's credentials file, and when
+// the OAuth access token runs out they all try to refresh it at once; the
+// refresh token rotates under the losers and the CLI wipes the file, which
+// every other thread then reports as "OAuth session expired and could not
+// be refreshed". A process that stayed alive across the token's whole
+// lifetime is the usual loser. Closing idle sessions keeps the number of
+// contenders to the threads actually working; the next prompt resumes the
+// session from its id at the cost of one process start.
+const idleTimeout = 30 * time.Minute
+
+// idleSweep is how often reapIdle runs.
+const idleSweep = time.Minute
+
+// settleSweep is how often SettleIdle runs. The threshold is in days, so
+// an hour is plenty.
+const settleSweep = time.Hour
 
 func New(st *store.Store, b *bus.Bus, agents map[string]agent.Agent, log *slog.Logger) *App {
 	if agents == nil {
 		agents = map[string]agent.Agent{}
 	}
-	a := &App{Store: st, Bus: b, agents: agents, Log: log, sessions: map[string]*live{}}
+	a := &App{Store: st, Bus: b, agents: agents, Log: log, sessions: map[string]*live{}, idleTimeout: idleTimeout, stop: make(chan struct{})}
 	st.Published = func(events []domain.Event) {
 		msgs := make([]any, len(events))
 		for i, e := range events {
@@ -53,7 +82,101 @@ func New(st *store.Store, b *bus.Bus, agents map[string]agent.Agent, log *slog.L
 		}
 		b.Publish(msgs...)
 	}
+	go a.reapLoop()
 	return a
+}
+
+func (a *App) reapLoop() {
+	tick := time.NewTicker(idleSweep)
+	defer tick.Stop()
+	settle := time.NewTicker(settleSweep)
+	defer settle.Stop()
+	a.SettleIdle(context.Background())
+	for {
+		select {
+		case <-a.stop:
+			return
+		case now := <-tick.C:
+			a.reapIdle(now)
+		case <-settle.C:
+			a.SettleIdle(context.Background())
+		}
+	}
+}
+
+// SettleIdle archives every thread that has had no activity for the
+// number of days in the settle_idle_days setting, so the sidebar trims
+// itself. Pinned threads, threads mid-turn or waiting on an approval, and
+// threads already archived are left alone; a setting of 0 turns the sweep
+// off. Archiving stamps updated_at, so a thread this settled does not
+// come round again, and any new activity unarchives it (see SendPrompt).
+func (a *App) SettleIdle(ctx context.Context) {
+	a.settleIdle(ctx, time.Now())
+}
+
+func (a *App) settleIdle(ctx context.Context, now time.Time) {
+	days := a.Store.SettleIdleDays(ctx)
+	if days <= 0 {
+		return
+	}
+	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour)
+	ts, err := a.Store.Threads(ctx)
+	if err != nil {
+		a.Log.Warn("settle idle threads", "err", err)
+		return
+	}
+	for _, t := range ts {
+		if t.Archived || t.Pinned || t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval || !t.UpdatedAt.Before(cutoff) {
+			continue
+		}
+		if err := a.ArchiveThread(ctx, t.ID); err != nil {
+			a.Log.Warn("settle idle thread", "thread", t.ID, "err", err)
+			continue
+		}
+		a.Log.Debug("settled idle thread", "thread", t.ID, "idle_since", t.UpdatedAt)
+	}
+}
+
+// reapIdle closes every session whose last turn ended idleTimeout or
+// longer before now. promptMu is held from the check until the session
+// is unregistered, so no prompt can start on it in between; the next
+// prompt on that thread starts a fresh session that resumes by id. A
+// thread mid-turn or waiting on an approval has no idle stamp and is
+// left alone.
+func (a *App) reapIdle(now time.Time) {
+	a.promptMu.Lock()
+	a.mu.Lock()
+	var idle []*live
+	for _, l := range a.sessions {
+		l.mu.Lock()
+		since := l.idleSince
+		l.mu.Unlock()
+		if !since.IsZero() && now.Sub(since) >= a.idleTimeout {
+			idle = append(idle, l)
+		}
+	}
+	a.mu.Unlock()
+	ctx := context.Background()
+	// Unregister under promptMu, so a prompt arriving next starts a fresh
+	// session, but close outside it: closing waits on the agent process
+	// and a prompt on any other thread should not wait with it.
+	var closing []*live
+	for _, l := range idle {
+		if t, err := a.Store.Thread(ctx, l.threadID); err == nil && (t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval) {
+			continue
+		}
+		a.mu.Lock()
+		if a.sessions[l.threadID] == l {
+			delete(a.sessions, l.threadID)
+		}
+		a.mu.Unlock()
+		closing = append(closing, l)
+	}
+	a.promptMu.Unlock()
+	for _, l := range closing {
+		a.Log.Debug("closing idle session", "thread", l.threadID, "agent", l.agentName)
+		l.sess.Close()
+	}
 }
 
 // Recover is called once at startup. No session survives a restart, so any
@@ -181,6 +304,7 @@ func (a *App) retireAgent(name string, old agent.Agent) {
 // Shutdown closes every live session and stops agents that run a shared
 // process.
 func (a *App) Shutdown() {
+	a.stopOnce.Do(func() { close(a.stop) })
 	a.mu.Lock()
 	ls := make([]*live, 0, len(a.sessions))
 	for _, l := range a.sessions {
@@ -276,16 +400,209 @@ func (a *App) RemoveProject(ctx context.Context, id string) error {
 
 // ---- threads ----
 
-func (a *App) CreateThread(ctx context.Context, projectID, agentName, model string) (string, error) {
-	if _, err := a.Store.Project(ctx, projectID); err != nil {
+// ThreadStart is how a new thread gets its checkout: the project's
+// default, the project checkout, a new worktree from Base (empty for the
+// repository's default branch), or the worktree of thread ReuseFrom.
+type ThreadStart struct {
+	Mode      string // "" (project default) | "local" | "worktree" | "reuse"
+	Base      string
+	ReuseFrom string
+}
+
+// CreateThread opens a thread on a project. start says where it works;
+// the zero value takes the project's default. A reuse of a thread on
+// another project, or of one without a worktree, is treated as "local".
+func (a *App) CreateThread(ctx context.Context, projectID, agentName, model string, start ThreadStart) (string, error) {
+	p, err := a.Store.Project(ctx, projectID)
+	if err != nil {
 		return "", fmt.Errorf("project: %w", err)
 	}
 	if _, ok := a.Agent(agentName); !ok {
 		return "", fmt.Errorf("unknown agent %q", agentName)
 	}
+	var reuse store.Thread
+	if start.Mode == "reuse" {
+		src, err := a.Store.Thread(ctx, start.ReuseFrom)
+		if err != nil {
+			return "", fmt.Errorf("thread to reuse: %w", err)
+		}
+		if src.ProjectID == projectID {
+			reuse = src
+		}
+	}
 	id := newID()
-	_, err := a.Store.Append(ctx, id, domain.ThreadCreated{ID: id, ProjectID: projectID, Title: "new thread", Agent: agentName, Model: strings.TrimSpace(model)})
-	return id, err
+	if _, err := a.Store.Append(ctx, id, domain.ThreadCreated{ID: id, ProjectID: projectID, Title: "new thread", Agent: agentName, Model: strings.TrimSpace(model)}); err != nil {
+		return "", err
+	}
+	switch {
+	case reuse.Worktree != "":
+		// Same directory and branch, no git command (T3's "new thread in
+		// this worktree"). A worktree two threads share is never removed
+		// with one of them.
+		if _, err := a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: reuse.Worktree, Branch: reuse.WorktreeBranch}); err != nil {
+			return "", err
+		}
+	case start.Mode == "worktree" || (start.Mode == "" && p.Worktrees):
+		if a.WorktreeRoot == "" {
+			break
+		}
+		if err := a.addWorktree(ctx, id, p, start.Base); err != nil {
+			// The thread stands; it works on the main checkout and says why.
+			a.note(ctx, id, "Could not make a worktree, working in "+p.Path+": "+err.Error())
+		}
+	}
+	return id, nil
+}
+
+// CreateThreadIn opens a thread on the worktree another thread uses:
+// CreateThread with Mode "reuse".
+func (a *App) CreateThreadIn(ctx context.Context, from, agentName, model string) (string, error) {
+	src, err := a.Store.Thread(ctx, from)
+	if err != nil {
+		return "", err
+	}
+	return a.CreateThread(ctx, src.ProjectID, agentName, model, ThreadStart{Mode: "reuse", ReuseFrom: from})
+}
+
+// note puts a line in the transcript that is not from the agent.
+func (a *App) note(ctx context.Context, id, text string) {
+	a.Store.Append(ctx, id, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Body: text})
+}
+
+// addWorktree gives thread id a checkout under WorktreeRoot on a new
+// branch from base, or from the repository's default branch when base is
+// empty. The branch and directory carry the thread's short id: the title
+// is not known yet, and a name that never changes is what a pushed
+// branch wants.
+func (a *App) addWorktree(ctx context.Context, id string, p store.Project, base string) error {
+	if !gitx.Read(ctx, p.Path).IsRepo {
+		return fmt.Errorf("%s is not a git repository", p.Path)
+	}
+	if base = strings.TrimSpace(base); base == "" {
+		base = gitx.DefaultBranch(ctx, p.Path)
+	}
+	short := id
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	dir := filepath.Join(a.WorktreeRoot, gitx.Slug(p.Name), short)
+	branch, err := gitx.AddWorktree(ctx, p.Path, dir, "starcode/"+short, base)
+	if err != nil {
+		return err
+	}
+	if _, err := a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: dir, Branch: branch}); err != nil {
+		return err
+	}
+	// The project's setup script (t3.json) runs in the new checkout; an
+	// async one runs alongside the first turn, the other holds it.
+	if sc, ok := gitx.ReadSetupScript(p.Path); ok {
+		run := func() {
+			out, err := gitx.RunSetup(context.Background(), sc, p.Path, dir)
+			msg := "Setup script " + sc.Name + " finished"
+			if err != nil {
+				msg = "Setup script " + sc.Name + " failed: " + err.Error()
+			}
+			if out != "" {
+				msg += "\n" + out
+			}
+			a.note(context.Background(), id, msg)
+		}
+		a.note(ctx, id, "Running the setup script from t3.json in "+dir+": "+sc.Command)
+		if sc.Async {
+			go run()
+		} else {
+			run()
+		}
+	}
+	return nil
+}
+
+// temporaryBranch is whether the worktree still has the name it was
+// made with, before the thread had a title.
+func temporaryBranch(t store.Thread) bool {
+	short := t.ID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return t.WorktreeBranch == "starcode/"+short || strings.HasPrefix(t.WorktreeBranch, "starcode/"+short+"-")
+}
+
+// nameWorktreeBranch gives the worktree's branch a name from the title
+// once there is one, the way T3 renames its throwaway branch. Only the
+// name made at creation is renamed, and only once.
+func (a *App) nameWorktreeBranch(ctx context.Context, t store.Thread, title string) {
+	if t.Worktree == "" || !temporaryBranch(t) {
+		return
+	}
+	slug := gitx.Slug(title)
+	if slug == "thread" || slug == "new-thread" {
+		return
+	}
+	name, err := gitx.RenameBranch(ctx, t.Worktree, t.WorktreeBranch, "starcode/"+slug)
+	if err != nil {
+		a.Log.Info("worktree branch kept", "thread", t.ID, "err", err)
+		return
+	}
+	a.Store.Append(ctx, t.ID, domain.ThreadWorktreeSet{Path: t.Worktree, Branch: name})
+}
+
+// sharedWorktree is whether another thread works in t's directory.
+func (a *App) sharedWorktree(ctx context.Context, t store.Thread) bool {
+	ts, err := a.Store.Threads(ctx)
+	if err != nil {
+		return true
+	}
+	for _, o := range ts {
+		if o.ID != t.ID && o.Worktree == t.Worktree {
+			return true
+		}
+	}
+	return false
+}
+
+// SetProjectWorktrees sets whether the project's new threads start in a
+// worktree of their own.
+func (a *App) SetProjectWorktrees(ctx context.Context, id string, on bool) error {
+	p, err := a.Store.Project(ctx, id)
+	if err != nil {
+		return err
+	}
+	if p.Worktrees == on {
+		return nil
+	}
+	_, err = a.Store.Append(ctx, "", domain.ProjectSettingsChanged{ID: id, Worktrees: on})
+	return err
+}
+
+// RemoveWorktree drops a thread's checkout when it is clean and puts the
+// thread back on the project's; an unpushed branch stays in the
+// repository. Used by delete, and by hand from the thread's menu.
+func (a *App) RemoveWorktree(ctx context.Context, id string) error {
+	t, err := a.Store.Thread(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.Worktree == "" {
+		return nil
+	}
+	p, err := a.Store.Project(ctx, t.ProjectID)
+	if err != nil {
+		return err
+	}
+	if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
+		return errors.New("a turn is running in this worktree")
+	}
+	a.closeSession(id)
+	if a.sharedWorktree(ctx, t) {
+		// Another thread works there; this one just steps off it.
+		_, err = a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: ""})
+		return err
+	}
+	if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree); err != nil {
+		return err
+	}
+	_, err = a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: ""})
+	return err
 }
 
 func (a *App) RenameThread(ctx context.Context, id, title string) error {
@@ -293,7 +610,42 @@ func (a *App) RenameThread(ctx context.Context, id, title string) error {
 	if title == "" {
 		return errors.New("title is required")
 	}
+	if t, err := a.Store.Thread(ctx, id); err == nil {
+		a.nameWorktreeBranch(ctx, t, title)
+	}
 	_, err := a.Store.Append(ctx, id, domain.ThreadRenamed{Title: title})
+	return err
+}
+
+// LinkPR ties the thread to a pull request. Linking the one it already
+// has is a no-op, so the pump can call it after every gh output.
+func (a *App) LinkPR(ctx context.Context, id, repo string, number int, url string) error {
+	if repo == "" || number <= 0 {
+		return errors.New("a repository and a pull request number are required")
+	}
+	t, err := a.Store.Thread(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.PRRepo == repo && t.PRNumber == number {
+		return nil
+	}
+	if url == "" {
+		url = gitx.PullURL(repo, number)
+	}
+	_, err = a.Store.Append(ctx, id, domain.ThreadPRLinked{Repo: repo, Number: number, URL: url})
+	return err
+}
+
+func (a *App) UnlinkPR(ctx context.Context, id string) error {
+	t, err := a.Store.Thread(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.PRNumber == 0 {
+		return nil
+	}
+	_, err = a.Store.Append(ctx, id, domain.ThreadPRUnlinked{})
 	return err
 }
 
@@ -390,8 +742,24 @@ func (a *App) setLiveMode(ctx context.Context, l *live, mode string) error {
 
 func (a *App) DeleteThread(ctx context.Context, id string) error {
 	a.closeSession(id)
+	// A clean worktree goes with the thread; a dirty one is left on disk
+	// with its branch, since deleting the thread should not lose work.
+	if t, err := a.Store.Thread(ctx, id); err == nil && t.Worktree != "" && !a.sharedWorktree(ctx, t) {
+		if p, err := a.Store.Project(ctx, t.ProjectID); err == nil {
+			if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree); err != nil {
+				a.Log.Info("worktree kept", "thread", id, "dir", t.Worktree, "err", err)
+			}
+		}
+	}
 	_, err := a.Store.Append(ctx, id, domain.ThreadDeleted{})
 	return err
+}
+
+// LimitsUpdate is bus-only: the windows an agent reported mid-turn for
+// the instance named.
+type LimitsUpdate struct {
+	Agent  string
+	Limits agent.Limits
 }
 
 // ArchiveThread hides a thread from the sidebar and the project cards. An
@@ -409,6 +777,24 @@ func (a *App) ArchiveThread(ctx context.Context, id string) error {
 		a.closeSession(id)
 	}
 	_, err = a.Store.Append(ctx, id, domain.ThreadArchived{})
+	return err
+}
+
+// PinThread keeps a thread at the top of its project's list; UnpinThread
+// lets it fall back into date order.
+func (a *App) PinThread(ctx context.Context, id string, pinned bool) error {
+	t, err := a.Store.Thread(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.Pinned == pinned {
+		return nil
+	}
+	if pinned {
+		_, err = a.Store.Append(ctx, id, domain.ThreadPinned{})
+	} else {
+		_, err = a.Store.Append(ctx, id, domain.ThreadUnpinned{})
+	}
 	return err
 }
 
@@ -507,6 +893,7 @@ func (a *App) startPromptLocked(ctx context.Context, l *live, t store.Thread, qu
 		l.mu.Unlock()
 		return err
 	}
+	l.idleSince = time.Time{}
 	l.mu.Unlock()
 	if err := l.sess.Send(ctx, text); err != nil {
 		a.Store.Append(ctx, t.ID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
@@ -544,6 +931,9 @@ func (a *App) CompactContext(ctx context.Context, threadID string) error {
 		domain.ThreadStatusChanged{Status: domain.StatusRunning}); err != nil {
 		return err
 	}
+	l.mu.Lock()
+	l.idleSince = time.Time{}
+	l.mu.Unlock()
 	if err := c.Compact(ctx); err != nil {
 		a.Store.Append(ctx, threadID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
 		return err
@@ -666,6 +1056,7 @@ func (a *App) Compact(ctx context.Context, threadID string) {
 
 type live struct {
 	threadID  string
+	projectID string
 	agentName string
 	sess      agent.Session
 	mu        sync.Mutex
@@ -676,13 +1067,15 @@ type live struct {
 	// ctxTokens and ctxWindow are the last context reading written to the
 	// log, so a repeat costs nothing.
 	ctxTokens, ctxWindow int64
+	// idleSince is when the last turn ended, zero while one runs. reapIdle
+	// closes the session once it has been set for idleTimeout.
+	idleSince time.Time
 	// turn-scoped bookkeeping
 	interrupted bool
 	turnID      string
 	nativeTitle bool
 	seenMsgs    map[string]string // agent message id -> item id
 	seenTools   map[string]bool
-	toolOutput  map[string]bool // tool id -> streamed output seen
 	pending     map[string]agent.ApprovalRequested
 }
 
@@ -709,12 +1102,18 @@ func (a *App) session(ctx context.Context, t store.Thread) (*live, error) {
 	if err != nil {
 		return nil, err
 	}
+	if t.Worktree != "" && t.WorktreeBranch != "" {
+		// A worktree deleted outside starcode comes back on its branch.
+		if err := gitx.EnsureWorktree(ctx, p.Path, t.Worktree, t.WorktreeBranch); err != nil {
+			a.note(ctx, t.ID, "The worktree "+t.Worktree+" is gone and could not be put back, working in "+p.Path+": "+err.Error())
+		}
+	}
 	// Sessions outlive the request that started them.
-	sess, err := ag.Start(context.Background(), agent.Config{Cwd: p.Path, Model: t.Model, ResumeID: t.ExternalSessionID, PermissionMode: t.PermissionMode, Effort: t.Effort})
+	sess, err := ag.Start(context.Background(), agent.Config{Cwd: t.Dir(p), Model: t.Model, ResumeID: t.ExternalSessionID, PermissionMode: t.PermissionMode, Effort: t.Effort})
 	if err != nil {
 		return nil, err
 	}
-	l := &live{threadID: t.ID, agentName: t.Agent, sess: sess, seenMsgs: map[string]string{}, seenTools: map[string]bool{}, toolOutput: map[string]bool{}, pending: map[string]agent.ApprovalRequested{}}
+	l := &live{threadID: t.ID, projectID: t.ProjectID, agentName: t.Agent, sess: sess, seenMsgs: map[string]string{}, seenTools: map[string]bool{}, pending: map[string]agent.ApprovalRequested{}}
 	a.mu.Lock()
 	if existing := a.sessions[t.ID]; existing != nil {
 		a.mu.Unlock()
@@ -778,6 +1177,7 @@ func (a *App) pump(l *live) {
 			t, err := a.Store.Thread(ctx, tid)
 			if title != "" && err == nil && title != t.Title {
 				append_(domain.ThreadRenamed{Title: title})
+				a.nameWorktreeBranch(ctx, t, title)
 			}
 		case agent.KindTurnStarted:
 			l.mu.Lock()
@@ -786,13 +1186,15 @@ func (a *App) pump(l *live) {
 			l.mu.Unlock()
 			append_(domain.TurnStarted{TurnID: e.TurnStarted.TurnID}, domain.ThreadStatusChanged{Status: domain.StatusRunning})
 		case agent.KindTextDelta:
-			a.delta(l, append_, itemID, domain.KindAssistant, e.TextDelta.MessageID, e.TextDelta.Text)
+			a.delta(l, append_, itemID, domain.KindAssistant, e.TextDelta.MessageID, e.TextDelta.Text, e.TextDelta.Parent)
 		case agent.KindThinkingDelta:
-			a.delta(l, append_, itemID, domain.KindThinking, e.ThinkingDelta.MessageID, e.ThinkingDelta.Text)
+			a.delta(l, append_, itemID, domain.KindThinking, e.ThinkingDelta.MessageID, e.ThinkingDelta.Text, e.ThinkingDelta.Parent)
 		case agent.KindToolStarted:
 			append_(a.closeMessages(l, "")...)
 			ts := e.ToolStarted
-			meta, _ := json.Marshal(map[string]any{"input": nilIfEmpty(ts.Input), "summary": ts.Summary})
+			// parent names the subagent's tool call (a Task) this call
+			// was made under; the transcript nests it there.
+			meta, _ := json.Marshal(map[string]any{"input": nilIfEmpty(ts.Input), "summary": ts.Summary, "parent": nilIfBlank(itemIDOr(itemID, ts.Parent))})
 			id := itemID(ts.ID)
 			l.mu.Lock()
 			seen := l.seenTools[ts.ID]
@@ -806,9 +1208,6 @@ func (a *App) pump(l *live) {
 				append_(domain.ItemStarted{ID: id, Kind: domain.KindTool, ToolName: ts.Name, Status: domain.ItemRunning, Meta: meta})
 			}
 		case agent.KindToolOutput:
-			l.mu.Lock()
-			l.toolOutput[e.ToolOutput.ID] = true
-			l.mu.Unlock()
 			append_(domain.ItemDelta{ID: itemID(e.ToolOutput.ID), Field: "output", Text: e.ToolOutput.Text})
 		case agent.KindToolCompleted:
 			tc := e.ToolCompleted
@@ -825,7 +1224,15 @@ func (a *App) pump(l *live) {
 			}
 			evs = append(evs, domain.ItemCompleted{ID: itemID(tc.ID), Status: status})
 			append_(evs...)
-			a.Bus.Publish(domain.GitChanged{})
+			a.Bus.Publish(domain.GitChanged{ProjectID: l.projectID})
+			// The agent opening a pull request links the thread to it.
+			if it, err := a.Store.Item(ctx, itemID(tc.ID)); err == nil {
+				if repo, n, url, ok := createdPR(it); ok {
+					if err := a.LinkPR(ctx, tid, repo, n, url); err != nil {
+						log.Error("link pull request", "err", err)
+					}
+				}
+			}
 		case agent.KindApproval:
 			ap := *e.Approval
 			auto := slices.Contains(a.SessionRules(ctx, tid), domain.RuleKey(ap.ToolName, ap.Input))
@@ -843,6 +1250,12 @@ func (a *App) pump(l *live) {
 			l.pending[ap.ID] = ap
 			l.mu.Unlock()
 			append_(req, domain.ThreadStatusChanged{Status: domain.StatusAwaitingApproval})
+		case agent.KindLimits:
+			// Subscription windows are account state, not thread history;
+			// the web layer keeps them per instance.
+			if e.Limits != nil {
+				a.Bus.Publish(LimitsUpdate{Agent: l.agentName, Limits: *e.Limits})
+			}
 		case agent.KindContextUsage:
 			cu := e.ContextUsage
 			l.mu.Lock()
@@ -866,7 +1279,12 @@ func (a *App) pump(l *live) {
 				closers = append(closers, domain.ItemCompleted{ID: id, Status: domain.ItemDone})
 			}
 			l.seenMsgs = map[string]string{}
+			// seenTools is per turn like seenMsgs: a tool id from last turn
+			// must not turn this turn's start into an update, and the map
+			// would otherwise grow for the life of the session.
+			l.seenTools = map[string]bool{}
 			l.pending = map[string]agent.ApprovalRequested{}
+			l.idleSince = time.Now()
 			l.mu.Unlock()
 			append_(closers...)
 			status := domain.StatusIdle
@@ -931,7 +1349,7 @@ func (a *App) pump(l *live) {
 				}
 			}
 			a.promptMu.Unlock()
-			a.Bus.Publish(domain.GitChanged{})
+			a.Bus.Publish(domain.GitChanged{ProjectID: l.projectID})
 		case agent.KindNotice:
 			append_(domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: e.Notice.Text})
 		case agent.KindClosed:
@@ -959,7 +1377,7 @@ func (a *App) pump(l *live) {
 	}
 }
 
-func (a *App) delta(l *live, append_ func(...any), itemID func(string) string, kind, msgID, text string) {
+func (a *App) delta(l *live, append_ func(...any), itemID func(string) string, kind, msgID, text, parent string) {
 	key := kind + ":" + msgID
 	l.mu.Lock()
 	id, ok := l.seenMsgs[key]
@@ -971,11 +1389,32 @@ func (a *App) delta(l *live, append_ func(...any), itemID func(string) string, k
 	if !ok {
 		// A new message means the previous streamed one is finished.
 		evs := a.closeMessages(l, id)
-		evs = append(evs, domain.ItemStarted{ID: id, Kind: kind, Status: domain.ItemRunning, Body: text})
+		var meta json.RawMessage
+		if parent != "" {
+			// A subagent's text sits under its Task in the transcript.
+			meta, _ = json.Marshal(map[string]any{"parent": itemID(parent)})
+		}
+		evs = append(evs, domain.ItemStarted{ID: id, Kind: kind, Status: domain.ItemRunning, Body: text, Meta: meta})
 		append_(evs...)
 		return
 	}
 	append_(domain.ItemDelta{ID: id, Text: text})
+}
+
+// itemIDOr maps an agent-side tool id to its item id, keeping "" as "".
+func itemIDOr(itemID func(string) string, id string) string {
+	if id == "" {
+		return ""
+	}
+	return itemID(id)
+}
+
+// nilIfBlank keeps an empty string out of the meta JSON.
+func nilIfBlank(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // closeMessages marks every streamed message item except keep as done and
@@ -994,6 +1433,23 @@ func (a *App) closeMessages(l *live, keep string) []any {
 		delete(l.seenMsgs, key)
 	}
 	return evs
+}
+
+// createdPR reads the pull request a finished tool call opened: a command
+// with `gh pr create` in it whose output has the new PR's URL. Reading a
+// PR (`gh pr view`) prints URLs too, which is why the command is checked.
+func createdPR(it store.Item) (repo string, number int, url string, ok bool) {
+	if it.Kind != domain.KindTool || it.Status != domain.ItemDone {
+		return "", 0, "", false
+	}
+	var m struct {
+		Input json.RawMessage `json:"input"`
+	}
+	json.Unmarshal(it.Meta, &m)
+	if !strings.Contains(string(m.Input), "pr create") {
+		return "", 0, "", false
+	}
+	return gitx.FindPullURL(it.Output)
 }
 
 func titleFrom(text string) string {

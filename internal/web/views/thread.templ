@@ -5,6 +5,7 @@ import (
 	"starcode/internal/agent"
 	"starcode/internal/domain"
 	"starcode/internal/store"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,6 +19,44 @@ type ThreadData struct {
 	Rules     []string
 	Settings  SettingsData
 	Branch    string
+	// PR is the polled state of the linked pull request; Number is 0
+	// when the thread has none. Repo is the PR's repository when it is
+	// one of the project's remotes, so the panel can show the PR; empty
+	// otherwise.
+	PR   store.PRState
+	Repo string
+	// Limits is the thread's instance's plan windows, for the context
+	// card; empty until the first read.
+	Limits []agent.LimitWindow
+	// Full renders every item. Otherwise the transcript starts at its
+	// last stretch (see SplitTail) with a button that loads the rest, so
+	// a long thread does not cost its whole history on every open and
+	// every reconnect, which a phone does often.
+	Full bool
+}
+
+// tailKeep is how many items the transcript shows before the reader asks
+// for the rest; the cut moves back to the prompt that started that
+// stretch, so it always opens on a turn's beginning.
+const tailKeep = 40
+
+// SplitTail cuts items into the part the page leaves out and the part it
+// shows. The shown part holds at least tailKeep items and starts at a
+// user prompt when one is near enough; a short transcript is all tail.
+func SplitTail(items []store.Item) (head, tail []store.Item) {
+	if len(items) <= tailKeep {
+		return nil, items
+	}
+	cut := len(items) - tailKeep
+	// Walk back to the prompt that began this stretch, but not past
+	// another tailKeep items: a very long turn still gets a bounded page.
+	for i := cut; i >= 0 && i > cut-tailKeep; i-- {
+		if items[i].Kind == domain.KindUser {
+			cut = i
+			break
+		}
+	}
+	return items[:cut], items[cut:]
 }
 
 func busy(t store.Thread) bool {
@@ -40,8 +79,10 @@ func IsWork(kind string) bool {
 	return false
 }
 
-// GroupItems folds consecutive work items into blocks.
+// GroupItems folds consecutive work items into blocks. A subagent's
+// items (those with a parent) are left out: they render under their Task.
 func GroupItems(items []store.Item) []Block {
+	items, _ = Nest(items)
 	var out []Block
 	for i := range items {
 		it := items[i]
@@ -123,15 +164,16 @@ templ Thread(d ThreadData) {
 	<main id="main" class="thread">
 		@MainHead(d)
 		@MessageRail(d.Items)
+		{{ head, tail := SplitTail(d.Items) }}
+		if d.Full {
+			{{ head, tail = nil, d.Items }}
+		}
 		<div id="items" class="items">
 			<div class="items-inner">
-				for _, b := range GroupItems(d.Items) {
-					if b.Item != nil {
-						@Item(*b.Item)
-					} else {
-						@Work(b.Work, d.Approvals)
-					}
+				if len(head) > 0 {
+					@LoadEarlier(d.Thread.ID, len(head), tail[0].Seq)
 				}
+				@Blocks(tail, d.Approvals)
 				for _, a := range pendingApprovals(d.Approvals) {
 					@Approval(a)
 				}
@@ -145,6 +187,34 @@ templ Thread(d ThreadData) {
 		</div>
 		@Composer(d)
 	</main>
+}
+
+// Blocks renders items as transcript rows, work runs folded.
+templ Blocks(items []store.Item, aps []store.Approval) {
+	{{ _, kids := Nest(items) }}
+	for _, b := range GroupItems(items) {
+		if b.Item != nil {
+			@ItemWith(*b.Item, kids)
+		} else {
+			@Work(b.Work, aps, kids)
+		}
+	}
+}
+
+// LoadEarlier is the button at the top of a cut transcript. The fetch
+// prepends the rows before seq and removes the button; $full keeps a
+// reconnect from cutting the transcript again, and the layout's scroll
+// script (loadEarlier) holds the reader's place while the rows land.
+templ LoadEarlier(threadID string, n int, seq int64) {
+	<button id="load-earlier" type="button" class="btn ghost load-earlier" data-on:click={ "$full = true; loadEarlier(el); @get('/api/threads/" + threadID + "/items?before=" + strconv.FormatInt(seq, 10) + "')" }>@Icon("chevrons-up", "ui-icon") <span>{ strconv.Itoa(n) } earlier { plural(n, "item", "items") }</span></button>
+}
+
+// Earlier wraps the rows the button fetched in one element, so a prepend
+// keeps their order; display: contents leaves the layout to the list.
+templ Earlier(items []store.Item, aps []store.Approval) {
+	<div class="earlier">
+		@Blocks(items, aps)
+	</div>
 }
 
 // BusyBar sits between the transcript and the composer while a turn runs.
@@ -161,6 +231,9 @@ templ BusyBar(d ThreadData) {
 			{{ since := workingSince(d) }}
 			<span class="shimmer" data-busy-word>Working…</span>
 			<span class="dim tiny-text" data-since={ since.UTC().Format(time.RFC3339) }>{ elapsedText(time.Since(since)) }</span>
+			if n := AgentsRunning(d.Items); n > 0 {
+				<span class="dim tiny-text">@Icon("bot", "ui-icon") <span>{ fmt.Sprintf("%d %s", n, plural(n, "agent", "agents")) }</span></span>
+			}
 		}
 	</div>
 }
@@ -233,36 +306,97 @@ templ MainHead(d ThreadData) {
 	<header id="mainhead" class="mainhead">
 		<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
 		<nav class="crumbs ellipsis">
-			<a href="/">{ d.Project.Name }</a>
-			<span class="dim">/</span>
+			// On a phone the title gets the whole row; the project is one
+			// tap away in the thread list.
+			<a class="hide-sm" href="/">{ d.Project.Name }</a>
+			<span class="dim hide-sm">/</span>
 			// The title is a button that swaps in the rename box; Enter or
 			// the save button posts, Escape and blur put the title back.
 			<button type="button" class="crumb-title ellipsis" title="Rename thread" data-show="!$rename" data-preserve-attr="style" data-on:click={ "$title = " + jsq(d.Thread.Title) + "; $rename = true; renameFocus()" }>{ d.Thread.Title }</button>
 			<form class="rename" data-show="$rename" data-preserve-attr="style" style="display: none" data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + d.Thread.ID + "/rename')" }>
-				<input class="in" type="text" data-bind:title autocomplete="off" spellcheck="false" maxlength="200" data-on:keydown="evt.key === 'Escape' && (evt.preventDefault(), $rename = false)" data-on:blur="!el.form.contains(evt.relatedTarget) && ($rename = false)"/>
+				<input class="in" type="text" data-bind:title autocomplete="off" spellcheck="false" enterkeyhint="done" maxlength="200" data-on:keydown="evt.key === 'Escape' && (evt.preventDefault(), $rename = false)" data-on:blur="!el.form.contains(evt.relatedTarget) && ($rename = false)"/>
 				// mousedown is stopped so the click does not blur the input
 				// before the submit lands.
 				<button class="btn icon tiny" type="submit" title="Save title" aria-label="Save title" data-on:mousedown="evt.preventDefault()">@Icon("check", "ui-icon")</button>
 			</form>
 		</nav>
 		if d.Thread.Archived {
-			<span class="status-pill st-idle" title="Archived: sending a message unarchives it">@Icon("archive", "ui-icon") <span>archived</span></span>
+			<span class="status-pill st-idle" title="Settled: sending a message brings the thread back">@Icon("archive", "ui-icon") <span>settled</span></span>
 		}
-		<span class={ "status-pill", "st-" + d.Thread.Status } title={ d.Thread.StatusDetail }>@StatusIcon(d.Thread.Status) <span>{ statusLabel(d.Thread.Status) }</span></span>
+		// With a reason behind the status (an error, what the agent is
+		// waiting on) the pill is a button that shows it under the header;
+		// a title attribute alone never shows on a phone.
+		if d.Thread.StatusDetail != "" {
+			<button type="button" class={ "status-pill", "st-" + d.Thread.Status } title={ d.Thread.StatusDetail } data-on:click="$stat = !$stat">@StatusIcon(d.Thread.Status) <span>{ statusLabel(d.Thread.Status) }</span></button>
+			<div class="status-detail" data-show="$stat" data-preserve-attr="style" style="display: none" data-on:click__outside="$stat && !evt.target.closest('.status-pill') && ($stat = false)">{ d.Thread.StatusDetail }</div>
+		} else {
+			<span class={ "status-pill", "st-" + d.Thread.Status }>@StatusIcon(d.Thread.Status) <span>{ statusLabel(d.Thread.Status) }</span></span>
+		}
+		if d.Thread.Status == "error" && authFailure(d.Thread.StatusDetail) {
+			// The CLI lost its sign-in; the providers page can get it back
+			// without a terminal, and the next prompt here runs on it.
+			<a class="btn tiny primary" href={ templ.SafeURL("/settings/providers?sel=" + d.Thread.Agent) } title={ d.Thread.StatusDetail }>@Icon("log-in", "ui-icon") sign in</a>
+		}
+		if pr := prOf(d.Thread, map[store.PR]store.PRState{d.PR.PR: d.PR}); pr.Number > 0 {
+			// The chip opens the panel on the PR when it is in the project's
+			// repository; a PR elsewhere opens on GitHub. The unlink button
+			// sits next to it since the panel cannot show every PR.
+			if pr.Repo == d.Repo {
+				<button type="button" class="pr-chip-btn" data-on:click={ "$git = true; $panelTab = 'prs'; @get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + "?thread=" + d.Thread.ID + "')" } title={ prChipTitle(pr) + ". Open it in the panel" }>
+					@PRChip(pr, prWord(pr))
+				</button>
+			} else {
+				<a class="pr-chip-btn" href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener" title={ prChipTitle(pr) + " in " + pr.Repo + ". Open on GitHub" }>
+					@PRChip(pr, prWord(pr))
+				</a>
+			}
+			<button class="btn icon ghost tiny dim pr-unlink" data-on:click={ "confirm('Unlink pull request #" + strconv.Itoa(pr.Number) + " from this thread?') && @post('/api/threads/" + d.Thread.ID + "/pr/unlink')" } title="Unlink the pull request from this thread" aria-label="Unlink the pull request">@Icon("unlink", "ui-icon")</button>
+		}
 		<span class="dim tiny-text hide-sm ellipsis" title="Model reported by the agent">@Icon("bot", "ui-icon") <span class="ellipsis">{ modelShown(d.Thread) }</span></span>
 		<span class="spacer"></span>
 		if d.Branch != "" {
-			<span class="dim tiny-text hide-sm">@Icon("git-branch", "ui-icon") <span>{ d.Branch }</span></span>
+			<span class="dim tiny-text hide-sm" title={ branchTitle(d) }>
+				if d.Thread.Worktree != "" {
+					@Icon("folder-git-2", "ui-icon")
+				} else {
+					@Icon("git-branch", "ui-icon")
+				}
+				<span>{ d.Branch }</span>
+			</span>
 		}
 		<button class="btn ghost" data-on:click="$term = !$term" title="Toggle terminal">@Icon("terminal", "ui-icon") <span class="hide-sm">terminal</span></button>
 		<button class="btn ghost gittoggle" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
-		if d.Thread.Archived {
-			<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unarchive')" } title="Move this thread back into its project">@Icon("archive-restore", "ui-icon") <span class="hide-sm">unarchive</span></button>
-		} else {
-			<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/archive')" } title="Archive thread (hidden from the lists, kept in full)">@Icon("archive", "ui-icon") <span class="hide-sm">archive</span></button>
-		}
-		<button class="btn ghost dim" data-on:click={ "confirm('Delete this thread?') && @post('/api/threads/" + d.Thread.ID + "/delete')" } title="Delete thread"><span class="hide-sm">delete</span><span class="show-sm">@Icon("trash-2", "ui-icon")</span></button>
+		// Archive and delete are inline on a wide window (the wrapper
+		// renders as display: contents) and a menu behind this button on
+		// a phone.
+		<button class="btn icon ghost more-toggle" type="button" data-on:click="$more = !$more" title="More" aria-label="More actions">@Icon("ellipsis-vertical", "ui-icon")</button>
+		<div class="head-more" data-class:open="$more" data-on:click__outside="$more && !evt.target.closest('.more-toggle') && ($more = false)" data-on:click="$more = false">
+			if d.Thread.Pinned {
+				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unpin')" } title="Unpin: back into date order">@Icon("pin-off", "ui-icon") <span class="hide-sm">unpin</span></button>
+			} else {
+				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/pin')" } title="Pin to the top of the project's list">@Icon("pin", "ui-icon") <span class="hide-sm">pin</span></button>
+			}
+			if d.Thread.Worktree != "" {
+				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/worktree/thread')" } title={ "Open another thread on " + d.Thread.Worktree }>@Icon("message-square-plus", "ui-icon") <span class="hide-sm">new thread in this worktree</span></button>
+				<button class="btn ghost dim" data-on:click={ "confirm('Remove the worktree at " + d.Thread.Worktree + "? Its branch stays; a checkout with uncommitted changes is refused.') && @post('/api/threads/" + d.Thread.ID + "/worktree/remove')" } title={ "Remove the worktree " + d.Thread.Worktree + " and work on the project's checkout" }>@Icon("folder-git-2", "ui-icon") <span class="hide-sm">remove worktree</span></button>
+			}
+			if d.Thread.Archived {
+				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unarchive')" } title="Bring this thread back into the list">@Icon("archive-restore", "ui-icon") <span class="hide-sm">unsettle</span></button>
+			} else {
+				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/archive')" } title="Settle: move the thread to the Settled section, kept in full">@Icon("archive", "ui-icon") <span class="hide-sm">settle</span></button>
+			}
+			<button class="btn ghost dim" data-on:click={ "confirm('Delete this thread?') && @post('/api/threads/" + d.Thread.ID + "/delete')" } title="Delete thread">@Icon("trash-2", "ui-icon") <span class="hide-sm">delete</span></button>
+		</div>
 	</header>
+}
+
+// branchTitle is the header's tooltip on the branch: the worktree's
+// path when the thread has one.
+func branchTitle(d ThreadData) string {
+	if d.Thread.Worktree != "" {
+		return "Worktree " + d.Thread.Worktree + " on branch " + d.Branch
+	}
+	return "Branch " + d.Branch
 }
 
 func modelShown(t store.Thread) string {
@@ -275,6 +409,14 @@ func modelShown(t store.Thread) string {
 	return "default model"
 }
 
+// authFailure is whether a turn's error is the CLI having lost its
+// sign-in (an expired or revoked OAuth session), which the providers
+// page can fix.
+func authFailure(detail string) bool {
+	d := strings.ToLower(detail)
+	return strings.Contains(d, "oauth") || strings.Contains(d, "failed to authenticate") || strings.Contains(d, "not logged in")
+}
+
 func statusLabel(s string) string {
 	switch s {
 	case domain.StatusAwaitingApproval:
@@ -284,13 +426,13 @@ func statusLabel(s string) string {
 }
 
 // Work is a folded run of agent activity. Open while it is still going.
-templ Work(items []store.Item, aps []store.Approval) {
+templ Work(items []store.Item, aps []store.Approval, kids map[string][]store.Item) {
 	{{ running, _, _ := WorkState(items, aps) }}
 	<details id={ "work-" + items[0].ID } class={ "work", templ.KV("running", running) } open?={ running } data-preserve-attr="open">
 		@WorkSummary(items, aps)
 		<div class="work-body">
 			for _, it := range items {
-				@Item(it)
+				@ItemWith(it, kids)
 			}
 		</div>
 	</details>
@@ -321,6 +463,10 @@ templ PromptQueue(d ThreadData) {
 					<div class="queue-item">
 						<span class="queue-position">{ fmt.Sprintf("%d", i+1) }</span>
 						<span class="ellipsis" title={ promptSummary(q.Body) }>{ promptSummary(q.Body) }</span>
+						if i == 0 && busy(d.Thread) {
+							// Steer: stop the running turn so this goes out now.
+							<button class="btn ghost tiny queue-now" type="button" title="Send now: stop the running turn and send this message" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/steer')" }>@Icon("fast-forward", "ui-icon") <span>now</span></button>
+						}
 						<button class="btn icon ghost" type="button" title="Remove queued message" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/queue/" + q.ID + "/remove')" }>@Icon("x", "ui-icon")</button>
 					</div>
 				}
@@ -339,8 +485,9 @@ func draftPost(key string) string {
 // SessionRules is the strip of "allow for session" rules above the
 // composer, each with a button that revokes it.
 templ SessionRules(d ThreadData) {
-	if len(d.Rules) > 0 {
-		<div class="rules">
+	<div id="session-rules">
+		if len(d.Rules) > 0 {
+			<div class="rules">
 			<span class="dim tiny-text" title="Requests matching these are allowed without asking until revoked">@Icon("shield-check", "ui-icon") <span>allowed for session</span></span>
 			for _, k := range d.Rules {
 				<span class="rule-chip">
@@ -349,7 +496,8 @@ templ SessionRules(d ThreadData) {
 				</span>
 			}
 		</div>
-	}
+		}
+	</div>
 }
 
 func plural(n int, one, many string) string {
@@ -360,22 +508,23 @@ func plural(n int, one, many string) string {
 }
 
 // AttachButton is the composer's paperclip: a hidden file input whose picks
-// land base64-encoded in the $attach signal and ride along with the send.
+// land base64-encoded in the $_attach signal and ride along with the send.
 templ AttachButton() {
-	<label class="btn icon ghost" title="Attach files to the message">
-		@Icon("paperclip", "ui-icon")
-		// The value resets when $attach empties (clear button, sent turn) so
+	<label class="btn icon ghost attach-btn" title="Attach files to the message">
+		<span class="hide-sm">@Icon("paperclip", "ui-icon")</span>
+		<span class="show-sm">@Icon("plus", "ui-icon")</span>
+		// The value resets when $_attach empties (clear button, sent turn) so
 		// picking the same file again always fires a change event.
-		<input type="file" multiple data-bind:attach data-on:click="el.value = ''" data-effect="$attach.length === 0 && (el.value = '')" style="display: none"/>
+		<input type="file" multiple data-bind:_attach data-on:click="el.value = ''" data-effect="$_attach.length === 0 && (el.value = '')" style="display: none"/>
 	</label>
 }
 
 // AttachStrip shows the picked files above the composer row. The layout's
 // change listener renders one removable item per file into .attach-thumbs
 // from the input, which is the source of truth; the strip hides when
-// $attach empties, so stale items never show.
+// $_attach empties, so stale items never show.
 templ AttachStrip() {
-	<div class="attachments" data-show="$attach.length > 0" data-preserve-attr="style" style="display: none">
+	<div class="attachments" data-show="$_attach.length > 0" data-preserve-attr="style" style="display: none">
 		<div class="attach-thumbs"></div>
 	</div>
 }
@@ -419,6 +568,10 @@ templ ContextMeter(d ThreadData) {
 					}
 					<p class="dim tiny-text">{ contextModelLine(d, window) }</p>
 					<p class="dim tiny-text">The last request's size: the cached prefix, the new input and the reply. Compacting folds the conversation so far into a summary the agent goes on from.</p>
+					if len(d.Limits) > 0 {
+						<div class="pick-head ctx-limits-head">Plan limits</div>
+						@LimitBars(d.Limits)
+					}
 					<div class="ctx-actions">
 						<button type="button" class="btn" disabled?={ busy(t) } title={ compactTitle(t) } data-on:click={ "$pick = ''; @post('/api/threads/" + t.ID + "/compact')" }>@Icon("fold-vertical", "ui-icon") <span>Compact</span></button>
 						<button type="button" class="btn ghost" title="Open the model picker" data-on:click="$pick = 'model'; pickFocus(el)">@Icon("bot", "ui-icon") <span>Switch model</span></button>
@@ -536,27 +689,37 @@ func windowLabel(n int64) string {
 // Composer is the prompt card. Its setting chips post on change, also
 // while a turn runs: the permission mode reaches the running agent when it
 // can take one, the rest applies from the next turn.
+// What flips with the thread's status (the busy border, the placeholder,
+// the stop button) is driven by the locked and placeholder signals and
+// the #composer-actions element, so a status change costs a signal patch
+// and a few buttons instead of the whole card with every model list in
+// it (see conn.renderHead).
 templ Composer(d ThreadData) {
 	{{ t := d.Thread }}
 	{{ locked := busy(t) }}
 	<form
 		id="composer"
 		class={ "composer", templ.KV("busy", locked) }
-		data-signals={ signalsJSON(t.Agent, t.Model, t.Effort, t.PermissionMode, "") }
-		data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + t.ID + "/send')" }
+		data-class:busy="$locked"
+		data-signals={ signalsJSON(t.Agent, t.Model, t.Effort, t.PermissionMode, composerSignals(d)) }
+		data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + t.ID + "/send', " + withSignal("_attach") + ")" }
 	>
 		@SessionRules(d)
 		@PromptQueue(d)
+		// The slash command menu (static/slash.js) fills this above the prompt.
+		<div class="slash-menu"></div>
 		<textarea
 			class="prompt"
 			rows="1"
 			placeholder={ promptPlaceholder(d) }
+			data-attr:placeholder="$placeholder"
 			data-bind:prompt
-			data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send'))" }
+			data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send', " + withSignal("_attach") + "))" }
 			data-on:input__debounce.600ms={ draftPost(t.ID) }
 			data-effect="$prompt; autoGrow(el)"
 			autocomplete="off"
-			spellcheck="false"
+			autocapitalize="sentences"
+			enterkeyhint="enter"
 		></textarea>
 		@AttachStrip()
 		<div class="composer-row">
@@ -564,12 +727,31 @@ templ Composer(d ThreadData) {
 			@Chips(d.Settings, "@post('/api/threads/"+t.ID+"/settings')", len(d.Items) > 0)
 			@ContextMeter(d)
 			<span class="spacer"></span>
-			if locked {
-				<button class="btn round warn" type="button" data-on:click={ "@post('/api/threads/" + t.ID + "/interrupt')" } title="Stop">@Icon("square", "ui-icon")</button>
-			}
-			<button class="btn round primary" type="submit" title={ sendTitle(locked) }>@Icon("arrow-up", "ui-icon")</button>
+			@ComposerActions(d)
 		</div>
 	</form>
+}
+
+// ComposerActions is the stop button while a turn runs and the send button.
+templ ComposerActions(d ThreadData) {
+	{{ locked := busy(d.Thread) }}
+	<div id="composer-actions" class="composer-actions">
+		if locked {
+			<button class="btn round warn" type="button" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/interrupt')" } title="Stop">@Icon("square", "ui-icon")</button>
+		}
+		<button class="btn round primary" type="submit" title={ sendTitle(locked) }>@Icon("arrow-up", "ui-icon")</button>
+	</div>
+}
+
+// composerSignals are the status-driven signals of the composer, as the
+// extra part of its data-signals object and, in ComposerSignals, as the
+// map a status change patches.
+func composerSignals(d ThreadData) string {
+	return fmt.Sprintf("locked: %t, placeholder: %q", busy(d.Thread), promptPlaceholder(d))
+}
+
+func ComposerSignals(d ThreadData) map[string]any {
+	return map[string]any{"locked": busy(d.Thread), "placeholder": promptPlaceholder(d)}
 }
 
 func promptPlaceholder(d ThreadData) string {
@@ -583,7 +765,7 @@ func promptPlaceholder(d ThreadData) string {
 		return "Describe what " + d.Thread.Agent + " should do in " + d.Project.Name + "…"
 	}
 	if d.Thread.Archived {
-		return "Reply… (this moves the thread out of the archive)"
+		return "Reply… (this brings the thread back from Settled)"
 	}
 	return "Reply…"
 }

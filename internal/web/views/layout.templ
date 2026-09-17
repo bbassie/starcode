@@ -8,7 +8,7 @@ import (
 
 // Page identifies what the SSE stream should render.
 type Page struct {
-	View        string // "home" | "thread" | "settings" | "usage" | "providers" | "keys"
+	View        string // "home" | "thread" | "prs" | "settings" | "appearance" | "usage" | "providers" | "keys"
 	ThreadID    string
 	Theme       string
 	UsageDays   int
@@ -18,6 +18,21 @@ type Page struct {
 	// Draft is the saved composer text for this page (thread or home),
 	// the initial value of the prompt signal.
 	Draft string
+	// GitPath and GitEdit are the side panel's open diff or file, read
+	// from the page's signals when its stream (re)connects, so the redraw
+	// on connect puts the detail back instead of clearing it.
+	GitPath string
+	GitEdit bool
+	// PanelTab is the side panel's tab the same way; with the tree open
+	// the redraw carries the root listing instead of an empty tree.
+	PanelTab string
+	// Full is whether the page had loaded the whole transcript, so a
+	// redraw keeps it instead of cutting it again (see views.SplitTail).
+	Full bool
+	// PairURL is the settings page's sign-in link for a phone.
+	PairURL string
+	// Sidebar is the sidebar layout, "inbox" or "project".
+	Sidebar string
 }
 
 // draftJSON is the draft as a JS string literal for the signals object.
@@ -43,6 +58,10 @@ func (p Page) streamURL() string {
 		url = fmt.Sprintf("/events?view=thread&id=%s", p.ThreadID)
 	case "settings":
 		url = "/events?view=settings"
+	case "appearance":
+		url = "/events?view=appearance"
+	case "prs":
+		url = "/events?view=prs"
 	case "keys":
 		url = "/events?view=keys"
 	case "providers":
@@ -87,6 +106,9 @@ templ Layout(title string, p Page, parts Parts) {
 			<link rel="icon" href={ asset("/static/favicon.svg") } type="image/svg+xml"/>
 			<link rel="stylesheet" href={ asset("/static/app.css") }/>
 			<script type="module" src={ asset("/static/datastar.js") }></script>
+			// Copying out of a rendered reply or PR body yields markdown.
+			<script defer src={ asset("/static/mdcopy.js") }></script>
+			<script defer src={ asset("/static/slash.js") }></script>
 			if p.View == "thread" {
 				<link rel="stylesheet" href={ asset("/static/xterm.css") }/>
 				<script defer src={ asset("/static/xterm.js") }></script>
@@ -96,7 +118,7 @@ templ Layout(title string, p Page, parts Parts) {
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, file: '', upload: [], attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: false, updir: '', pr: 0, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft)) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', pr: 0, prsel: 0, prproject: '', more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, tid: %q, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft), p.ThreadID) }
 			data-attr:data-theme="$theme"
 			data-class:nav-collapsed="$navhide"
 			data-class:panel-wide="$wide"
@@ -108,7 +130,7 @@ templ Layout(title string, p Page, parts Parts) {
 				if parts.Sidebar != nil {
 					@parts.Sidebar
 				} else {
-					<aside id="sidebar" data-class:open="$nav">
+					<aside id="sidebar" data-class:open="$nav" data-preserve-attr="style">
 						<div class="dim pad">loading…</div>
 					</aside>
 				}
@@ -136,15 +158,37 @@ templ Layout(title string, p Page, parts Parts) {
 				if parts.Git != nil {
 					@parts.Git
 				} else {
-					<aside id="gitpanel" class={ templ.KV("closed", p.View != "thread") } data-class:open="$git" data-class:closed="!$git"></aside>
+					<aside id="gitpanel" class={ templ.KV("closed", p.View != "thread") } data-class:open="$git" data-class:closed="!$git" data-preserve-attr="style"></aside>
 				}
 			</div>
 			<div id="toast"></div>
+			// The sidebar rows' hover card (see views.rowTip), one for the page.
+			<div id="hovertip" class="hovertip" hidden></div>
 			<datalist id="project-paths"></datalist>
 			{{ keys := Hotkeys(p, parts) }}
 			@Palette(p)
 			@ShortcutHelp(keys)
 			@HotkeyButtons(keys)
+			// One MutationObserver for every script that watches the page.
+			// Datastar patches the DOM many times a second while a turn
+			// streams, and each watcher used to observe the whole body on
+			// its own; here they run together once per animation frame, so
+			// a burst of patches costs one pass and one layout.
+			<script>
+				window.onDOM = (() => {
+					const fns = [];
+					let queued = false;
+					new MutationObserver(() => {
+						if (queued) return;
+						queued = true;
+						requestAnimationFrame(() => {
+							queued = false;
+							for (const f of fns) f();
+						});
+					}).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class'] });
+					return (f) => fns.push(f);
+				})();
+			</script>
 			// Stream keepalive. Datastar retries a stream that fails, but one
 			// that ends cleanly (starcode restarted, a proxy timed out, a
 			// phone came back from the background) just stops, and the page
@@ -186,10 +230,20 @@ templ Layout(title string, p Page, parts Parts) {
 					let stick = true;
 					// A link into the transcript (search results, the message
 					// rail) lands on its row instead of the bottom.
+					// A row the page did not load (the transcript starts at the
+					// last stretch, see views.Thread) is fetched through the
+					// "earlier" button first; the watcher below jumps once it is in.
+					let wantRow = '';
 					const jumpToHash = () => {
 						if (!location.hash.startsWith('#it-')) return;
-						const row = document.getElementById(location.hash.slice(1));
-						if (!row) return;
+						const id = location.hash.slice(1);
+						const row = document.getElementById(id);
+						if (!row) {
+							const more = document.querySelector('.load-earlier');
+							if (more) { wantRow = id; more.click(); }
+							return;
+						}
+						wantRow = '';
 						stick = false;
 						document.body.classList.add('scrolled-up');
 						row.scrollIntoView({ block: 'center' });
@@ -203,12 +257,26 @@ templ Layout(title string, p Page, parts Parts) {
 					document.addEventListener('scroll', (e) => {
 						if (e.target && e.target.id === 'items') track(e.target);
 					}, true);
-					new MutationObserver(() => {
+					// loadEarlier remembers where the reader was, so the rows
+					// that land above do not move what is on screen (Safari
+					// has no scroll anchoring).
+					let anchor = null;
+					window.loadEarlier = (btn) => {
+						const m = document.getElementById('items');
+						if (m) anchor = { h: m.scrollHeight, top: m.scrollTop };
+						btn.disabled = true;
+					};
+					onDOM(() => {
 						const m = document.getElementById('items');
 						if (!m) return;
+						if (anchor && !document.querySelector('.load-earlier')) {
+							m.scrollTop = anchor.top + (m.scrollHeight - anchor.h);
+							anchor = null;
+						}
+						if (wantRow && document.getElementById(wantRow)) { jumpToHash(); return; }
 						if (stick) m.scrollTop = m.scrollHeight;
 						else document.body.classList.toggle('scrolled-up', !near(m));
-					}).observe(document.body, { childList: true, subtree: true, characterData: true });
+					});
 				})();
 			</script>
 			// Composer helpers shared by the thread and home pages.
@@ -262,13 +330,61 @@ templ Layout(title string, p Page, parts Parts) {
 					const box = document.querySelector('form.rename input');
 					if (box) { box.focus(); box.select(); }
 				});
+				// Prompt history: ArrowUp in an empty composer brings back the
+				// last sent prompt, again for the one before; ArrowDown walks
+				// forward and past the newest restores what was typed. Reads
+				// the prompts on the page (the transcript's user rows).
+				document.addEventListener('keydown', (e) => {
+					const ta = e.target;
+					if (!(ta instanceof HTMLTextAreaElement) || !ta.classList.contains('prompt') || e.isComposing) return;
+					if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+					if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+					const hist = [...document.querySelectorAll('.item.user .bubble')].map((b) => b.textContent);
+					if (!hist.length) return;
+					let i = Number(ta.dataset.hist ?? hist.length);
+					const atEntry = i < hist.length && ta.value === hist[i];
+					if (e.key === 'ArrowUp') {
+						// Only from an empty box, or while already walking, and
+						// only with the caret on the first line.
+						if (!(ta.value === '' || atEntry) || ta.value.slice(0, ta.selectionStart).includes('\n')) return;
+						if (i === 0) return;
+						if (i === hist.length) ta.dataset.draft = ta.value;
+						i--;
+					} else {
+						if (!atEntry) return;
+						i++;
+					}
+					e.preventDefault();
+					ta.dataset.hist = i;
+					ta.value = i < hist.length ? hist[i] : (ta.dataset.draft || '');
+					if (i === hist.length) delete ta.dataset.hist;
+					ta.dispatchEvent(new Event('input', { bubbles: true }));
+					ta.setSelectionRange(ta.value.length, ta.value.length);
+				});
 				window.autoGrow = (el) => queueMicrotask(() => {
 					el.style.height = 'auto';
 					el.style.height = el.scrollHeight + 'px';
 				});
-				document.addEventListener('input', (e) => {
-					if (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')) autoGrow(e.target);
-				});
+				// optKey walks a list of .opt rows with the arrow keys and
+				// picks the first on Enter in a search box; the palette and
+				// the setting pickers share it. True when it handled the key.
+				window.optKey = (e, opts) => {
+					if (!opts.length) return false;
+					if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+						e.preventDefault();
+						const i = opts.indexOf(document.activeElement);
+						const n = i < 0 ? (e.key === 'ArrowDown' ? 0 : opts.length - 1) : (e.key === 'ArrowDown' ? (i + 1) % opts.length : (i - 1 + opts.length) % opts.length);
+						opts[n].focus();
+						opts[n].scrollIntoView({ block: 'nearest' });
+						return true;
+					}
+					if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
+						e.preventDefault();
+						opts[0].click();
+						return true;
+					}
+					return false;
+				};
 			</script>
 			// Keyboard. Shortcuts are the hidden #hotkeys buttons: the server
 			// lists what each page offers (see views.Hotkeys) and the handler
@@ -358,19 +474,9 @@ templ Layout(title string, p Page, parts Parts) {
 					window.paletteKey = (e, root) => {
 						if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); return true; }
 						const opts = [...root.querySelectorAll('.opt')];
-						if (!opts.length) return false;
-						if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-							e.preventDefault();
-							const i = opts.indexOf(document.activeElement);
-							const n = i < 0 ? (e.key === 'ArrowDown' ? 0 : opts.length - 1) : (e.key === 'ArrowDown' ? (i + 1) % opts.length : (i - 1 + opts.length) % opts.length);
-							opts[n].focus();
-							opts[n].scrollIntoView({ block: 'nearest' });
-						} else if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
-							e.preventDefault();
-							opts[0].click();
-						} else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.target instanceof HTMLInputElement)) {
-							root.querySelector('input')?.focus();
-						}
+						if (optKey(e, opts)) return false;
+						// A printable key on a row goes back to the search box.
+						if (opts.length && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.target instanceof HTMLInputElement)) root.querySelector('input')?.focus();
 						return false;
 					};
 				})();
@@ -387,7 +493,7 @@ templ Layout(title string, p Page, parts Parts) {
 						const want = (unread ? `(${unread}) ` : '') + base;
 						if (t.textContent !== want) t.textContent = want;
 					};
-					new MutationObserver(apply).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+					onDOM(apply);
 					apply();
 				})();
 			</script>
@@ -435,52 +541,277 @@ templ Layout(title string, p Page, parts Parts) {
 					new MutationObserver(apply).observe(document.body, { attributeFilter: ['data-theme'] });
 				})();
 			</script>
-			// Phone swipes: right opens the thread list (or closes the changes
-			// panel), left closes it (or opens the changes panel). A swipe that
-			// starts on something that scrolls sideways, or in the terminal, is
-			// left to that element, and one that starts at a screen edge is the
-			// phone's own back/forward gesture, so it is ignored rather than
-			// fought over. Panels are driven through their own buttons so the
-			// Datastar signals stay the single source of truth.
+			// Notifications. Once allowed (Settings > Appearance) a thread
+			// that ends a turn or asks for an approval while this page is
+			// hidden posts a system notification, which is what a phone in a
+			// pocket needs. The signals are what the server already renders:
+			// a row turning unread in the sidebar (any thread, any page) and
+			// the status pill of the thread on screen. Notifications go
+			// through the service worker (static/sw.js), since Android
+			// Chrome has no other way to show one, and they need a secure
+			// context, which the login page explains.
 			<script>
 				(() => {
-					const phone = matchMedia('(max-width: 900px)');
+					const key = 'notify';
+					window.notifyWanted = () => localStorage.getItem(key) === '1' && 'Notification' in window && Notification.permission === 'granted';
+					const reg = () => 'serviceWorker' in navigator ? navigator.serviceWorker.register('/sw.js').catch(() => null) : Promise.resolve(null);
+					if (window.notifyWanted()) reg();
+					// notifyEnable is the settings button: asks for permission
+					// on this device and turns the watcher on; returns the state
+					// word the button shows.
+					window.notifyEnable = async () => {
+						if (!('Notification' in window) || !('serviceWorker' in navigator)) return 'unsupported';
+						if (!window.isSecureContext) return 'insecure';
+						const perm = await Notification.requestPermission();
+						if (perm !== 'granted') return perm;
+						const r = await reg();
+						if (!r) return 'no-worker';
+						localStorage.setItem(key, '1');
+						return 'on';
+					};
+					window.notifyDisable = () => { localStorage.removeItem(key); return 'off'; };
+					window.notifyWord = (st) => ({
+						on: 'on for this device (turn off)',
+						off: 'turn on for this device',
+						denied: 'blocked in the browser settings',
+						insecure: 'needs https (install the certificate)',
+						unsupported: 'not supported by this browser',
+						'no-worker': 'the browser refused the service worker (certificate not trusted?)',
+					})[st] || st;
+					window.notifyState = () => {
+						if (!('Notification' in window) || !('serviceWorker' in navigator)) return 'unsupported';
+						if (!window.isSecureContext) return 'insecure';
+						if (Notification.permission === 'denied') return 'denied';
+						return window.notifyWanted() ? 'on' : 'off';
+					};
+					const post = async (title, body, url, tag) => {
+						if (!window.notifyWanted() || !document.hidden) return;
+						const r = await navigator.serviceWorker.getRegistration('/');
+						if (!r) return;
+						r.showNotification(title, { body, tag, data: { url }, icon: '/static/icon-maskable.svg' }).catch(() => {});
+					};
+					// Sidebar: a row that turns unread since the last look.
+					let unread = null;
+					const rows = () => new Map([...document.querySelectorAll('#sidebar .thread-row.unread')].map((r) => [r.dataset.id, r]));
+					// Status pill of the thread on screen.
+					let status = null;
+					const pill = () => document.querySelector('#mainhead .status-pill')?.className.match(/\bst-(\w+)/)?.[1] || null;
+					const watch = () => {
+						const now = rows();
+						if (unread) {
+							for (const [id, r] of now) {
+								if (unread.has(id)) continue;
+								const title = r.querySelector('.thread-text > .ellipsis')?.textContent.trim() || 'thread';
+								post(title, 'finished', '/threads/' + id, 'thread-' + id);
+							}
+						}
+						unread = now;
+						const st = pill();
+						if (status && st && st !== status) {
+							const title = document.querySelector('#mainhead .crumb-title')?.textContent.trim() || 'thread';
+							if (st === 'awaiting_approval') post(title, 'needs approval', location.pathname, 'status-' + location.pathname);
+							else if (status === 'running' && (st === 'idle' || st === 'error')) post(title, st === 'error' ? 'stopped with an error' : 'finished', location.pathname, 'status-' + location.pathname);
+						}
+						if (st) status = st;
+					};
+					onDOM(watch);
+					watch();
+				})();
+			</script>
+			// Hover card for sidebar rows: the pointer on a row's agent mark
+			// shows the row's hidden tip beside the sidebar, fixed so the
+			// list's scrolling and clipping do not cut it. Pointer devices
+			// only; a phone has the thread page for the same facts.
+			<script>
+				(() => {
+					if (!matchMedia('(hover: hover)').matches) return;
+					const tip = document.getElementById('hovertip');
+					let timer;
+					const hide = () => { clearTimeout(timer); tip.hidden = true; };
+					document.addEventListener('mouseover', (e) => {
+						const mark = e.target instanceof Element && e.target.closest('.thread-row .row-mark');
+						if (!mark) return;
+						const src = mark.closest('.thread-row')?.querySelector('.row-tip');
+						if (!src) return;
+						clearTimeout(timer);
+						timer = setTimeout(() => {
+							tip.innerHTML = src.innerHTML;
+							const r = mark.getBoundingClientRect();
+							const side = document.getElementById('sidebar')?.getBoundingClientRect();
+							tip.hidden = false;
+							const w = tip.offsetWidth, h = tip.offsetHeight;
+							let x = (side ? side.right : r.right) + 6;
+							if (x + w > innerWidth - 8) x = Math.max(8, r.left - w - 6);
+							let y = r.top - 6;
+							if (y + h > innerHeight - 8) y = Math.max(8, innerHeight - 8 - h);
+							tip.style.left = x + 'px';
+							tip.style.top = y + 'px';
+						}, 150);
+					});
+					document.addEventListener('mouseout', (e) => {
+						if (e.target instanceof Element && e.target.closest('.thread-row .row-mark')) hide();
+					});
+					document.addEventListener('scroll', hide, true);
+					document.addEventListener('click', hide, true);
+				})();
+			</script>
+			// Phone swipes: the thread list and the changes panel follow the
+			// finger. With nothing open, a swipe right pulls the thread list in
+			// and a swipe left pulls the changes panel in; with one open, the
+			// swipe the other way pushes it out. Letting go past a third of the
+			// panel, or with a flick, finishes the move; anything less springs
+			// back. A swipe that starts in the terminal, or on something that
+			// still has room to scroll that way (a wide code block, the chips
+			// row), is left to that element. A finger that rested before it
+			// moved is selecting text, not swiping, and so is one that moves
+			// while a selection is on screen; both are left alone too. A
+			// start at the screen edge is the phone's own back/forward
+			// gesture, which iOS runs in a home screen app as well and which
+			// no page can cancel, so the edge is ignored everywhere, home
+			// screen app included, and the pull starts just inside it.
+			// The drag only moves the panel; the open state itself is set by
+			// pressing the panel's own button at the end, so the Datastar
+			// signals stay the single source of truth.
+			<script>
+				(() => {
+					const narrow = matchMedia('(max-width: 900px)');
+					const mid = matchMedia('(max-width: 1100px)');
 					const edge = 48;
-					let start = null;
-					const scrollsX = (el) => {
+					const lock = 10;
+					// A swipe moves within this many ms of touching down; a long
+					// press for text selection holds still for longer. A thumb
+					// that lands and settles first takes a good part of that.
+					const hold = 400;
+					let touch = null;
+					let drag = null;
+					const leavesTo = (el, dir) => {
 						for (; el && el !== document.body; el = el.parentElement) {
 							if (el.id === 'termpanel') return true;
 							const o = getComputedStyle(el).overflowX;
-							if ((o === 'auto' || o === 'scroll') && el.scrollWidth > el.clientWidth + 1) return true;
+							if (o !== 'auto' && o !== 'scroll') continue;
+							if (dir > 0 ? el.scrollLeft > 0 : el.scrollLeft + el.clientWidth < el.scrollWidth - 1) return true;
 						}
 						return false;
 					};
+					// pick names the panel a move of dx would drag, or nothing.
+					const pick = (dx) => {
+						const side = document.getElementById('sidebar');
+						const git = document.getElementById('gitpanel');
+						const navOpen = narrow.matches && side?.classList.contains('open');
+						const gitOpen = mid.matches && git?.classList.contains('open');
+						if (navOpen) return dx < 0 ? { panel: side, sign: -1, open: true, toggle: '.backdrop' } : null;
+						if (gitOpen) return dx > 0 ? { panel: git, sign: 1, open: true, toggle: '.backdrop' } : null;
+						if (dx > 0 && narrow.matches && side && document.querySelector('.navtoggle')) return { panel: side, sign: -1, open: false, toggle: '.navtoggle' };
+						if (dx < 0 && mid.matches && git && document.querySelector('.gittoggle')) return { panel: git, sign: 1, open: false, toggle: '.gittoggle' };
+						return null;
+					};
+					// The backdrop's display is owned by data-show, which puts back
+					// what it wants the moment anything else touches the style, so
+					// the drag dims through a scrim of its own and hides the real
+					// backdrop underneath while it lasts.
+					const scrim = document.createElement('div');
+					scrim.className = 'swipe-scrim';
+					// Moves are applied once per frame, not once per touch event.
+					const place = (d, x) => {
+						d.at1 = Date.now();
+						d.x1 = x;
+						if (d.raf) return;
+						d.raf = requestAnimationFrame(() => {
+							d.raf = 0;
+							d.panel.style.transform = d.x1 ? `translateX(${d.x1}px)` : 'none';
+							d.dim = 1 - Math.abs(d.x1) / d.w;
+							scrim.style.opacity = String(d.dim);
+						});
+					};
 					document.addEventListener('touchstart', (e) => {
-						start = null;
-						if (!phone.matches || e.touches.length !== 1 || scrollsX(e.target)) return;
+						touch = null;
+						if (e.touches.length !== 1) return;
+						// A drag still live at a fresh touch lost its end; drop it.
+						if (drag) release(true);
+						if (!narrow.matches && !mid.matches) return;
+						if (document.querySelector('#palette:not([style*="none"]), #help:not([style*="none"])')) return;
 						const t = e.touches[0];
 						if (t.clientX < edge || t.clientX > innerWidth - edge) return;
-						start = { x: t.clientX, y: t.clientY, lastX: t.clientX, lastY: t.clientY, at: Date.now() };
+						touch = { x: t.clientX, y: t.clientY, target: e.target, at: Date.now() };
 					}, { passive: true });
-					// touchend reports a stale point once the browser has turned the
-					// gesture into a scroll, so the last move is tracked by hand.
 					document.addEventListener('touchmove', (e) => {
-						if (start) { start.lastX = e.touches[0].clientX; start.lastY = e.touches[0].clientY; }
-					}, { passive: true });
-					document.addEventListener('touchend', () => {
-						const s = start;
-						start = null;
-						if (!s || Date.now() - s.at > 600) return;
-						const dx = s.lastX - s.x;
-						const dy = s.lastY - s.y;
-						if (Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
-						const press = (sel) => document.querySelector(sel)?.click();
-						const nav = document.getElementById('sidebar')?.classList.contains('open');
-						const git = document.getElementById('gitpanel')?.classList.contains('open');
-						if (dx > 0) {
-							if (git) press('.backdrop'); else if (!nav) press('.navtoggle');
-						} else if (nav) press('.backdrop'); else if (!git) press('.gittoggle');
-					}, { passive: true });
+						const t = e.touches[0];
+						if (drag) {
+							e.preventDefault();
+							const x = Math.max(-drag.w, Math.min(drag.w, drag.from + (t.clientX - drag.x)));
+							drag.x0 = x;
+							place(drag, drag.sign < 0 ? Math.min(0, x) : Math.max(0, x));
+							return;
+						}
+						if (!touch) return;
+						const dx = t.clientX - touch.x;
+						const dy = t.clientY - touch.y;
+						if (Math.abs(dx) < lock && Math.abs(dy) < lock) return;
+						if (Date.now() - touch.at > hold || !(document.getSelection()?.isCollapsed ?? true)) { touch = null; return; }
+						const horizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
+						const d = horizontal && !leavesTo(touch.target, dx) ? pick(dx) : null;
+						const touch0 = touch.target;
+						touch = null;
+						if (!d) return;
+						d.w = d.panel.offsetWidth;
+						d.from = d.open ? 0 : d.sign * d.w;
+						d.x = t.clientX;
+						d.at = Date.now();
+						// The backdrop only shows on a phone; a tablet's changes
+						// drawer has none to fade.
+						d.backdrop = narrow.matches ? document.querySelector('.backdrop') : null;
+						d.dim = d.open ? 1 : 0;
+						if (d.backdrop) {
+							d.backdrop.style.transition = 'none';
+							d.backdrop.style.opacity = '0';
+							scrim.style.opacity = String(d.dim);
+							d.backdrop.parentNode.insertBefore(scrim, d.backdrop.nextSibling);
+						}
+						d.panel.style.transition = 'none';
+						drag = d;
+						e.preventDefault();
+						// Touch events keep going to the element the finger landed
+						// on, so a stream update that replaces it mid-swipe would
+						// take the end of the gesture with it. Finish from the last
+						// known spot when that happens.
+						d.target = touch0;
+						const watch = () => {
+							if (drag !== d) return;
+							if (document.contains(d.target)) requestAnimationFrame(watch); else release(false);
+						};
+						requestAnimationFrame(watch);
+					}, { passive: false });
+					const release = (cancel) => {
+						const d = drag;
+						drag = null;
+						if (!d) return;
+						const moved = (d.x0 ?? d.from) - d.from;
+						const quick = Date.now() - d.at < 300 && Math.abs(moved) > 30;
+						const toward = d.open ? Math.sign(moved) === d.sign : Math.sign(moved) === -d.sign;
+						const crossed = !cancel && toward && (quick || Math.abs(moved) > d.w / 3);
+						if (d.raf) { cancelAnimationFrame(d.raf); d.raf = 0; }
+						// The panel slides on from where the finger left it, at the
+						// pace it was going: the transition comes back first, sized
+						// to the distance left, then the class flips.
+						const x = d.x1 ?? d.from;
+						const left = crossed ? Math.abs(x - (d.open ? d.sign * d.w : 0)) : Math.abs(x - d.from);
+						const ms = Math.round(Math.max(60, Math.min(220, 220 * left / d.w)));
+						d.panel.style.transition = `transform ${ms}ms ease-out`;
+						setTimeout(() => { if (drag?.panel !== d.panel) d.panel.style.transition = ''; }, ms + 50);
+						if (d.backdrop) d.backdrop.style.opacity = String(d.dim);
+						scrim.remove();
+						void d.panel.offsetWidth;
+						if (crossed) document.querySelector(d.toggle)?.click();
+						d.panel.style.transform = '';
+						if (!d.backdrop) return;
+						// The real backdrop takes over at the scrim's level and
+						// fades the rest of the way with the panel.
+						void d.backdrop.offsetWidth;
+						d.backdrop.style.transition = '';
+						d.backdrop.style.opacity = '';
+					};
+					document.addEventListener('touchend', () => { touch = null; release(false); }, { passive: true });
+					document.addEventListener('touchcancel', () => { touch = null; release(true); }, { passive: true });
 				})();
 			</script>
 			// Setting pickers (views.Chips). A pick is a chip button plus a
@@ -500,6 +831,10 @@ templ Layout(title string, p Page, parts Parts) {
 					if (!opt) return value || '';
 					return opt.dataset.short || opt.querySelector('.opt-name')?.textContent.trim() || value;
 				};
+				// pickOf finds the picker of a kind for an agent in the form
+				// around el, for the rows in the model sheet that show the
+				// effort and mode chips' labels while those chips are hidden.
+				window.pickOf = (el, kind, agent) => [...el.closest('form').querySelectorAll('.pick-' + kind)].find((p) => p.dataset.agent === agent) || el;
 				window.pickFocus = (el) => setTimeout(() => {
 					// After a rail switch the open menu is another agent's, so
 					// look for the one that is actually on screen.
@@ -516,19 +851,12 @@ templ Layout(title string, p Page, parts Parts) {
 						root.querySelector('.chip')?.focus();
 						return true;
 					}
-					const opts = [...menu.querySelectorAll('.opt')].filter((o) => getComputedStyle(o).display !== 'none');
-					if (!opts.length) return false;
-					if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+					// Enter in an empty search box closes the menu instead.
+					if (e.key === 'Enter' && e.target instanceof HTMLInputElement && !e.target.value.trim()) {
 						e.preventDefault();
-						const i = opts.indexOf(document.activeElement);
-						const n = e.key === 'ArrowDown' ? (i + 1) % opts.length : (i - 1 + opts.length) % opts.length;
-						opts[n].focus();
-						opts[n].scrollIntoView({ block: 'nearest' });
-					} else if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
-						e.preventDefault();
-						if (e.target.value.trim()) opts[0].click();
-						else return true;
+						return true;
 					}
+					optKey(e, [...menu.querySelectorAll('.opt')].filter((o) => getComputedStyle(o).display !== 'none'));
 					return false;
 				};
 			</script>
@@ -590,12 +918,12 @@ templ Layout(title string, p Page, parts Parts) {
 					});
 					// A morphed composer comes back with an empty strip while
 					// the input still holds files; refill it.
-					new MutationObserver(() => {
+					onDOM(() => {
 						for (const input of document.querySelectorAll('form.composer input[type=file]')) {
 							const box = input.closest('form.composer').querySelector('.attach-thumbs');
 							if (box && !box.childElementCount && input.files.length) renderStrip(input);
 						}
-					}).observe(document.body, { childList: true, subtree: true });
+					});
 					document.addEventListener('dragover', (e) => {
 						const c = e.target instanceof Element && e.target.closest('form.composer');
 						if (c && e.dataTransfer && e.dataTransfer.types.includes('Files')) {
@@ -643,6 +971,47 @@ templ Layout(title string, p Page, parts Parts) {
 				})();
 			</script>
 			if p.View == "thread" {
+				// Side panel width: the panel's left edge drags it wider or
+				// narrower, the width is kept in localStorage and set as the
+				// --gitpanel-w variable on the body, which beats the unfold
+				// button's class; that button clears the dragged width.
+				<script>
+					(() => {
+						const key = 'panel-w';
+						const apply = (w) => document.body.style.setProperty('--gitpanel-w', w + 'px');
+						window.panelWidthReset = () => { localStorage.removeItem(key); document.body.style.removeProperty('--gitpanel-w'); };
+						const saved = Number(localStorage.getItem(key));
+						if (saved > 0) apply(saved);
+						document.addEventListener('pointerdown', (e) => {
+							const drag = e.target instanceof Element && e.target.closest('.panel-drag');
+							if (!drag) return;
+							e.preventDefault();
+							const panel = document.getElementById('gitpanel');
+							const startX = e.clientX;
+							const startW = panel.getBoundingClientRect().width;
+							let w = startW;
+							document.body.classList.add('panel-dragging');
+							drag.setPointerCapture(e.pointerId);
+							const move = (ev) => {
+								w = Math.round(Math.min(Math.max(startW + (startX - ev.clientX), 280), innerWidth * 0.8));
+								apply(w);
+							};
+							const up = () => {
+								drag.removeEventListener('pointermove', move);
+								drag.removeEventListener('pointerup', up);
+								drag.removeEventListener('pointercancel', up);
+								document.body.classList.remove('panel-dragging');
+								localStorage.setItem(key, String(w));
+							};
+							drag.addEventListener('pointermove', move);
+							drag.addEventListener('pointerup', up);
+							drag.addEventListener('pointercancel', up);
+						});
+						document.addEventListener('dblclick', (e) => {
+							if (e.target instanceof Element && e.target.closest('.panel-drag')) panelWidthReset();
+						});
+					})();
+				</script>
 				// File tree (views.FileExplorer): the open folders are kept in
 				// sessionStorage per thread, so a morphed or reloaded tree
 				// opens them again; their placeholders then load the children.
@@ -759,17 +1128,22 @@ templ Layout(title string, p Page, parts Parts) {
 							ta.addEventListener('keydown', keys(ta));
 							ed.closest('form').addEventListener('submit', () => { initial = ta.value; setTimeout(refresh); });
 							// Datastar sets the value without an input event; watch for it.
+							// A morph of the panel (the stream reconnecting, the same
+							// file opened again) brings the server's empty layers back
+							// under a textarea that kept its text, so an empty layer
+							// under text is repainted as well.
 							let last = ta.value;
 							const tick = () => {
 								if (!ed.isConnected) return;
-								if (ta.value !== last) { last = ta.value; refresh(); }
+								const bare = ta.value !== '' && !ed.querySelector('.editor-hl code').firstChild;
+								if (ta.value !== last || bare) { last = ta.value; refresh(); }
 								requestAnimationFrame(tick);
 							};
 							requestAnimationFrame(tick);
 							refresh();
 						};
 						const scan = () => document.querySelectorAll('.editor').forEach(setup);
-						new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
+						onDOM(scan);
 						scan();
 						window.addEventListener('beforeunload', (e) => {
 							if (document.querySelector('form.git-editor.dirty')) e.preventDefault();

@@ -85,7 +85,7 @@ func TestSendPromptQueuesAndDispatchesInOrder(t *testing.T) {
 	sess := newQueueSession()
 	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer a.Shutdown()
-	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestCompactContextRunsAsATurn(t *testing.T) {
 	sess := newQueueSession()
 	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer a.Shutdown()
-	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestSendPromptUnarchives(t *testing.T) {
 	sess := newQueueSession()
 	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer a.Shutdown()
-	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestSessionRuleSurvivesRestartAndRevoke(t *testing.T) {
 	}
 	sess := newQueueSession()
 	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,10 @@ func TestSessionRuleSurvivesRestartAndRevoke(t *testing.T) {
 	}
 	receivePrompt(t, sess.sent)
 	sess.events <- agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{ID: "ap2", ToolID: "t2", ToolName: "Bash", Input: json.RawMessage(`{"command":"go vet"}`)}}
-	waitFor(t, func() bool { ap, err := st.Approval(ctx, threadID, "ap2"); return err == nil && ap.Decision == domain.DecisionAllowSession })
+	waitFor(t, func() bool {
+		ap, err := st.Approval(ctx, threadID, "ap2")
+		return err == nil && ap.Decision == domain.DecisionAllowSession
+	})
 	if th, _ := st.Thread(ctx, threadID); th.Status != domain.StatusRunning {
 		t.Fatalf("auto-allowed request changed status to %q", th.Status)
 	}
@@ -413,7 +416,7 @@ func newRestartApp(t *testing.T, ag *restartAgent) (*App, *store.Store, string) 
 	}
 	a := New(st, bus.New(64), map[string]agent.Agent{"restart-test": ag}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(a.Shutdown)
-	threadID, err := a.CreateThread(ctx, "p1", "restart-test", "")
+	threadID, err := a.CreateThread(ctx, "p1", "restart-test", "", ThreadStart{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,5 +528,192 @@ func waitStatus(t *testing.T, st *store.Store, threadID, want string) {
 			t.Fatalf("status = %q, want %q (%v)", thread.Status, want, err)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestCreatedPR(t *testing.T) {
+	made := store.Item{Kind: domain.KindTool, Status: domain.ItemDone, ToolName: "Bash",
+		Meta:   json.RawMessage(`{"input":{"command":"gh pr create --fill"}}`),
+		Output: "Creating pull request for fix into main in o/r\n\nhttps://github.com/o/r/pull/8\n"}
+	repo, n, url, ok := createdPR(made)
+	if !ok || repo != "o/r" || n != 8 || url != "https://github.com/o/r/pull/8" {
+		t.Fatalf("got %q %d %q %v", repo, n, url, ok)
+	}
+	viewed := made
+	viewed.Meta = json.RawMessage(`{"input":{"command":"gh pr view 8"}}`)
+	if _, _, _, ok := createdPR(viewed); ok {
+		t.Error("reading a PR must not link it")
+	}
+	failed := made
+	failed.Status = domain.ItemFailed
+	if _, _, _, ok := createdPR(failed); ok {
+		t.Error("a failed create must not link")
+	}
+}
+
+// freshAgent hands out a new queueSession per Start and records the
+// config each one was started with.
+type freshAgent struct {
+	mu       sync.Mutex
+	sessions []*queueSession
+	configs  []agent.Config
+}
+
+func (a *freshAgent) Name() string { return "fresh-test" }
+func (a *freshAgent) Start(_ context.Context, cfg agent.Config) (agent.Session, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := newQueueSession()
+	a.sessions = append(a.sessions, s)
+	a.configs = append(a.configs, cfg)
+	return s, nil
+}
+
+func (a *freshAgent) started() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.sessions)
+}
+
+func TestReapIdleClosesSessionAndNextPromptResumes(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "reap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	ag := &freshAgent{}
+	a := New(st, bus.New(64), map[string]agent.Agent{"fresh-test": ag}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	threadID, err := a.CreateThread(ctx, "p1", "fresh-test", "", ThreadStart{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendPrompt(ctx, threadID, "first"); err != nil {
+		t.Fatal(err)
+	}
+	sess := ag.sessions[0]
+	if got := receivePrompt(t, sess.sent); got != "first" {
+		t.Fatalf("first send = %q", got)
+	}
+
+	// A running turn is never reaped, however old the sweep thinks it is.
+	a.reapIdle(time.Now().Add(24 * time.Hour))
+	a.mu.Lock()
+	kept := a.sessions[threadID] != nil
+	a.mu.Unlock()
+	if !kept {
+		t.Fatal("running session was reaped")
+	}
+
+	sess.events <- agent.Event{Kind: agent.KindSessionInfo, SessionInfo: &agent.SessionInfo{ExternalID: "ext-1"}}
+	sess.events <- agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{TurnID: "turn-1", Status: "done"}}
+	waitStatus(t, st, threadID, domain.StatusIdle)
+
+	// Idle but not for long enough.
+	a.reapIdle(time.Now().Add(a.idleTimeout / 2))
+	a.mu.Lock()
+	kept = a.sessions[threadID] != nil
+	a.mu.Unlock()
+	if !kept {
+		t.Fatal("session reaped before idleTimeout")
+	}
+
+	a.reapIdle(time.Now().Add(a.idleTimeout))
+	a.mu.Lock()
+	kept = a.sessions[threadID] != nil
+	a.mu.Unlock()
+	if kept {
+		t.Fatal("idle session not reaped")
+	}
+	select {
+	case _, ok := <-sess.events:
+		if ok {
+			t.Fatal("unexpected event on reaped session")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reaped session was not closed")
+	}
+	waitStatus(t, st, threadID, domain.StatusIdle)
+
+	if err := a.SendPrompt(ctx, threadID, "second"); err != nil {
+		t.Fatal(err)
+	}
+	if ag.started() != 2 {
+		t.Fatalf("sessions started = %d, want 2", ag.started())
+	}
+	if got := ag.configs[1].ResumeID; got != "ext-1" {
+		t.Fatalf("second session ResumeID = %q, want ext-1", got)
+	}
+	if got := receivePrompt(t, ag.sessions[1].sent); got != "second" {
+		t.Fatalf("second send = %q", got)
+	}
+}
+
+func TestSettleIdleArchivesOldThreads(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "settle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: newQueueSession()}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	mk := func() string {
+		id, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	idle, pinned, running := mk(), mk(), mk()
+	if err := a.PinThread(ctx, pinned, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, running, domain.ThreadStatusChanged{Status: domain.StatusRunning}); err != nil {
+		t.Fatal(err)
+	}
+	archived := func(id string) bool {
+		th, err := st.Thread(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return th.Archived
+	}
+
+	// Threads are fresh, so a sweep at the default of three days settles
+	// nothing, and neither does a later sweep when the setting is off.
+	a.settleIdle(ctx, time.Now())
+	if archived(idle) {
+		t.Fatal("a fresh thread settled")
+	}
+	st.SetSetting(ctx, "settle_idle_days", "0")
+	a.settleIdle(ctx, time.Now().Add(30*24*time.Hour))
+	if archived(idle) {
+		t.Fatal("settled with the sweep turned off")
+	}
+
+	// Four days on with a three-day limit: the idle thread settles, the
+	// pinned and the running one stay.
+	st.SetSetting(ctx, "settle_idle_days", "3")
+	a.settleIdle(ctx, time.Now().Add(4*24*time.Hour))
+	if !archived(idle) {
+		t.Fatal("idle thread did not settle")
+	}
+	if archived(pinned) || archived(running) {
+		t.Fatalf("pinned=%v running=%v settled", archived(pinned), archived(running))
+	}
+	// A reply brings it back, and the activity resets the clock.
+	if err := a.SendPrompt(ctx, idle, "still here"); err != nil {
+		t.Fatal(err)
+	}
+	if archived(idle) {
+		t.Fatal("still archived after a prompt")
 	}
 }

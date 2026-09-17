@@ -12,8 +12,15 @@ func lucideSVG(name, class string) string {
 	}))
 }
 
+// Icon draws one lucide icon: a <use> of the sprite (see sprite.go) for
+// a listed name, the inline SVG otherwise. The presentation attributes
+// sit on the outer element, where the symbol's paths inherit them.
 templ Icon(name string, class string) {
-	@templ.Raw(lucideSVG(name, class))
+	if spriteSet[name] {
+		<svg class={ "i", class } width="16" height="16" viewBox="0 0 24 24"><use href={ spriteRef(name) }></use></svg>
+	} else {
+		@templ.Raw(lucideSVG(name, class))
+	}
 }
 
 templ StatusIcon(status string) {

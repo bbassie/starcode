@@ -50,7 +50,8 @@ templ Chips(d SettingsData, onChange string, agentLocked bool) {
 // rail switches agents by making one of them the visible one.
 func pickAttrs(d SettingsData, name, kind string) templ.Attributes {
 	return templ.Attributes{
-		"class":                  "pick",
+		"class":                  "pick pick-" + kind,
+		"data-agent":             name,
 		"data-show":              "$agent == " + jsq(name),
 		"data-preserve-attr":     "style",
 		"style":                  hiddenUnless(name == d.Agent),
@@ -84,7 +85,10 @@ func JSQ(s string) string { return jsq(s) }
 // ModelPick is the model chip and its menu: a search box, the agent rail
 // (when there is a choice to make) and the catalog of the agent shown,
 // with the default first, the groups after, and a row that takes the
-// typed text as a model id for anything outside the catalog.
+// typed text as a model id for anything outside the catalog. On a phone
+// the effort and mode chips leave the composer row (CSS hides them) and
+// two rows at the foot of this sheet open their menus instead, so the
+// row under the prompt holds one chip, as T3 Code does it.
 templ ModelPick(d SettingsData, name string, c agent.Capabilities, capsErr error, onChange string, agentLocked bool) {
 	{{ look := d.Looks[name] }}
 	<div { pickAttrs(d, name, "model")... }>
@@ -96,7 +100,7 @@ templ ModelPick(d SettingsData, name string, c agent.Capabilities, capsErr error
 		<div class="pick-menu pick-models" data-show="$pick == 'model'" data-preserve-attr="style" style="display: none">
 			<label class="pick-search">
 				@Icon("search", "ui-icon")
-				<input type="text" placeholder="Search models…" data-bind:pickq autocomplete="off" spellcheck="false"/>
+				<input type="text" placeholder="Search models…" data-bind:pickq autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" enterkeyhint="done"/>
 			</label>
 			<div class="pick-body">
 				if !agentLocked && len(d.Agents) > 1 {
@@ -138,6 +142,22 @@ templ ModelPick(d SettingsData, name string, c agent.Capabilities, capsErr error
 					</button>
 				</div>
 			</div>
+			if _, ok := d.Caps[name]; ok {
+				<div class="pick-more" data-show="$pickq == ''" data-preserve-attr="style">
+					<button type="button" class="opt" data-on:click="$pick = 'effort'">
+						@Icon("brain", "ui-icon opt-icon")
+						<span class="opt-text"><span class="opt-name"><span>Reasoning effort</span></span></span>
+						<span class="opt-desc" data-text="pickLabel(pickOf(el, 'effort', $agent), $effort)">{ effortShort(d.Effort) }</span>
+						@Icon("chevron-right", "ui-icon opt-icon")
+					</button>
+					<button type="button" class="opt" data-on:click="$pick = 'mode'">
+						@Icon("shield-check", "ui-icon opt-icon")
+						<span class="opt-text"><span class="opt-name"><span>Permission mode</span></span></span>
+						<span class="opt-desc" data-text="pickLabel(pickOf(el, 'mode', $agent), $mode)">{ modeShort(d.Mode) }</span>
+						@Icon("chevron-right", "ui-icon opt-icon")
+					</button>
+				</div>
+			}
 		</div>
 	</div>
 }
@@ -473,6 +493,16 @@ func signalsJSON(agentName, model, effort, mode string, extra string) string {
 type SettingsPageData struct {
 	Theme  string
 	Themes []string
+	// PairURL is a link that signs a phone in (the address with the
+	// token in the query) and PairQR the same as a PNG data URL; both
+	// empty when the instance has no token.
+	PairURL string
+	PairQR  string
+	// Sidebar is this browser's list order ("inbox" or "project");
+	// SettleMerged and SettleDays are the instance's settle settings.
+	Sidebar      string
+	SettleMerged bool
+	SettleDays   int
 }
 
 // ThemeName is the display name of a theme id.
@@ -493,11 +523,90 @@ func themeName(theme string) string {
 	}
 }
 
+// SettingsPage is General: how threads are listed and settled, this
+// device's notifications, and the phone pairing link. The theme has a
+// page of its own (AppearancePage), the way T3 Code splits them.
 templ SettingsPage(d SettingsPageData) {
 	<main id="main" class="settings-page">
 		<header id="mainhead" class="mainhead">
 			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
-			<nav class="crumbs"><span>Settings</span></nav>
+			<nav class="crumbs"><span>Settings</span><span class="dim">/</span><span class="dim">General</span></nav>
+		</header>
+		<div class="settings-scroll">
+			<div class="settings-shell">
+				@SettingsNav("general")
+				<div class="settings-content">
+					<section id="threads" class="settings-section" data-signals={ fmt.Sprintf("{sidebar: %q, settleMerged: %t, settleDays: %d}", d.Sidebar, d.SettleMerged, d.SettleDays) }>
+						<header>
+							<h1>Threads</h1>
+							<p class="dim">How the sidebar lists threads and when they settle.</p>
+						</header>
+						<div class="settings-card">
+							<div class="setting-row">
+								<div>
+									<label for="sidebar-select">Sidebar</label>
+									<p class="dim">Inbox is one list with the newest activity on top. By project groups threads under their project. Saved for this browser.</p>
+								</div>
+								<select id="sidebar-select" class="in" data-bind:sidebar data-on:change="@post('/api/sidebar')">
+									<option value="inbox" selected?={ d.Sidebar != "project" }>Inbox</option>
+									<option value="project" selected?={ d.Sidebar == "project" }>By project</option>
+								</select>
+							</div>
+							<div class="setting-row">
+								<div>
+									<label for="settle-merged">Settle merged threads</label>
+									<p class="dim">A thread settles when its pull request merges.</p>
+								</div>
+								<input id="settle-merged" type="checkbox" data-bind:settle-merged data-on:change="@post('/api/settle')"/>
+							</div>
+							<div class="setting-row">
+								<div>
+									<label for="settle-days">Settle inactive threads after</label>
+									<p class="dim">Days without activity before a thread settles on its own; 0 keeps them. Any new activity brings a thread back.</p>
+								</div>
+								<span class="num-unit"><input id="settle-days" class="in num" type="number" min="0" max="365" step="1" inputmode="numeric" data-bind:settle-days data-on:change__debounce.500ms="@post('/api/settle')"/> <span class="dim">days</span></span>
+							</div>
+						</div>
+					</section>
+					<section id="device" class="settings-section">
+						<header>
+							<h1>This device</h1>
+							<p class="dim">Notifications on this browser, and signing a phone in.</p>
+						</header>
+						<div class="settings-card">
+							<div class="setting-row">
+								<div>
+									<label for="notify-btn">Notifications</label>
+									<p class="dim">A turn that ends or asks for an approval while starcode is out of sight posts a notification on this device. Needs the certificate installed (see the login page) or another secure context.</p>
+								</div>
+								// The state word comes from the layout's notify helpers;
+								// the button asks for permission, then toggles.
+								<button id="notify-btn" class="btn" type="button" data-init="el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)" data-on:click="(el.dataset.state === 'on' ? Promise.resolve(notifyDisable()) : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })">notifications</button>
+							</div>
+							if d.PairURL != "" {
+								<div class="setting-row pair-row">
+									<div>
+										<label>Pair a phone</label>
+										<p class="dim">Scan this on the phone: the link carries the token, so there is nothing to type. Anyone with the link is signed in, so keep it to yourself.</p>
+										<button class="btn" type="button" data-on:click={ "copyText(" + jsq(d.PairURL) + ", el)" }>@Icon("link", "ui-icon") copy the link</button>
+									</div>
+									<img class="pair-qr" src={ d.PairQR } alt="QR code of the sign-in link" width="180" height="180"/>
+								</div>
+							}
+						</div>
+					</section>
+				</div>
+			</div>
+		</div>
+	</main>
+}
+
+// AppearancePage is the theme, with a preview.
+templ AppearancePage(d SettingsPageData) {
+	<main id="main" class="settings-page">
+		<header id="mainhead" class="mainhead">
+			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
+			<nav class="crumbs"><span>Settings</span><span class="dim">/</span><span class="dim">Appearance</span></nav>
 		</header>
 		<div class="settings-scroll">
 			<div class="settings-shell">
@@ -562,7 +671,8 @@ templ SettingsNav(current string) {
 }
 
 templ settingsLinks(current string) {
-	<a class={ templ.KV("current", current == "appearance") } href="/settings">@Icon("palette", "ui-icon") Appearance</a>
+	<a class={ templ.KV("current", current == "general") } href="/settings">@Icon("settings", "ui-icon") General</a>
+	<a class={ templ.KV("current", current == "appearance") } href="/settings/appearance">@Icon("palette", "ui-icon") Appearance</a>
 	<a class={ templ.KV("current", current == "usage") } href="/settings/usage">@Icon("chart-no-axes-combined", "ui-icon") Usage</a>
 	<a class={ templ.KV("current", current == "providers") } href="/settings/providers">@Icon("plug", "ui-icon") Providers</a>
 	<a class={ templ.KV("current", current == "keys") } href="/settings/keys">@Icon("keyboard", "ui-icon") Keys</a>
@@ -573,8 +683,8 @@ templ settingsLinks(current string) {
 func settingsSection(view string) string {
 	switch view {
 	case "settings":
-		return "appearance"
-	case "usage", "providers", "keys":
+		return "general"
+	case "appearance", "usage", "providers", "keys":
 		return view
 	}
 	return ""

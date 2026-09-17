@@ -50,13 +50,25 @@ type updateRun struct {
 	err      string
 }
 
+// loginRun is one sign-in driven from the page (agent.Login) and, once
+// it ends, how it went. It stays until the next sign-in or a page refresh
+// with force, so the outcome is visible.
+type loginRun struct {
+	login    agent.Login
+	started  time.Time
+	finished time.Time
+	err      string
+}
+
 type providerCache struct {
-	mu       sync.Mutex
-	infos    map[string]providerEntry
-	latest   map[string]string // npm package -> latest version
-	latestAt time.Time
-	updates  int // last computed count of CLIs with a newer release
-	runs     map[string]*updateRun
+	mu        sync.Mutex
+	infos     map[string]providerEntry
+	latest    map[string]string // npm package -> latest version
+	latestAt  time.Time
+	updates   int // last computed count of CLIs with a newer release
+	signedOut int // last computed count of enabled CLIs not signed in
+	runs      map[string]*updateRun
+	logins    map[string]*loginRun
 }
 
 func (c *providerCache) init() {
@@ -64,6 +76,7 @@ func (c *providerCache) init() {
 		c.infos = map[string]providerEntry{}
 		c.latest = map[string]string{}
 		c.runs = map[string]*updateRun{}
+		c.logins = map[string]*loginRun{}
 	}
 }
 
@@ -80,7 +93,10 @@ func (s *Server) providerRows(ctx context.Context, force bool) []views.ProviderR
 		ag, err := s.Providers.Build(in)
 		if err != nil {
 			row.Err = err.Error()
-		} else if pr, ok := ag.(agent.Prober); ok {
+		} else if _, ok := ag.(agent.SignInner); ok {
+			row.CanSignIn = true
+		}
+		if pr, ok := ag.(agent.Prober); ok && err == nil {
 			e := s.providerFor(ctx, in.Name, pr, force)
 			row.Info = e.info
 			if e.err != nil {
@@ -95,17 +111,31 @@ func (s *Server) providerRows(ctx context.Context, force bool) []views.ProviderR
 		if run := s.providers.runs[in.Name]; run != nil {
 			row.Updating, row.UpdateLog, row.UpdateErr, row.UpdatedAt = run.running, run.log, run.err, run.finished
 		}
+		if lr := s.providers.logins[in.Name]; lr != nil {
+			row.SigningIn = lr.finished.IsZero()
+			row.LoginURL, row.LoginErr, row.LoginAt = lr.login.URL(), lr.err, lr.finished
+			if !row.SigningIn && lr.err == "" {
+				row.LoginOK = true
+			}
+		}
 		s.providers.mu.Unlock()
 		rows = append(rows, row)
 	}
-	updates := 0
+	updates, signedOut := 0, 0
 	for _, r := range rows {
-		if r.UpdateAvailable && r.Inst.Enabled {
+		if !r.Inst.Enabled {
+			continue
+		}
+		if r.UpdateAvailable {
 			updates++
+		}
+		if r.Info.LoggedIn != nil && !*r.Info.LoggedIn {
+			signedOut++
 		}
 	}
 	s.providers.mu.Lock()
 	s.providers.updates = updates
+	s.providers.signedOut = signedOut
 	s.providers.mu.Unlock()
 	return rows
 }
@@ -185,6 +215,14 @@ func (s *Server) updateCount() int {
 	return s.providers.updates
 }
 
+// signedOutCount is the cached number of enabled CLIs that report no
+// sign-in, from the last check; like updateCount it never blocks.
+func (s *Server) signedOutCount() int {
+	s.providers.mu.Lock()
+	defer s.providers.mu.Unlock()
+	return s.providers.signedOut
+}
+
 // agentLooks maps instance names to their driver and tag colour, for the
 // marks on thread rows and chips.
 func (s *Server) agentLooks() map[string]views.AgentLook {
@@ -202,11 +240,13 @@ func (s *Server) watchProviders(ctx context.Context) {
 	last := -1
 	check := func() {
 		s.providerRows(ctx, true)
-		if n := s.updateCount(); n != last {
+		if n := s.updateCount() + s.signedOutCount(); n != last {
 			last = n
 			s.App.Bus.Publish(domain.ProvidersChanged{})
 		}
+		s.probeAllLimits(ctx)
 	}
+	go s.watchLimits(ctx)
 	check()
 	for {
 		interval := s.Providers.CheckInterval()
@@ -319,6 +359,81 @@ func updateEnv(extra []string) []string {
 	return append(out, extra...)
 }
 
+// startLogin begins a sign-in for an instance through its CLI. The page
+// shows the link the CLI printed and a box for the code; finishLogin
+// runs when the CLI exits.
+func (s *Server) startLogin(name string) error {
+	in, ok := s.Providers.Get(name)
+	if !ok {
+		return fmt.Errorf("no instance %q", name)
+	}
+	ag, err := s.Providers.Build(in)
+	if err != nil {
+		return err
+	}
+	si, ok := ag.(agent.SignInner)
+	if !ok {
+		return errors.New("this provider signs in from a terminal")
+	}
+	s.providers.mu.Lock()
+	s.providers.init()
+	if lr := s.providers.logins[name]; lr != nil && lr.finished.IsZero() {
+		s.providers.mu.Unlock()
+		return errors.New("a sign-in is already running")
+	}
+	s.providers.mu.Unlock()
+	login, err := si.SignIn(context.Background())
+	if err != nil {
+		return err
+	}
+	lr := &loginRun{login: login, started: time.Now()}
+	s.providers.mu.Lock()
+	s.providers.logins[name] = lr
+	s.providers.mu.Unlock()
+	go s.finishLogin(name, lr)
+	// The URL shows up a moment after the process starts; redraw once
+	// it is there so the page does not have to be refreshed by hand.
+	go func() {
+		for i := 0; i < 100 && login.URL() == ""; i++ {
+			select {
+			case <-login.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+		s.App.Bus.Publish(domain.ProvidersChanged{})
+	}()
+	return nil
+}
+
+// finishLogin waits for the CLI, records the outcome and re-probes the
+// instance so the row says "signed in" without waiting for the interval.
+func (s *Server) finishLogin(name string, lr *loginRun) {
+	<-lr.login.Done()
+	err := lr.login.Err()
+	s.Log.Info("provider sign-in finished", "instance", name, "err", err)
+	s.providers.mu.Lock()
+	lr.finished = time.Now()
+	if err != nil {
+		lr.err = err.Error()
+	}
+	s.providers.mu.Unlock()
+	s.forgetProvider(name)
+	s.providerRows(context.Background(), false)
+	s.App.Bus.Publish(domain.ProvidersChanged{})
+}
+
+// currentLogin is the instance's running sign-in, if any.
+func (s *Server) currentLogin(name string) (agent.Login, bool) {
+	s.providers.mu.Lock()
+	defer s.providers.mu.Unlock()
+	lr := s.providers.logins[name]
+	if lr == nil || !lr.finished.IsZero() {
+		return nil, false
+	}
+	return lr.login, true
+}
+
 // newerVersion reports whether a is a later release than b, comparing
 // dotted numbers left to right ("2.1.263" > "2.1.261"). Anything after a
 // dash (pre-release tags) is ignored.
@@ -363,6 +478,7 @@ func (s *Server) providersData(ctx context.Context, sel, tab string, force bool)
 		d.Tab = "config"
 	}
 	d.Updates = s.updateCount()
+	d.SignedOut = s.signedOutCount()
 	if sel == "new" {
 		d.Adding = true
 		return d
@@ -407,6 +523,7 @@ type providerSignals struct {
 	Color     string `json:"pvColor"`
 	Model     string `json:"pvModel"`
 	Interval  string `json:"pvInterval"`
+	Code      string `json:"pvCode"`
 }
 
 func envLines(text string) []string {
@@ -421,7 +538,7 @@ func envLines(text string) []string {
 
 func (s *Server) providersPage(w http.ResponseWriter, r *http.Request) {
 	sel, tab := providerParams(r)
-	s.page(r.Context(), "providers", views.Page{View: "providers", Theme: s.theme(r), ProviderSel: sel, ProviderTab: tab}).Render(r.Context(), w)
+	s.page(r.Context(), "providers", views.Page{View: "providers", Theme: s.theme(r), Sidebar: s.sidebarMode(r), ProviderSel: sel, ProviderTab: tab}).Render(r.Context(), w)
 }
 
 // refreshProviders re-runs every check now; every open page redraws
@@ -517,6 +634,38 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) {
 	if err := s.startUpdate(r.PathValue("name")); err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	s.ok(w, r)
+}
+
+func (s *Server) loginProvider(w http.ResponseWriter, r *http.Request) {
+	if err := s.startLogin(r.PathValue("name")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
+// loginCode hands the pasted code to the running sign-in; the outcome
+// arrives through the bus when the CLI exits.
+func (s *Server) loginCode(w http.ResponseWriter, r *http.Request) {
+	login, ok := s.currentLogin(r.PathValue("name"))
+	if !ok {
+		s.fail(w, r, errors.New("no sign-in is running; start it again"))
+		return
+	}
+	var sig providerSignals
+	datastar.ReadSignals(r, &sig)
+	if err := login.Submit(sig.Code); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	newSSE(w, r).MarshalAndPatchSignals(map[string]any{"pvCode": ""})
+}
+
+func (s *Server) loginCancel(w http.ResponseWriter, r *http.Request) {
+	if login, ok := s.currentLogin(r.PathValue("name")); ok {
+		login.Cancel()
 	}
 	s.ok(w, r)
 }

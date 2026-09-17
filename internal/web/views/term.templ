@@ -19,5 +19,24 @@ templ TermPanel(threadID string) {
 			<button class="btn icon ghost tiny term-hide" data-on:click="$term = false" title="Hide the terminal panel (shells keep running)" aria-label="Hide terminal">@Icon("chevron-down", "ui-icon")</button>
 		</div>
 		<div class="term-mount"></div>
+		// Keys a touch keyboard lacks (static/term.js sends them; CSS shows
+		// the row for coarse pointers only). Ctrl holds for the next key.
+		<div class="term-keys">
+			<button class="btn tiny" type="button" data-key="esc">Esc</button>
+			<button class="btn tiny" type="button" data-key="tab">Tab</button>
+			<button class="btn tiny" type="button" data-key="ctrl" aria-pressed="false">Ctrl</button>
+			<button class="btn tiny" type="button" data-key="ctrl-c">^C</button>
+			<button class="btn tiny" type="button" data-key="ctrl-d">^D</button>
+			<button class="btn tiny" type="button" data-key="ctrl-z">^Z</button>
+			<button class="btn tiny" type="button" data-key="up" aria-label="Up">@Icon("arrow-up", "ui-icon")</button>
+			<button class="btn tiny" type="button" data-key="down" aria-label="Down">@Icon("arrow-down", "ui-icon")</button>
+			<button class="btn tiny" type="button" data-key="left" aria-label="Left">@Icon("arrow-left", "ui-icon")</button>
+			<button class="btn tiny" type="button" data-key="right" aria-label="Right">@Icon("arrow-right", "ui-icon")</button>
+			<button class="btn tiny" type="button" data-key="home">Home</button>
+			<button class="btn tiny" type="button" data-key="end">End</button>
+			<button class="btn tiny" type="button" data-key="pipe">|</button>
+			<button class="btn tiny" type="button" data-key="tilde">~</button>
+			<button class="btn tiny" type="button" data-key="dash">-</button>
+		</div>
 	</div>
 }

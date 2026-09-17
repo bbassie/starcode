@@ -7,15 +7,38 @@ import (
 	"strings"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/renderer"
 	ghtml "github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/util"
 )
 
 var md = goldmark.New(
 	goldmark.WithExtensions(extension.GFM),
-	goldmark.WithRendererOptions(renderer.WithNodeRenderers(), ghtml.WithHardWraps()),
+	goldmark.WithRendererOptions(
+		// GFM registers its table renderer at 500. goldmark registers from
+		// the highest number down, so the lowest number owns the kind.
+		renderer.WithNodeRenderers(util.Prioritized(tableWrapper{}, 100)),
+		ghtml.WithHardWraps(),
+	),
 )
+
+// tableWrapper puts every table in a div that scrolls sideways, so a wide
+// table scrolls inside the message instead of stretching the page.
+type tableWrapper struct{}
+
+func (tableWrapper) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(east.KindTable, func(w util.BufWriter, _ []byte, _ ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			_, _ = w.WriteString(`<div class="md-table"><table>`)
+		} else {
+			_, _ = w.WriteString("</table></div>\n")
+		}
+		return ast.WalkContinue, nil
+	})
+}
 
 // Markdown renders assistant prose. Raw HTML in the source is dropped by
 // goldmark's default renderer, so model output cannot inject markup.

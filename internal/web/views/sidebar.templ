@@ -2,8 +2,11 @@ package views
 
 import (
 	"fmt"
+	"sort"
+	"unicode"
 	"starcode/internal/domain"
 	"starcode/internal/store"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,15 +19,35 @@ type SidebarData struct {
 	// View is the page the sidebar sits on; the footer marks the settings
 	// section it belongs to.
 	View string
-	// Updates is how many agent CLIs have a newer release; shown as a
-	// badge on the settings link.
-	Updates int
+	// Updates is how many agent CLIs have a newer release and SignedOut
+	// how many are not signed in; their sum is the badge on the
+	// providers link.
+	Updates   int
+	SignedOut int
 	// Looks maps agent instance names to their driver and tag colour
 	// (Settings > Providers) for the mark on thread rows.
 	Looks map[string]AgentLook
 	// Seen is when each thread was last on a screen; a thread with newer
 	// activity is marked unread. Shared by every browser.
 	Seen map[string]time.Time
+	// PRs is the last polled state of every linked pull request, for the
+	// chip on thread rows.
+	PRs map[store.PR]store.PRState
+	// Mode is "inbox" (one list) or "project" (grouped); see Sidebar.
+	Mode string
+}
+
+// prOf is the polled state of t's linked pull request; the zero value
+// with the number filled in when nothing has been polled yet.
+func prOf(t store.Thread, states map[store.PR]store.PRState) store.PRState {
+	ref, ok := t.Linked()
+	if !ok {
+		return store.PRState{}
+	}
+	if st, ok := states[ref]; ok {
+		return st
+	}
+	return store.PRState{PR: ref, URL: t.PRURL}
 }
 
 // unread is whether t has activity since it was last looked at. A
@@ -79,112 +102,118 @@ func searchKey(t store.Thread, p store.Project) string {
 	return strings.ToLower(t.Title + " " + p.Name + " " + t.Agent)
 }
 
+// Sidebar lists the threads. Inbox mode (the default) is one list with
+// what needs a look on top: threads waiting for an approval, then running
+// ones, then pinned, then by last activity; each row names its project.
+// Project mode groups them under their project's head instead. Settled
+// threads sit folded at the bottom either way, ten at a time.
 templ Sidebar(d SidebarData) {
 	{{ byID := map[string]store.Project{} }}
 	for _, p := range d.Projects {
 		{{ byID[p.ID] = p }}
 	}
-	<aside id="sidebar" data-class:open="$nav">
+	// The inline style is the swipe drag position; a refresh mid-swipe must not wipe it.
+	<aside id="sidebar" data-class:open="$nav" data-preserve-attr="style">
 		<div class="side-brand">
 			<a class="brand" href="/" title="Projects overview">@Icon("star", "brand-mark") starcode</a>
 			<span class="spacer"></span>
 			<button class="btn icon ghost" data-on:click="$nav = false" aria-label="Close navigation">@Icon("x", "ui-icon")</button>
 		</div>
 		<div class="side-search">
-			<input class="in" type="search" placeholder="Filter threads" data-bind:q autocomplete="off"/>
+			<input class="in" type="search" placeholder="Filter threads" data-bind:q autocomplete="off" enterkeyhint="search"/>
 			<button class="btn icon ghost" type="button" title="Search threads and messages, run a command (Ctrl+K)" aria-label="Search and commands" data-on:click="runHotkey('mod+k')">@Icon("command", "ui-icon")</button>
-		</div>
-		<div class="side-section">
-			<span>All projects</span>
-			<span class="spacer"></span>
 			<button class="btn icon ghost" data-on:click="$addproj = !$addproj" title="Add project folder" aria-label="Add project folder">@Icon("folder-plus", "ui-icon")</button>
+			if pid := newThreadProject(d); pid != "" {
+				<button class="btn icon ghost" data-on:click={ "@post('/api/projects/" + pid + "/threads')" } title={ "New thread in " + byID[pid].Name } aria-label="New thread">@Icon("square-pen", "ui-icon")</button>
+			}
 		</div>
 		<form class="side-add" data-show="$addproj" data-preserve-attr="style" style="display: none" data-on:submit="evt.preventDefault(); @post('/api/projects'); $addproj = false">
-			<input class="in project-path" type="text" placeholder="~/project or /absolute/path" data-bind:path list="project-paths" spellcheck="false"/>
+			<input class="in project-path" type="text" placeholder="~/project or /absolute/path" data-bind:path list="project-paths" spellcheck="false" autocapitalize="off" autocorrect="off" enterkeyhint="done"/>
 			<button class="btn" type="submit">add</button>
 		</form>
 		<nav class="side-scroll">
-			{{ hasActive := false }}
-			for _, t := range d.Threads {
-				if active(t) {
-					{{ hasActive = true }}
+			if d.Mode == "project" {
+				for _, p := range d.Projects {
+					// Open on a fresh page; a morph keeps whatever the reader set
+					// by clicking, and a filter opens every project so a match is
+					// never hidden. The count is the threads listed under it.
+					<details id={ "proj-" + p.ID } class="project" open data-preserve-attr="open" data-effect="$q != '' && (el.open = true)">
+						<summary class="project-head">
+							@Icon("chevron-right", "ui-icon project-caret")
+							<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>
+							<span class="ellipsis" title={ p.Path }>{ p.Name }</span>
+							<span class="dim tiny-text project-count">{ fmt.Sprintf("%d", countListed(d.Threads, p.ID)) }</span>
+							<span class="spacer"></span>
+							<button class="btn icon ghost tiny" data-on:click={ "evt.preventDefault(); @post('/api/projects/" + p.ID + "/threads')" } title="New thread">@Icon("plus", "ui-icon")</button>
+							<button class="btn icon ghost tiny dim" data-on:click={ "evt.preventDefault(); confirm('Remove project " + p.Name + " from starcode? Files are not touched.') && @post('/api/projects/" + p.ID + "/remove')" } title="Remove project">@Icon("x", "ui-icon")</button>
+						</summary>
+						<ul class="threads">
+							for _, t := range inboxOrder(d.Threads) {
+								if t.ProjectID == p.ID && listed(t) {
+									@ThreadRow(t, p, t.ID == d.Current, false, d.Looks[t.Agent], unread(t, d.Current, d.Seen), prOf(t, d.PRs))
+								}
+							}
+						</ul>
+					</details>
 				}
-			}
-			if hasActive {
-				<div class="side-label">Running</div>
-				<ul class="threads">
-					for _, t := range d.Threads {
-						if active(t) {
-							@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true, d.Looks[t.Agent], unread(t, d.Current, d.Seen))
+			} else {
+				<ul class="threads inbox">
+					for _, t := range inboxOrder(d.Threads) {
+						if listed(t) {
+							@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true, d.Looks[t.Agent], unread(t, d.Current, d.Seen), prOf(t, d.PRs))
 						}
 					}
 				</ul>
 			}
-			for _, p := range d.Projects {
-				// Open on a fresh page; a morph keeps whatever the reader set
-				// by clicking, and a filter opens every project so a match is
-				// never hidden. The count is the threads listed under it.
-				<details class="project" open data-preserve-attr="open" data-effect="$q != '' && (el.open = true)">
-					<summary class="project-head">
-						@Icon("chevron-right", "ui-icon project-caret")
-						<span class="ellipsis" title={ p.Path }>{ p.Name }</span>
-						<span class="dim tiny-text project-count">{ fmt.Sprintf("%d", countListed(d.Threads, p.ID)) }</span>
-						<span class="spacer"></span>
-						<button class="btn icon ghost tiny" data-on:click={ "evt.preventDefault(); @post('/api/projects/" + p.ID + "/threads')" } title="New thread">@Icon("plus", "ui-icon")</button>
-						<button class="btn icon ghost tiny dim" data-on:click={ "evt.preventDefault(); confirm('Remove project " + p.Name + " from starcode? Files are not touched.') && @post('/api/projects/" + p.ID + "/remove')" } title="Remove project">@Icon("x", "ui-icon")</button>
-					</summary>
-					<ul class="threads">
-						for _, t := range d.Threads {
-							if t.ProjectID == p.ID && !active(t) && listed(t) {
-								@ThreadRow(t, p, t.ID == d.Current, false, d.Looks[t.Agent], unread(t, d.Current, d.Seen))
-							}
-						}
-					</ul>
-				</details>
-			}
 			if len(d.Projects) == 0 {
-				<p class="dim pad">No projects yet. Add a folder with the + above.</p>
+				<p class="dim pad">No projects yet. Add a folder with the button above.</p>
 			}
-			{{ archived := 0 }}
-			for _, t := range d.Threads {
-				if t.Archived && !active(t) {
-					{{ archived++ }}
-				}
-			}
-			if archived > 0 {
+			{{ settled := settledThreads(d.Threads) }}
+			if len(settled) > 0 {
 				// Starts open when the reader is on one of these threads and
 				// opens while they filter, so a match is never hidden; a morph
-				// keeps whatever they set by clicking.
-				<details class="project archived" open?={ currentArchived(d) } data-preserve-attr="open" data-effect="$q != '' && (el.open = true)">
+				// keeps whatever they set by clicking. Ten rows show; the
+				// button (or a filter) shows the rest.
+				// Ids keep a morph from matching this against a project group
+				// (or the other way round) and carrying its open state over.
+				<details id="settled" class="project settled" open?={ currentArchived(d) } data-preserve-attr="open" data-effect="$q != '' && (el.open = true)">
 					<summary class="project-head">
-						@Icon("chevron-right", "ui-icon project-caret")
-						<span class="ellipsis">Archived</span>
-						<span class="dim tiny-text project-count">{ fmt.Sprintf("%d", archived) }</span>
+						<span class="ellipsis">Settled</span>
+						<span class="dim tiny-text project-count">{ fmt.Sprintf("%d", len(settled)) }</span>
 						<span class="spacer"></span>
+						@Icon("chevron-down", "ui-icon project-caret")
 					</summary>
-					<ul class="threads">
-						for _, t := range d.Threads {
-							if t.Archived && !active(t) {
-								@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, true, d.Looks[t.Agent], unread(t, d.Current, d.Seen))
-							}
+					<ul class="threads compact">
+						for i, t := range settled {
+							@SettledRow(t, byID[t.ProjectID], t.ID == d.Current, prOf(t, d.PRs), i >= settledShown)
 						}
 					</ul>
+					if len(settled) > settledShown {
+						<button class="btn ghost side-more" type="button" data-show="!$settledAll && $q == ''" data-preserve-attr="style" data-on:click="$settledAll = true">@Icon("plus", "ui-icon") <span>{ fmt.Sprintf("Show %d more", len(settled)-settledShown) }</span></button>
+					}
 				</details>
 			}
 		</nav>
-		// The footer is the settings link plus one icon per section, so
-		// Usage, Providers and Keys are a click away from any page. The
-		// update badge sits on Providers, where updates are installed.
+		// The footer is the pull requests page, then the settings link plus
+		// one icon per section, so Usage, Providers and Keys are a click
+		// away from any page. The update badge sits on Providers, where
+		// updates are installed.
+		<div class="side-foot side-prs-row">
+			<a class={ "side-settings", templ.KV("current", d.View == "prs") } href="/prs" title="Pull requests assigned to you, waiting for your review, or opened by you" data-on:click="$nav = false">
+				@Icon("git-pull-request", "ui-icon")
+				<span>Pull requests</span>
+			</a>
+		</div>
 		<div class="side-foot">
-			<a class={ "side-settings", templ.KV("current", d.View == "settings") } href="/settings" title="Appearance and defaults" data-on:click="$nav = false">
+			<a class={ "side-settings", templ.KV("current", d.View == "settings" || d.View == "appearance") } href="/settings" title="Threads, this device, appearance" data-on:click="$nav = false">
 				@Icon("settings", "ui-icon")
 				<span>Settings</span>
 			</a>
 			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "usage") } href="/settings/usage" title="Usage" aria-label="Usage" data-on:click="$nav = false">@Icon("chart-no-axes-combined", "ui-icon")</a>
-			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "providers") } href="/settings/providers" title={ providersTitle(d.Updates) } aria-label="Providers" data-on:click="$nav = false">
+			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "providers") } href="/settings/providers" title={ providersTitle(d.Updates, d.SignedOut) } aria-label="Providers" data-on:click="$nav = false">
 				@Icon("plug", "ui-icon")
-				if d.Updates > 0 {
-					<span class="badge side-badge">{ fmt.Sprintf("%d", d.Updates) }</span>
+				if d.Updates+d.SignedOut > 0 {
+					<span class="badge side-badge">{ fmt.Sprintf("%d", d.Updates+d.SignedOut) }</span>
 				}
 			</a>
 			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "keys") } href="/settings/keys" title="Keyboard shortcuts" aria-label="Keyboard shortcuts" data-on:click="$nav = false">@Icon("keyboard", "ui-icon")</a>
@@ -192,7 +221,87 @@ templ Sidebar(d SidebarData) {
 	</aside>
 }
 
-templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool, look AgentLook, isUnread bool) {
+// settledShown is how many settled rows show before "Show more".
+const settledShown = 10
+
+// newThreadProject is the project the search row's new-thread button
+// uses: the current thread's, else the first.
+func newThreadProject(d SidebarData) string {
+	for _, t := range d.Threads {
+		if t.ID == d.Current {
+			return t.ProjectID
+		}
+	}
+	if len(d.Projects) > 0 {
+		return d.Projects[0].ID
+	}
+	return ""
+}
+
+// inboxOrder puts what needs a look first: threads waiting for an
+// approval, then running ones, then pinned; the rest keep the store's
+// order (last activity first).
+func inboxOrder(ts []store.Thread) []store.Thread {
+	rank := func(t store.Thread) int {
+		switch {
+		case t.Status == domain.StatusAwaitingApproval:
+			return 0
+		case t.Status == domain.StatusRunning:
+			return 1
+		case t.Pinned:
+			return 2
+		}
+		return 3
+	}
+	out := append([]store.Thread(nil), ts...)
+	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
+	return out
+}
+
+// settledThreads are the archived threads whose turn is over, last
+// activity first.
+func settledThreads(ts []store.Thread) []store.Thread {
+	var out []store.Thread
+	for _, t := range ts {
+		if t.Archived && !active(t) {
+			out = append(out, t)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	return out
+}
+
+// initials is the project's two-letter mark; initialsStyle its colour,
+// a hue from the name so a project keeps its colour everywhere.
+func initials(name string) string {
+	r := []rune(strings.ToUpper(name))
+	var out []rune
+	for _, c := range r {
+		if unicode.IsLetter(c) || unicode.IsDigit(c) {
+			out = append(out, c)
+		}
+		if len(out) == 2 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return "?"
+	}
+	return string(out)
+}
+
+func initialsStyle(name string) string {
+	h := 0
+	for _, c := range name {
+		h = (h*31 + int(c)) % 360
+	}
+	return fmt.Sprintf("--proj-hue: %d", h)
+}
+
+// ThreadRow is one thread in the inbox or under its project: the project
+// mark and name (inbox only), the worktree branch and the agent mark on
+// the first line, the status and title on the second.
+templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool, look AgentLook, isUnread bool, pr store.PRState) {
 	<li
 		class={ "thread-row", "st-" + t.Status, templ.KV("current", current), templ.KV("unread", isUnread) }
 		data-id={ t.ID }
@@ -200,16 +309,187 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 		data-show="$q == '' || el.dataset.k.includes($q.toLowerCase())"
 	>
 		<a href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$nav = false">
-			<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
-			<span class="thread-text">
+			<span class="row-top">
 				if showProject {
-					<span class="dim tiny-text">{ p.Name }</span>
+					<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>
+					<span class="dim tiny-text ellipsis">{ p.Name }</span>
+				}
+				if t.Worktree != "" {
+					<span class="dim tiny-text ellipsis row-branch" title={ t.Worktree }>@Icon("folder-git-2", "ui-icon") <span>{ t.WorktreeBranch }</span></span>
+				}
+				<span class="spacer"></span>
+				<span class="dim tiny-text row-age" data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span>
+			</span>
+			<span class="row-main">
+				<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
+				if t.Pinned {
+					<span class="pin-mark" title="Pinned">@Icon("pin", "ui-icon")</span>
 				}
 				<span class="ellipsis">{ t.Title }</span>
+				if pr.Number > 0 {
+					@PRChip(pr, "")
+				}
+				// The mark ends the title line, as in T3, and opens the
+				// hover card (layout's hovertip script) with the tip below.
+				<span class="agent-mark row-mark" style={ agentMarkStyle(look.Color) }>@Brand(look.Driver, "ui-icon")</span>
 			</span>
-			<span class="dim tiny-text"><span class="agent-mark" style={ agentMarkStyle(look.Color) } title={ t.Agent }>@Brand(look.Driver, "ui-icon")</span> <span data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span></span>
 		</a>
+		// Quick actions take the age's place while the pointer is on the
+		// row (touch screens keep the age; the header's menu has these).
+		<span class="row-actions">
+			if t.Pinned {
+				<button type="button" class="row-act" title="Unpin" aria-label="Unpin" data-on:click={ "@post('/api/threads/" + t.ID + "/unpin')" }>@Icon("pin-off", "ui-icon")</button>
+			} else {
+				<button type="button" class="row-act" title="Pin to the top" aria-label="Pin" data-on:click={ "@post('/api/threads/" + t.ID + "/pin')" }>@Icon("pin", "ui-icon")</button>
+			}
+			if !active(t) {
+				<button type="button" class="row-act" title="Settle: move to the Settled section" data-on:click={ "@post('/api/threads/" + t.ID + "/archive')" }>@Icon("circle-check", "ui-icon") <span>Settle</span></button>
+			}
+		</span>
+		@rowTip(t, p, look)
 	</li>
+}
+
+// rowTip is the hover card's content: title, project, branch, model and
+// agent, and the error when the last turn failed. Hidden in the row; the
+// layout's script shows a copy beside the sidebar.
+templ rowTip(t store.Thread, p store.Project, look AgentLook) {
+	<div class="row-tip" hidden>
+		<div class="row-tip-title">{ t.Title }</div>
+		<div class="row-tip-line"><span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span> <span class="ellipsis">{ p.Name }</span></div>
+		if t.Worktree != "" {
+			<div class="row-tip-line">@Icon("folder-git-2", "ui-icon") <span class="ellipsis">{ t.WorktreeBranch }</span></div>
+		}
+		<div class="row-tip-line"><span class="agent-mark" style={ agentMarkStyle(look.Color) }>@Brand(look.Driver, "ui-icon")</span> <span class="ellipsis">{ modelShown(t) + " · " + agentLabelOf(look, t.Agent) }</span></div>
+		if t.Status == domain.StatusError && t.StatusDetail != "" {
+			<div class="row-tip-line err">@Icon("circle-alert", "ui-icon") <span class="ellipsis">{ t.StatusDetail }</span></div>
+		}
+	</div>
+}
+
+func agentLabelOf(look AgentLook, name string) string {
+	if look.Label != "" {
+		return look.Label
+	}
+	return name
+}
+
+// SettledRow is the one-line row of the Settled section: project mark,
+// title, PR chip and age. Rows past settledShown wait for the button.
+templ SettledRow(t store.Thread, p store.Project, current bool, pr store.PRState, more bool) {
+	<li
+		class={ "thread-row", "compact", templ.KV("current", current) }
+		data-id={ t.ID }
+		data-k={ searchKey(t, p) }
+		if more {
+			data-show="($settledAll || $q != '') && el.dataset.k.includes($q.toLowerCase())"
+			data-preserve-attr="style"
+			style="display: none"
+		} else {
+			data-show="$q == '' || el.dataset.k.includes($q.toLowerCase())"
+		}
+	>
+		<a href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$nav = false" title={ p.Name + ": " + t.Title }>
+			<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>
+			<span class="ellipsis">{ t.Title }</span>
+			if pr.Number > 0 {
+				@PRChip(pr, "")
+			}
+			<span class="dim tiny-text row-age" data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span>
+		</a>
+		<span class="row-actions">
+			<button type="button" class="row-act" title="Unsettle: back into the list" data-on:click={ "@post('/api/threads/" + t.ID + "/unarchive')" }>@Icon("undo-2", "ui-icon") <span>Unsettle</span></button>
+		</span>
+	</li>
+}
+
+// PRChip is the number of a linked pull request coloured by its state:
+// open, draft, merged, closed, open with changes requested (the one that
+// wants the thread back) and open with a re-review requested (waiting on
+// the reviewer instead). Before the first poll the number stands alone.
+// With a label the state is spelled out next to it.
+templ PRChip(pr store.PRState, label string) {
+	<span class={ "pr-chip", prChipClass(pr) } title={ prChipTitle(pr) }>
+		@Icon(prChipIcon(pr), "ui-icon")
+		<span>#{ strconv.Itoa(pr.Number) }</span>
+		if label != "" {
+			<span class="pr-chip-label">{ label }</span>
+		}
+	</span>
+}
+
+// prWord is the state of a pull request in one or two words.
+func prWord(pr store.PRState) string {
+	switch {
+	case pr.State == "merged":
+		return "merged"
+	case pr.State == "closed":
+		return "closed"
+	case pr.State == "":
+		return ""
+	case pr.Review == "changes_requested":
+		return "changes requested"
+	case pr.Review == "rereview_requested":
+		return "re-review requested"
+	case pr.Draft:
+		return "draft"
+	case pr.Review == "approved":
+		return "approved"
+	}
+	return "open"
+}
+
+func prChipClass(pr store.PRState) string {
+	switch prWord(pr) {
+	case "merged":
+		return "merged"
+	case "closed":
+		return "closed"
+	case "changes requested":
+		return "changes"
+	case "re-review requested":
+		return "rereview"
+	case "draft":
+		return "draft"
+	case "approved":
+		return "approved"
+	case "open":
+		return "open"
+	}
+	return ""
+}
+
+func prChipIcon(pr store.PRState) string {
+	switch prWord(pr) {
+	case "merged":
+		return "git-merge"
+	case "closed":
+		return "git-pull-request-closed"
+	case "changes requested":
+		return "message-square-x"
+	case "re-review requested":
+		return "eye"
+	case "draft":
+		return "git-pull-request-draft"
+	case "approved":
+		return "check"
+	}
+	return "git-pull-request"
+}
+
+func prChipTitle(pr store.PRState) string {
+	s := fmt.Sprintf("Pull request #%d", pr.Number)
+	if pr.Title != "" {
+		s += ": " + pr.Title
+	}
+	if w := prWord(pr); w != "" {
+		s += " (" + w
+		if pr.State == "open" && pr.Checks == "failure" {
+			s += ", checks failing"
+		}
+		s += ")"
+	}
+	return s
 }
 
 // countListed is how many of a project's threads its section lists,
@@ -226,11 +506,18 @@ func countListed(ts []store.Thread, projectID string) int {
 
 // providersTitle is the Providers quick link's tooltip, with the update
 // count when there is one.
-func providersTitle(updates int) string {
-	if updates == 0 {
+func providersTitle(updates, signedOut int) string {
+	var parts []string
+	if signedOut > 0 {
+		parts = append(parts, fmt.Sprintf("%d not signed in", signedOut))
+	}
+	if updates > 0 {
+		parts = append(parts, fmt.Sprintf("%d with an update available", updates))
+	}
+	if len(parts) == 0 {
 		return "Providers"
 	}
-	return fmt.Sprintf("Providers: %d %s with an update available", updates, plural(updates, "provider", "providers"))
+	return "Providers: " + strings.Join(parts, ", ")
 }
 
 // currentArchived is whether the thread on screen is in the Archived

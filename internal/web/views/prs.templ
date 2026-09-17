@@ -1,0 +1,173 @@
+package views
+
+import (
+	"fmt"
+	"starcode/internal/gitx"
+	"starcode/internal/store"
+	"strconv"
+	"time"
+)
+
+// PRsPageData is the pull requests page: the signed-in user's PRs from a
+// search across GitHub, the project each repository is added as (if it
+// is), and the threads linked to each PR.
+type PRsPageData struct {
+	Mine   gitx.MyPullRequests
+	Err    string
+	At     time.Time
+	Loaded bool
+	// Repos maps "owner/name" to the project whose origin points at it.
+	Repos map[string]store.Project
+	// Threads lists the threads linked to each PR, newest first.
+	Threads map[store.PR][]store.Thread
+}
+
+// PRsPage lists the pull requests that concern the signed-in user in
+// three groups. A PR in a repository that is one of the projects gets a
+// button that opens a thread on it; every PR shows the threads already
+// linked to it.
+templ PRsPage(d PRsPageData) {
+	<main id="main" class="prs-page">
+		<header id="mainhead" class="mainhead">
+			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
+			<nav class="crumbs"><span>Pull requests</span></nav>
+			if d.Mine.Login != "" {
+				<span class="dim tiny-text hide-sm">@Icon("user", "ui-icon") <span>{ d.Mine.Login }</span></span>
+			}
+			<span class="spacer"></span>
+			if !d.At.IsZero() {
+				<span class="dim tiny-text hide-sm" title="When the lists were last read from GitHub">updated <span data-ago={ d.At.UTC().Format(time.RFC3339) }>{ ago(d.At) }</span></span>
+			}
+			<button class="btn ghost" data-on:click="@get('/api/prs')" title="Read the lists again, and the state of every linked pull request">@Icon("refresh-cw", "ui-icon") <span class="hide-sm">refresh</span></button>
+		</header>
+		<div class="prs-scroll">
+			<div class="prs-inner">
+				@PRsList(d)
+				@PRPageDetail(PRDetailData{Page: true})
+			</div>
+		</div>
+	</main>
+}
+
+// PRsList is the three groups; patched on its own so a redraw does not
+// close a PR that is open in the detail.
+templ PRsList(d PRsPageData) {
+	<div id="prpage-list" class="prpage-list" data-show="!$prsel" data-preserve-attr="style">
+		if d.Err != "" {
+			<p class="dim pad">{ d.Err }</p>
+			<p class="dim pad tiny-text">The page needs the GitHub CLI (gh) on PATH and signed in.</p>
+		} else if !d.Loaded {
+			<p class="dim pad">loading…</p>
+		} else {
+			@prGroup("Assigned to you", "user-check", "Open pull requests with you as an assignee.", d.Mine.Assigned, d)
+			@prGroup("Waiting for your review", "eye", "Open pull requests that asked you for a review.", d.Mine.ReviewRequested, d)
+			@prGroup("Opened by you", "git-pull-request-arrow", "Your own open pull requests.", d.Mine.Authored, d)
+			<p class="dim tiny-text prs-note">A row opens the pull request here, with its reviews, comments and checks, and a button on each point that opens a thread on just that point. Threads already linked to a PR are listed under it, and every thread that runs `gh pr create` links itself.</p>
+		}
+	</div>
+}
+
+// PRPageDetail is one PR opened from the list, in the same shape as the
+// panel's detail with the page's head: back, the repository, the threads
+// linked to it, refresh and the GitHub link.
+templ PRPageDetail(d PRDetailData) {
+	<div id="prpage-detail" class="pr-detail prpage-detail" data-show="$prsel" data-preserve-attr="style" style="display: none">
+		<div class="pr-detail-head">
+			<button class="btn icon ghost tiny" data-on:click="$prsel = 0" title="Back to the list" aria-label="Back to the list">@Icon("arrow-left", "ui-icon")</button>
+			if d.Loaded {
+				<span class="dim ellipsis">{ d.Repo } <span class="mono">#{ strconv.Itoa(d.Detail.Number) }</span></span>
+				<span class="spacer"></span>
+				for _, t := range d.Threads {
+					<a class="pr-thread" href={ templ.SafeURL("/threads/" + t.ID) } title={ "Thread linked to this pull request: " + t.Title }>
+						<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
+						<span class="ellipsis">{ t.Title }</span>
+					</a>
+				}
+				<button class="btn icon ghost tiny" data-on:click={ "@get('" + d.Base + "?refresh=1')" } title="Refresh" aria-label="Refresh">@Icon("refresh-cw", "ui-icon")</button>
+				if d.Detail.URL != "" {
+					<a class="btn icon ghost tiny" href={ templ.SafeURL(d.Detail.URL) } target="_blank" rel="noopener" title="Open on GitHub" aria-label="Open on GitHub">@Icon("external-link", "ui-icon")</a>
+				}
+			}
+		</div>
+		@PRDetailBody(d)
+	</div>
+}
+
+templ prGroup(title, icon, blurb string, prs []gitx.MyPR, d PRsPageData) {
+	<section class="prs-group">
+		<header>
+			<h2>@Icon(icon, "ui-icon") <span>{ title }</span> <span class="dim tiny-text">{ strconv.Itoa(len(prs)) }</span></h2>
+			<p class="dim tiny-text">{ blurb }</p>
+		</header>
+		if len(prs) == 0 {
+			<p class="dim prs-empty">none.</p>
+		} else {
+			<ul class="prs prs-wide">
+				for _, pr := range prs {
+					@prRow(pr, d)
+				}
+			</ul>
+		}
+	</section>
+}
+
+// prRow is one PR: repository, number, title, who and when, then the
+// review and check badges, then the threads linked to it and a button
+// to open one when the repository is a project here.
+templ prRow(pr gitx.MyPR, d PRsPageData) {
+	{{ p, known := d.Repos[pr.Repo] }}
+	{{ threads := d.Threads[store.PR{Repo: pr.Repo, Number: pr.Number}] }}
+	<li>
+		// The row opens the PR here; GitHub is the button at its end.
+		<a class="pr-row" href="#" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @get('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')" }>
+			<span class={ "pr-mark", prClass(pr.PR) }>@Icon(prIcon(pr.PR), "ui-icon")</span>
+			<span class="pr-text">
+				<span class="ellipsis"><span class="dim">{ pr.Repo }</span> <span class="mono dim">#{ strconv.Itoa(pr.Number) }</span> { pr.Title }</span>
+				<span class="dim tiny-text ellipsis">
+					{ pr.Author } · { pr.Head }
+					· <span data-ago={ pr.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(pr.UpdatedAt) }</span>
+				</span>
+			</span>
+			<span class="pr-badges">
+				if pr.Comments > 0 {
+					<span class="pr-badge text" title={ fmt.Sprintf("%d %s", pr.Comments, plural(pr.Comments, "comment", "comments")) }>@Icon("message-square", "ui-icon") <span>{ strconv.Itoa(pr.Comments) }</span></span>
+				}
+				if pr.Draft {
+					<span class="pr-badge">draft</span>
+				}
+				switch pr.Review {
+					case "approved":
+						<span class="pr-badge ok text" title="Approved">@Icon("check", "ui-icon") <span>approved</span></span>
+					case "changes_requested":
+						<span class="pr-badge err text" title="A reviewer asked for changes">@Icon("message-square-x", "ui-icon") <span>changes requested</span></span>
+					case "rereview_requested":
+						<span class="pr-badge warn text" title={ reReviewTitle(pr.Requested) }>@Icon("eye", "ui-icon") <span>re-review requested</span></span>
+				}
+				switch pr.Checks {
+					case "success":
+						<span class="pr-badge ok" title="Checks passed">@Icon("circle-check", "ui-icon")</span>
+					case "failure":
+						<span class="pr-badge err text" title="Checks failed">@Icon("circle-x", "ui-icon") <span>checks failed</span></span>
+					case "pending":
+						<span class="pr-badge warn" title="Checks running">@Icon("circle-dot", "ui-icon")</span>
+				}
+			</span>
+		</a>
+		<a class="btn icon ghost tiny pr-gh" href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener" title="Open on GitHub" aria-label="Open on GitHub">@Icon("external-link", "ui-icon")</a>
+		<div class={ "pr-row-threads", templ.KV("empty", len(threads) == 0 && !known) }>
+			for _, t := range threads {
+				<a class="pr-thread" href={ templ.SafeURL("/threads/" + t.ID) } title={ "Thread linked to this pull request: " + t.Title }>
+					<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
+					<span class="ellipsis">{ t.Title }</span>
+				</a>
+			}
+			if known {
+				<button class="btn tiny ghost" data-on:click={ "@post('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "/thread?project=" + p.ID + "')" } title={ prThreadTitle(pr, p) }>@Icon("message-square-plus", "ui-icon") <span>new thread</span></button>
+			}
+		</div>
+	</li>
+}
+
+func prThreadTitle(pr gitx.MyPR, p store.Project) string {
+	return fmt.Sprintf("Open a thread on %s for #%d, linked to the pull request, with a prompt that lists what it needs", p.Name, pr.Number)
+}

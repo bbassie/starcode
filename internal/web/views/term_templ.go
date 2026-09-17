@@ -96,7 +96,39 @@ func TermPanel(threadID string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</button></div><div class=\"term-mount\"></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</button></div><div class=\"term-mount\"></div><div class=\"term-keys\"><button class=\"btn tiny\" type=\"button\" data-key=\"esc\">Esc</button> <button class=\"btn tiny\" type=\"button\" data-key=\"tab\">Tab</button> <button class=\"btn tiny\" type=\"button\" data-key=\"ctrl\" aria-pressed=\"false\">Ctrl</button> <button class=\"btn tiny\" type=\"button\" data-key=\"ctrl-c\">^C</button> <button class=\"btn tiny\" type=\"button\" data-key=\"ctrl-d\">^D</button> <button class=\"btn tiny\" type=\"button\" data-key=\"ctrl-z\">^Z</button> <button class=\"btn tiny\" type=\"button\" data-key=\"up\" aria-label=\"Up\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = Icon("arrow-up", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</button> <button class=\"btn tiny\" type=\"button\" data-key=\"down\" aria-label=\"Down\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = Icon("arrow-down", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "</button> <button class=\"btn tiny\" type=\"button\" data-key=\"left\" aria-label=\"Left\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = Icon("arrow-left", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</button> <button class=\"btn tiny\" type=\"button\" data-key=\"right\" aria-label=\"Right\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = Icon("arrow-right", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</button> <button class=\"btn tiny\" type=\"button\" data-key=\"home\">Home</button> <button class=\"btn tiny\" type=\"button\" data-key=\"end\">End</button> <button class=\"btn tiny\" type=\"button\" data-key=\"pipe\">|</button> <button class=\"btn tiny\" type=\"button\" data-key=\"tilde\">~</button> <button class=\"btn tiny\" type=\"button\" data-key=\"dash\">-</button></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

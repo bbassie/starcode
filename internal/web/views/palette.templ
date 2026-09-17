@@ -49,7 +49,7 @@ templ Palette(p Page) {
 		<div class="palette" role="dialog" aria-label="Search and commands" data-on:keydown="paletteKey(evt, el) && ($palette = false)">
 			<label class="palette-search">
 				@Icon("search", "ui-icon")
-				<input type="text" placeholder="Search threads and messages, or type a command…" data-bind:pq autocomplete="off" spellcheck="false" data-on:input__debounce.120ms={ searchGet(p) }/>
+				<input type="text" placeholder="Search threads and messages, or type a command…" data-bind:pq autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" enterkeyhint="go" data-on:input__debounce.120ms={ searchGet(p) }/>
 				<kbd class="hide-sm">esc</kbd>
 				// A phone has no Escape and little backdrop to tap.
 				<button type="button" class="btn icon ghost palette-close" data-on:click="$palette = false" title="Close" aria-label="Close search">@Icon("x", "ui-icon")</button>
@@ -109,7 +109,7 @@ templ PaletteResults(d SearchData) {
 					<span class="opt-text">
 						<span class="opt-name"><span class="ellipsis">{ t.Title }</span>
 							if t.Archived {
-								<span class="opt-badge">archived</span>
+								<span class="opt-badge">settled</span>
 							}
 						</span>
 						<span class="opt-desc">{ d.Projects[t.ProjectID].Name } · { t.Agent } · { ago(t.UpdatedAt) }</span>
@@ -294,7 +294,10 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 		p := parts.Projects[0]
 		hk = append(hk, Hotkey{Combo: Key("thread-new"), Label: "New thread in " + p.Name, Action: "@post('/api/projects/" + p.ID + "/threads')"})
 	}
-	hk = append(hk, Hotkey{Combo: Key("settings"), Label: "Settings", Action: "location.href = '/settings'"})
+	hk = append(hk,
+		Hotkey{Combo: Key("prs"), Label: "Pull requests", Action: "location.href = '/prs'"},
+		Hotkey{Combo: Key("settings"), Label: "Settings", Action: "location.href = '/settings'"},
+	)
 	return hk
 }
 

@@ -29,6 +29,17 @@
   };
 
   const url = (n, path, extra = '') => `/api/term/${id}/${path}?pane=${n}${extra}`;
+  const send = (p, n, data) => {
+    p.queue = p.queue
+      .then(() => fetch(url(n, 'input'), { method: 'POST', body: data }))
+      .catch(() => {});
+  };
+  let ctrlHeld = false;
+  const holdCtrl = (on) => {
+    ctrlHeld = on;
+    const b = panel.querySelector('.term-keys [data-key="ctrl"]');
+    if (b) { b.classList.toggle('held', on); b.setAttribute('aria-pressed', String(on)); }
+  };
 
   const setActive = (n) => {
     active = n;
@@ -93,9 +104,13 @@
     const p = { el, term, fit, es: null, queue: Promise.resolve() };
     panes.set(n, p);
     term.onData((data) => {
-      p.queue = p.queue
-        .then(() => fetch(url(n, 'input'), { method: 'POST', body: data }))
-        .catch(() => {});
+      // A held Ctrl (the phone key row) turns the next letter into its
+      // control byte, the way a hardware Ctrl would.
+      if (ctrlHeld && data.length === 1) {
+        data = String.fromCharCode(data.toUpperCase().charCodeAt(0) & 0x1f);
+        holdCtrl(false);
+      }
+      send(p, n, data);
     });
     // A resize before the stream has opened (the first fit) or after the
     // shell is gone would only get a 409; the stream URL carries the size.
@@ -202,6 +217,28 @@
     } catch (e) {
       p.term.write('\r\n\x1b[2m[clipboard read was refused]\x1b[0m\r\n');
     }
+    p.term.focus();
+  });
+
+  // The phone key row: each button sends what the hardware key would.
+  // pointerdown is cancelled so the shell keeps focus and the keyboard
+  // stays up.
+  const keySeq = {
+    esc: '\x1b', tab: '\t', 'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-z': '\x1a',
+    up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C', home: '\x1b[H', end: '\x1b[F',
+    pipe: '|', tilde: '~', dash: '-',
+  };
+  const keys = panel.querySelector('.term-keys');
+  keys?.addEventListener('pointerdown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+  keys?.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    const p = active && panes.get(active);
+    if (!b || !p) return;
+    const k = b.dataset.key;
+    if (k === 'ctrl') { holdCtrl(!ctrlHeld); p.term.focus(); return; }
+    let seq = keySeq[k] || '';
+    if (ctrlHeld && seq.length === 1) { seq = String.fromCharCode(seq.toUpperCase().charCodeAt(0) & 0x1f); holdCtrl(false); }
+    if (seq) send(p, active, seq);
     p.term.focus();
   });
 

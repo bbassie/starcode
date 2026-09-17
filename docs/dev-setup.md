@@ -100,9 +100,10 @@ working in.
 
 Settings > Providers shows each CLI's version against the latest release
 and has an update button that runs `claude update` or `codex update`. A
-badge on the sidebar's Settings link tells you when one is waiting. Signing
-in stays in a terminal (`claude /login`, `codex login`), with the
-instance's `CLAUDE_CONFIG_DIR` or `CODEX_HOME` set if it has its own.
+badge on the sidebar's Settings link tells you when one is waiting. Claude signs in
+from the same page (a link to open elsewhere and a box for the code it
+shows); Codex still signs in from a terminal (`codex login`, with
+`CODEX_HOME` set if the instance has its own).
 
 ## Uninstall
 

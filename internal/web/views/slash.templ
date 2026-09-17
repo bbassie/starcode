@@ -1,0 +1,35 @@
+package views
+
+import "strings"
+
+// SlashItem is one row of the composer's slash menu: a built-in command
+// of the agent or a skill found on disk. Cmd is what lands in the
+// composer when the row is picked.
+type SlashItem struct {
+	Cmd   string
+	Desc  string
+	Skill bool
+}
+
+// SlashMenu is the body of the composer's slash menu. static/slash.js
+// fetches it into the form's .slash-menu box and filters the rows by
+// data-k as the reader types; the empty line shows when nothing is left.
+templ SlashMenu(items []SlashItem) {
+	<div class="pick-head">Commands</div>
+	for _, it := range items {
+		<button type="button" class="opt" data-cmd={ it.Cmd } data-k={ strings.ToLower(it.Cmd + " " + it.Desc) } data-on:click="slashPick(el)">
+			<span class="opt-text">
+				<span class="opt-name">
+					<span class="slash-cmd">{ it.Cmd }</span>
+					if it.Skill {
+						<span class="opt-badge">skill</span>
+					}
+				</span>
+				if it.Desc != "" {
+					<span class="opt-desc">{ it.Desc }</span>
+				}
+			</span>
+		</button>
+	}
+	<p class="dim pad slash-empty" hidden?={ len(items) > 0 }>no matching command</p>
+}

@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -31,6 +33,8 @@ type Project struct {
 	Path      string
 	Name      string
 	CreatedAt time.Time
+	// Worktrees is whether new threads start in a worktree of their own.
+	Worktrees bool
 }
 
 type Thread struct {
@@ -46,14 +50,66 @@ type Thread struct {
 	Status            string
 	StatusDetail      string
 	Archived          bool
+	Pinned            bool
+	// Worktree is the thread's own checkout (thread.worktree_set), empty
+	// for the project's main one, and WorktreeBranch its branch; Dir is
+	// what to use.
+	Worktree       string
+	WorktreeBranch string
 	// ContextTokens is how much of the model's context window the
 	// conversation took up at the last reading, and ContextWindow the limit
 	// the agent named for it (0 when it named none, or when the model
 	// changed and no turn has run on the new one yet).
 	ContextTokens int64
 	ContextWindow int64
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// PRRepo, PRNumber and PRURL are the pull request the thread is linked
+	// to (thread.pr_linked); PRNumber is 0 when there is none.
+	PRRepo    string
+	PRNumber  int
+	PRURL     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// PR names a pull request across repositories.
+type PR struct {
+	Repo   string // "owner/name"
+	Number int
+}
+
+// Linked is the thread's pull request, if it has one.
+// Dir is where the thread's agent, terminal and panel work: its own
+// worktree, or the project's checkout when it has none or the worktree
+// is gone from disk (the app puts it back before the next turn).
+func (t Thread) Dir(p Project) string {
+	if t.Worktree != "" {
+		if _, err := os.Stat(t.Worktree); err == nil {
+			return t.Worktree
+		}
+	}
+	return p.Path
+}
+
+func (t Thread) Linked() (PR, bool) {
+	if t.PRNumber == 0 {
+		return PR{}, false
+	}
+	return PR{Repo: t.PRRepo, Number: t.PRNumber}, true
+}
+
+// PRState is what the last poll found for a linked pull request. State
+// is "open", "merged" or "closed"; Review and Checks use the words of
+// gitx.PR; Head is the branch.
+type PRState struct {
+	PR
+	Title     string
+	URL       string
+	State     string
+	Review    string
+	Checks    string
+	Draft     bool
+	Head      string
+	CheckedAt time.Time
 }
 
 type Item struct {
@@ -287,6 +343,26 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 	case domain.ThreadUnarchived:
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET archived=0, updated_at=? WHERE id=?`, ts, ev.ThreadID)
 		return err
+	case domain.ThreadWorktreeSet:
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET worktree=?, worktree_branch=? WHERE id=?`, p.Path, p.Branch, ev.ThreadID)
+		return err
+	case domain.ProjectSettingsChanged:
+		_, err := tx.ExecContext(ctx, `UPDATE projects SET worktrees=? WHERE id=?`, p.Worktrees, p.ID)
+		return err
+	case domain.ThreadPinned:
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET pinned=1 WHERE id=?`, ev.ThreadID)
+		return err
+	case domain.ThreadUnpinned:
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET pinned=0 WHERE id=?`, ev.ThreadID)
+		return err
+	case domain.ThreadPRLinked:
+		// A link is bookkeeping, not activity: no touch, so the thread does
+		// not go unread over it.
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_repo=?, pr_number=?, pr_url=? WHERE id=?`, p.Repo, p.Number, p.URL, ev.ThreadID)
+		return err
+	case domain.ThreadPRUnlinked:
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_repo='', pr_number=0, pr_url='' WHERE id=?`, ev.ThreadID)
+		return err
 	case domain.ThreadSettingsChanged:
 		// A different agent cannot resume another agent's session. Another
 		// model has another window, so the one the old model reported is
@@ -409,6 +485,18 @@ func deref(p any) any {
 		return *v
 	case *domain.ThreadUnarchived:
 		return *v
+	case *domain.ThreadWorktreeSet:
+		return *v
+	case *domain.ProjectSettingsChanged:
+		return *v
+	case *domain.ThreadPinned:
+		return *v
+	case *domain.ThreadUnpinned:
+		return *v
+	case *domain.ThreadPRLinked:
+		return *v
+	case *domain.ThreadPRUnlinked:
+		return *v
 	case *domain.ThreadSettingsChanged:
 		return *v
 	case *domain.AgentSessionBound:
@@ -473,7 +561,7 @@ func nullIfEmpty(s string) any {
 // ---- readers ----
 
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,path,name,created_at FROM projects ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,path,name,created_at,worktrees FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +570,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	for rows.Next() {
 		var p Project
 		var ts string
-		if err := rows.Scan(&p.ID, &p.Path, &p.Name, &ts); err != nil {
+		if err := rows.Scan(&p.ID, &p.Path, &p.Name, &ts, &p.Worktrees); err != nil {
 			return nil, err
 		}
 		p.CreatedAt, _ = time.Parse(timeFmt, ts)
@@ -494,7 +582,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 func (s *Store) Project(ctx context.Context, id string) (Project, error) {
 	var p Project
 	var ts string
-	err := s.db.QueryRowContext(ctx, `SELECT id,path,name,created_at FROM projects WHERE id=?`, id).Scan(&p.ID, &p.Path, &p.Name, &ts)
+	err := s.db.QueryRowContext(ctx, `SELECT id,path,name,created_at,worktrees FROM projects WHERE id=?`, id).Scan(&p.ID, &p.Path, &p.Name, &ts, &p.Worktrees)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -502,12 +590,12 @@ func (s *Store) Project(ctx context.Context, id string) (Project, error) {
 	return p, err
 }
 
-const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,context_tokens,context_window,created_at,updated_at`
+const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,pinned,worktree,worktree_branch,context_tokens,context_window,pr_repo,pr_number,pr_url,created_at,updated_at`
 
 func scanThread(sc interface{ Scan(...any) error }) (Thread, error) {
 	var t Thread
 	var c, u string
-	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.ContextTokens, &t.ContextWindow, &c, &u)
+	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.Pinned, &t.Worktree, &t.WorktreeBranch, &t.ContextTokens, &t.ContextWindow, &t.PRRepo, &t.PRNumber, &t.PRURL, &c, &u)
 	t.CreatedAt, _ = time.Parse(timeFmt, c)
 	t.UpdatedAt, _ = time.Parse(timeFmt, u)
 	return t, err
@@ -515,7 +603,9 @@ func scanThread(sc interface{ Scan(...any) error }) (Thread, error) {
 
 // Threads lists every thread, newest activity first.
 func (s *Store) Threads(ctx context.Context) ([]Thread, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+threadCols+` FROM threads ORDER BY updated_at DESC`)
+	// Pinned threads lead, so every list that walks this order (the
+	// sidebar, the project cards) shows them first.
+	rows, err := s.db.QueryContext(ctx, `SELECT `+threadCols+` FROM threads ORDER BY pinned DESC, updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -593,6 +683,45 @@ func (s *Store) Thread(ctx context.Context, id string) (Thread, error) {
 
 func (s *Store) Items(ctx context.Context, threadID string) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,thread_id,seq,kind,tool_name,status,body,output,meta,created_at,updated_at FROM items WHERE thread_id=? ORDER BY seq`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// ItemsByParent returns the items a subagent made under tool call
+// parentID (their meta names it), in order.
+func (s *Store) ItemsByParent(ctx context.Context, threadID, parentID string) ([]Item, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,thread_id,seq,kind,tool_name,status,body,output,meta,created_at,updated_at FROM items WHERE thread_id=? AND json_extract(meta, '$.parent') = ? ORDER BY seq`, threadID, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// ItemsFrom returns the thread's items from item firstID on, in order.
+// The work block header is redrawn on every tool event, and it only needs
+// the block's own items, not the whole transcript.
+func (s *Store) ItemsFrom(ctx context.Context, threadID, firstID string) ([]Item, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,thread_id,seq,kind,tool_name,status,body,output,meta,created_at,updated_at FROM items WHERE thread_id=? AND seq >= (SELECT seq FROM items WHERE id=?) ORDER BY seq`, threadID, firstID)
 	if err != nil {
 		return nil, err
 	}
@@ -864,6 +993,12 @@ func (s *Store) MarkSeen(ctx context.Context, threadID string, t time.Time) (cha
 	if err != nil {
 		return false, err
 	}
+	// Already marked since the thread last changed: the row says read and
+	// would keep saying so, so skip the write. Every event on an open
+	// thread lands here, so this is most calls.
+	if prev.Valid && prev.String >= updated {
+		return false, nil
+	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO seen(thread_id, seen_at) VALUES(?,?) ON CONFLICT(thread_id) DO UPDATE SET seen_at=max(seen_at, excluded.seen_at)`, threadID, ts)
 	idle := status != domain.StatusRunning && status != domain.StatusAwaitingApproval
 	return err == nil && idle && (!prev.Valid || prev.String < updated) && ts >= updated, err
@@ -888,7 +1023,82 @@ func (s *Store) Seen(ctx context.Context) (map[string]time.Time, error) {
 	return out, rows.Err()
 }
 
+// ---- settings ----
+//
+// Instance-wide preferences from the settings page. Like drafts and seen
+// marks they are reader state, not events: a change applies from now on
+// and nothing replays it.
+
+// Setting returns the value stored under key, or def when there is none.
+func (s *Store) Setting(ctx context.Context, key, def string) string {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, key).Scan(&v)
+	if err != nil {
+		return def
+	}
+	return v
+}
+
+// SetSetting stores value under key, replacing what was there.
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
+
+// SettleMerged reports whether a thread archives on its own when the poll
+// sees its pull request merged (setting settle_merged, on by default).
+func (s *Store) SettleMerged(ctx context.Context) bool {
+	return s.Setting(ctx, "settle_merged", "1") != "0"
+}
+
+// SettleIdleDays is how many days without activity archive a thread on
+// its own (setting settle_idle_days, 3 by default); 0 means never.
+func (s *Store) SettleIdleDays(ctx context.Context) int {
+	n, err := strconv.Atoi(s.Setting(ctx, "settle_idle_days", "3"))
+	if err != nil || n < 0 {
+		return 3
+	}
+	return n
+}
+
 // ---- compaction ----
+
+// SavePRStates records what a poll found for linked pull requests.
+func (s *Store) SavePRStates(ctx context.Context, states []PRState) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, st := range states {
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO pr_state(repo,number,title,url,state,review,checks,draft,head,checked_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			st.Repo, st.Number, st.Title, st.URL, st.State, st.Review, st.Checks, st.Draft, st.Head, st.CheckedAt.UTC().Format(timeFmt)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// PRStates is the last known state of every pull request polled so far,
+// keyed by repository and number.
+func (s *Store) PRStates(ctx context.Context) (map[PR]PRState, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT repo,number,title,url,state,review,checks,draft,head,checked_at FROM pr_state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[PR]PRState{}
+	for rows.Next() {
+		var st PRState
+		var at string
+		if err := rows.Scan(&st.Repo, &st.Number, &st.Title, &st.URL, &st.State, &st.Review, &st.Checks, &st.Draft, &st.Head, &at); err != nil {
+			return nil, err
+		}
+		st.CheckedAt, _ = time.Parse(timeFmt, at)
+		out[st.PR] = st
+	}
+	return out, rows.Err()
+}
 
 // Compact folds each item's streamed deltas into one event per field.
 // Streaming writes a row per token; once a turn is over only the sum

@@ -2,6 +2,7 @@ package views
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	pathpkg "path"
 	"regexp"
@@ -14,6 +15,71 @@ import (
 type toolMeta struct {
 	Input   json.RawMessage `json:"input"`
 	Summary string          `json:"summary"`
+	// Parent is the Task tool call whose subagent made this item.
+	Parent string `json:"parent"`
+}
+
+// ParentOf is the item id a subagent's item sits under, "" at top level.
+func ParentOf(it store.Item) string {
+	return meta(it).Parent
+}
+
+// Nest splits items into the top level and the children of each Task,
+// keyed by the Task's item id, in order.
+func Nest(items []store.Item) (top []store.Item, kids map[string][]store.Item) {
+	kids = map[string][]store.Item{}
+	for _, it := range items {
+		if p := ParentOf(it); p != "" {
+			kids[p] = append(kids[p], it)
+			continue
+		}
+		top = append(top, it)
+	}
+	return top, kids
+}
+
+// IsAgentTool is whether a tool call spawns a subagent (Claude's Task,
+// also called Agent), whose nested activity the transcript folds under it.
+func IsAgentTool(it store.Item) bool {
+	return it.Kind == domain.KindTool && (it.ToolName == "Task" || it.ToolName == "Agent")
+}
+
+type agentInput struct {
+	Description  string `json:"description"`
+	SubagentType string `json:"subagent_type"`
+	Prompt       string `json:"prompt"`
+}
+
+func agentInputOf(m toolMeta) agentInput {
+	var in agentInput
+	json.Unmarshal(m.Input, &in)
+	return in
+}
+
+// agentLine sums up a subagent for its header: steps and time, or
+// "running" with the count so far.
+func agentLine(it store.Item, kids []store.Item) string {
+	steps := 0
+	for _, k := range kids {
+		if k.Kind == domain.KindTool {
+			steps++
+		}
+	}
+	if it.Status == domain.ItemRunning {
+		return fmt.Sprintf("running · %d %s", steps, plural(steps, "step", "steps"))
+	}
+	return fmt.Sprintf("%d %s · %s", steps, plural(steps, "step", "steps"), elapsedText(it.UpdatedAt.Sub(it.CreatedAt)))
+}
+
+// AgentsRunning counts the subagents still at work, for the busy bar.
+func AgentsRunning(items []store.Item) int {
+	n := 0
+	for _, it := range items {
+		if IsAgentTool(it) && it.Status == domain.ItemRunning {
+			n++
+		}
+	}
+	return n
 }
 
 func meta(it store.Item) toolMeta {
@@ -72,6 +138,13 @@ func attachmentURL(p string) string {
 }
 
 templ Item(it store.Item) {
+	@ItemWith(it, nil)
+}
+
+// ItemWith renders an item with the subagent activity nested under it
+// (kids, from Nest) when it is a Task; the plain Item is for patches of
+// items that have none.
+templ ItemWith(it store.Item, kids map[string][]store.Item) {
 	switch it.Kind {
 		case domain.KindUser:
 			{{ text, atts := splitAttachments(it.Body) }}
@@ -117,7 +190,11 @@ templ Item(it store.Item) {
 				<pre class="wrap dim">{ it.Body }</pre>
 			</details>
 		case domain.KindTool:
-			@Tool(it)
+			if IsAgentTool(it) {
+				@AgentTool(it, kids)
+			} else {
+				@Tool(it)
+			}
 		case domain.KindResult:
 			<div id={ "it-" + it.ID } class={ "item", "result", "st-" + it.Status }>
 				<span class="tag">@ItemIcon(it.Status) <span>{ it.Status }</span></span>
@@ -134,6 +211,59 @@ templ Item(it store.Item) {
 				<pre class="wrap dim">{ it.Body }</pre>
 			</div>
 	}
+}
+
+// Tail is a streamed piece of text. While an item streams the stream
+// appends one of these into the element's last child per flush instead
+// of re-sending the whole item, and puts the real markup back with a
+// full patch now and then (see conn.flushTails).
+templ Tail(text string) {
+	<span class="tail">{ text }</span>
+}
+
+// AgentTool is a Task: the subagent's type and brief in the summary, its
+// own tool calls and text folded underneath, then its report. It opens
+// while it runs, so "is anything still working" is one glance.
+templ AgentTool(it store.Item, kids map[string][]store.Item) {
+	{{ m := meta(it) }}
+	{{ in := agentInputOf(m) }}
+	{{ mine := kids[it.ID] }}
+	<details id={ "it-" + it.ID } class={ "item", "tool", "agent", "st-" + it.Status } open?={ it.Status == domain.ItemRunning } data-preserve-attr="open">
+		<summary>
+			<span class={ "glyph", "st-" + it.Status }>@ItemIcon(it.Status)</span>
+			<span class="tag">@Icon("bot", "ui-icon") <span>{ agentTag(in) }</span></span>
+			<span class="ellipsis">{ firstNonEmpty(in.Description, m.Summary) }</span>
+			<span class="dim tiny-text agent-line">{ agentLine(it, mine) }</span>
+		</summary>
+		if in.Prompt != "" {
+			<details class="agent-brief">
+				<summary class="dim tiny-text">brief</summary>
+				<pre class="block input">{ clip(in.Prompt, 4000) }</pre>
+			</details>
+		}
+		<div class="agent-body">
+			for _, k := range mine {
+				@ItemWith(k, kids)
+			}
+		</div>
+		if it.Output != "" {
+			<pre class="block output">{ clip(it.Output, 20000) }</pre>
+		}
+	</details>
+}
+
+func agentTag(in agentInput) string {
+	if in.SubagentType != "" {
+		return "agent · " + in.SubagentType
+	}
+	return "agent"
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 templ Tool(it store.Item) {

@@ -416,3 +416,86 @@ func TestCompactFoldsDeltas(t *testing.T) {
 		t.Fatalf("second compact removed %d", again)
 	}
 }
+
+func TestPRLinkProjectionAndStates(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if _, err := s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/pr", Name: "pr"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "t1", domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "t", Agent: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	th, _ := s.Thread(ctx, "t1")
+	before := th.UpdatedAt
+	time.Sleep(2 * time.Millisecond)
+	if _, err := s.Append(ctx, "t1", domain.ThreadPRLinked{Repo: "o/r", Number: 12, URL: "https://github.com/o/r/pull/12"}); err != nil {
+		t.Fatal(err)
+	}
+	th, _ = s.Thread(ctx, "t1")
+	pr, ok := th.Linked()
+	if !ok || pr != (PR{Repo: "o/r", Number: 12}) || th.PRURL != "https://github.com/o/r/pull/12" {
+		t.Fatalf("linked = %+v %v", th, ok)
+	}
+	if !th.UpdatedAt.Equal(before) {
+		t.Error("a link touched updated_at, which would mark the thread unread")
+	}
+	if err := s.SavePRStates(ctx, []PRState{{PR: pr, Title: "T", State: "open", Review: "changes_requested", CheckedAt: time.Now()}}); err != nil {
+		t.Fatal(err)
+	}
+	states, err := s.PRStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := states[pr]; st.Title != "T" || st.State != "open" || st.Review != "changes_requested" || st.CheckedAt.IsZero() {
+		t.Errorf("state = %+v", st)
+	}
+	if _, err := s.Append(ctx, "t1", domain.ThreadPRUnlinked{}); err != nil {
+		t.Fatal(err)
+	}
+	th, _ = s.Thread(ctx, "t1")
+	if _, ok := th.Linked(); ok {
+		t.Error("still linked after unlink")
+	}
+	// Replay rebuilds the link from the log.
+	if _, err := s.Append(ctx, "t1", domain.ThreadPRLinked{Repo: "o/r", Number: 13, URL: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Replay(ctx); err != nil {
+		t.Fatal(err)
+	}
+	th, _ = s.Thread(ctx, "t1")
+	if th.PRNumber != 13 {
+		t.Errorf("after replay PRNumber = %d, want 13", th.PRNumber)
+	}
+}
+
+func TestSettings(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if v := s.Setting(ctx, "settle_merged", "1"); v != "1" {
+		t.Fatalf("missing setting = %q, want the default", v)
+	}
+	if !s.SettleMerged(ctx) || s.SettleIdleDays(ctx) != 3 {
+		t.Fatalf("defaults: merged=%v days=%d", s.SettleMerged(ctx), s.SettleIdleDays(ctx))
+	}
+	if err := s.SetSetting(ctx, "settle_merged", "0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSetting(ctx, "settle_idle_days", "7"); err != nil {
+		t.Fatal(err)
+	}
+	if s.SettleMerged(ctx) || s.SettleIdleDays(ctx) != 7 {
+		t.Fatalf("after set: merged=%v days=%d", s.SettleMerged(ctx), s.SettleIdleDays(ctx))
+	}
+	// Setting a key again replaces the value rather than adding a row.
+	if err := s.SetSetting(ctx, "settle_idle_days", "0"); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.SettleIdleDays(ctx); n != 0 {
+		t.Fatalf("days after overwrite = %d", n)
+	}
+	if v := s.Setting(ctx, "settle_idle_days", "3"); v != "0" {
+		t.Fatalf("raw value = %q", v)
+	}
+}

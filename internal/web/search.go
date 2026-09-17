@@ -48,6 +48,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	if view == "thread" && q != "" {
 		if t, err := s.App.Store.Thread(ctx, threadID); err == nil {
 			if p, ok := byID[t.ProjectID]; ok {
+				p.Path = t.Dir(p)
 				d.Files = gitx.MatchFiles(s.projectFileList(ctx, p), q, 8)
 				d.FileProject = p
 			}
@@ -86,9 +87,9 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 			views.Command{Label: "Rename thread", Icon: "pencil", Action: "$title = " + jsq(t.Title) + "; $rename = true; renameFocus()"},
 		)
 		if t.Archived {
-			out = append(out, views.Command{Label: "Unarchive thread", Icon: "archive-restore", Action: "@post('/api/threads/" + t.ID + "/unarchive')"})
+			out = append(out, views.Command{Label: "Unsettle thread", Icon: "archive-restore", Action: "@post('/api/threads/" + t.ID + "/unarchive')"})
 		} else {
-			out = append(out, views.Command{Label: "Archive thread", Icon: "archive", Action: "@post('/api/threads/" + t.ID + "/archive')"})
+			out = append(out, views.Command{Label: "Settle thread", Icon: "archive", Action: "@post('/api/threads/" + t.ID + "/archive')"})
 		}
 		out = append(out,
 			views.Command{Label: "Toggle terminal", Icon: "terminal", Action: "$term = !$term", Key: views.Key("terminal")},
@@ -119,7 +120,7 @@ func (s *Server) projectFileList(ctx context.Context, p store.Project) []string 
 	if s.files.items == nil {
 		s.files.items = map[string]fileListEntry{}
 	}
-	e, ok := s.files.items[p.ID]
+	e, ok := s.files.items[p.Path]
 	s.files.mu.Unlock()
 	if ok && time.Since(e.at) < 30*time.Second {
 		return e.files
@@ -128,7 +129,7 @@ func (s *Server) projectFileList(ctx context.Context, p store.Project) []string 
 	// the palette for other projects.
 	e = fileListEntry{at: time.Now(), files: gitx.ListFiles(ctx, p.Path)}
 	s.files.mu.Lock()
-	s.files.items[p.ID] = e
+	s.files.items[p.Path] = e
 	s.files.mu.Unlock()
 	return e.files
 }

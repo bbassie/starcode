@@ -44,7 +44,15 @@ func (m *Manager) Session(id, dir string, cols, rows int) (*Session, error) {
 	if s := m.sessions[id]; s != nil && !s.Exited() {
 		return s, nil
 	}
-	s, err := start(m.shell, dir, cols, rows, m.log)
+	s, err := start(m.shell, dir, cols, rows, m.log, func(s *Session) {
+		// Drop the dead session so its scrollback is freed. It may already
+		// have been replaced by a fresh shell under the same id.
+		m.mu.Lock()
+		if m.sessions[id] == s {
+			delete(m.sessions, id)
+		}
+		m.mu.Unlock()
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -128,9 +136,11 @@ type Session struct {
 	buf    []byte
 	subs   map[chan []byte]bool
 	exited chan struct{}
+	// onExit runs once the shell has exited, after exited is closed.
+	onExit func(*Session)
 }
 
-func start(shell, dir string, cols, rows int, log *slog.Logger) (*Session, error) {
+func start(shell, dir string, cols, rows int, log *slog.Logger, onExit func(*Session)) (*Session, error) {
 	if cols <= 0 || rows <= 0 {
 		cols, rows = 80, 24
 	}
@@ -141,7 +151,7 @@ func start(shell, dir string, cols, rows int, log *slog.Logger) (*Session, error
 	if err != nil {
 		return nil, err
 	}
-	s := &Session{ptmx: ptmx, cmd: cmd, subs: map[chan []byte]bool{}, exited: make(chan struct{})}
+	s := &Session{ptmx: ptmx, cmd: cmd, subs: map[chan []byte]bool{}, exited: make(chan struct{}), onExit: onExit}
 	go s.read(log)
 	return s, nil
 }
@@ -185,6 +195,9 @@ func (s *Session) read(log *slog.Logger) {
 	s.ptmx.Close()
 	if err := s.cmd.Wait(); err != nil && log != nil {
 		log.Debug("terminal shell exited", "err", err)
+	}
+	if s.onExit != nil {
+		s.onExit(s)
 	}
 }
 

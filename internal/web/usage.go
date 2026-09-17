@@ -160,6 +160,7 @@ func (s *Server) usageData(ctx context.Context, days int, metric string) (views.
 	for i := range d.Models {
 		d.Models[i].Driver, d.Models[i].Color = s.agentLook(d.Models[i].Agent)
 	}
+	d.Limits = s.limitsRows(ctx)
 	return d, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/starfederation/datastar-go/datastar"
@@ -35,9 +36,16 @@ type signals struct {
 	// thread" hotkey on the settings page, say), which is different from
 	// the agent's default mode picked on purpose.
 	Mode   *string      `json:"mode"`
-	File   string       `json:"file"`
+	File   string       `json:"_file"`
 	Title  string       `json:"title"`
-	Attach []UploadFile `json:"attach"`
+	Attach []UploadFile `json:"_attach"`
+	// WT is the home composer's "Start in" choice (see app.ThreadStart):
+	// empty for the project's default, "local", "worktree" with WTBase
+	// as the branch to start from, or "reuse" with WTFrom the thread
+	// whose worktree the new one shares.
+	WT     string `json:"wt"`
+	WTBase string `json:"wtbase"`
+	WTFrom string `json:"wtfrom"`
 }
 
 func (s *Server) readSignals(r *http.Request) signals {
@@ -102,8 +110,75 @@ func (s *Server) removeProject(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r)
 }
 
-func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
+// projectFor is the project a panel request is about, seen from the
+// thread the page is on: when that thread works in a worktree, Path is
+// the worktree, so the tree, the diffs, the editor and the PR list all
+// look at the checkout the agent is changing. The thread comes from the
+// tid signal every page sends (see the layout's data-signals).
+func (s *Server) projectFor(r *http.Request) (store.Project, error) {
 	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return p, err
+	}
+	var sig struct {
+		TID string `json:"tid"`
+	}
+	datastar.ReadSignals(r, &sig)
+	if sig.TID != "" {
+		if t, err := s.App.Store.Thread(r.Context(), sig.TID); err == nil && t.ProjectID == p.ID {
+			p.Path = t.Dir(p)
+		}
+	}
+	return p, nil
+}
+
+// setProjectWorktrees flips the project's default for new threads.
+func (s *Server) setProjectWorktrees(w http.ResponseWriter, r *http.Request) {
+	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if err := s.App.SetProjectWorktrees(r.Context(), p.ID, !p.Worktrees); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
+// newThreadInWorktree opens a thread on the same checkout as this one.
+func (s *Server) newThreadInWorktree(w http.ResponseWriter, r *http.Request) {
+	sig := s.readSignals(r)
+	agent := sig.Agent
+	if agent == "" {
+		agent = views.FirstOr(s.agentNames(), "")
+	}
+	id, err := s.App.CreateThreadIn(r.Context(), r.PathValue("id"), agent, sig.Model)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	mode := sig.modeOr(s.defaultMode(r.Context(), agent))
+	if sig.Effort != "" || mode != "" {
+		s.App.SetThreadSettings(r.Context(), id, app.ThreadSettings{Agent: agent, Model: sig.Model, Effort: sig.Effort, PermissionMode: mode})
+	}
+	sse := datastar.NewSSE(w, r)
+	sse.Redirect("/threads/" + id)
+}
+
+// removeWorktree puts the thread back on the project's checkout.
+func (s *Server) removeWorktree(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.App.RemoveWorktree(r.Context(), id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.Term.KillPrefix(termPrefix(id))
+	s.ok(w, r)
+}
+
+func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
+	p, err := s.projectFor(r)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -130,19 +205,19 @@ func (s *Server) patchDir(sse *datastar.ServerSentEventGenerator, p store.Projec
 	return sse.PatchElementTempl(views.TreeChildren(d))
 }
 
-// uploadFiles saves browser-picked files (base64 in the "upload" signal, put
+// uploadFiles saves browser-picked files (base64 in the "_upload" signal, put
 // there by data-bind on the file input) into the explorer's current
 // directory. The signal is cleared in every outcome, so a morphed explorer
 // re-running the effect cannot post the same files again.
 func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<20) // decoded cap is checked in saveUploads
-	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	p, err := s.projectFor(r)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	var sig struct {
-		Upload []UploadFile `json:"upload"`
+		Upload []UploadFile `json:"_upload"`
 	}
 	datastar.ReadSignals(r, &sig)
 	if len(sig.Upload) == 0 {
@@ -151,30 +226,30 @@ func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	saveErr := saveUploads(p.Path, r.URL.Query().Get("path"), sig.Upload)
 	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"upload": []any{}})
+	sse.MarshalAndPatchSignals(map[string]any{"_upload": []any{}})
 	if saveErr != nil {
 		s.Log.Warn("upload failed", "project", p.ID, "err", saveErr)
 		sse.PatchElementTempl(views.Toast(saveErr.Error()))
 		return
 	}
-	s.App.Bus.Publish(domain.GitChanged{})
+	s.App.Bus.Publish(domain.GitChanged{ProjectID: p.ID})
 	s.patchDir(sse, p, r.URL.Query().Get("path"))
 }
 
 func (s *Server) newThreadForProject(w http.ResponseWriter, r *http.Request) {
 	sig := s.readSignals(r)
-	s.createThread(w, r, r.PathValue("id"), sig.Agent, sig.Model, sig.Effort, sig.Mode, "", nil)
+	s.createThread(w, r, r.PathValue("id"), sig.Agent, sig.Model, sig.Effort, sig.Mode, "", nil, app.ThreadStart{})
 }
 
 func (s *Server) newThread(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<20) // attachments ride the signals as base64
 	sig := s.readSignals(r)
-	s.createThread(w, r, sig.Project, sig.Agent, sig.Model, sig.Effort, sig.Mode, sig.Prompt, sig.Attach)
+	s.createThread(w, r, sig.Project, sig.Agent, sig.Model, sig.Effort, sig.Mode, sig.Prompt, sig.Attach, app.ThreadStart{Mode: sig.WT, Base: sig.WTBase, ReuseFrom: sig.WTFrom})
 }
 
 // createThread makes a thread, applies settings, and when the home
 // composer carried a prompt, sends it as the first turn before redirecting.
-func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID, agent, model, effort string, mode *string, prompt string, attach []UploadFile) {
+func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID, agent, model, effort string, mode *string, prompt string, attach []UploadFile, start app.ThreadStart) {
 	if agent == "" {
 		agent = views.FirstOr(s.agentNames(), "")
 		if agent == "" {
@@ -186,7 +261,7 @@ func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID,
 		m := s.defaultMode(r.Context(), agent)
 		mode = &m
 	}
-	id, err := s.App.CreateThread(r.Context(), projectID, agent, model)
+	id, err := s.App.CreateThread(r.Context(), projectID, agent, model, start)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -230,7 +305,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"prompt": "", "attach": []any{}})
+	sse.MarshalAndPatchSignals(map[string]any{"prompt": "", "_attach": []any{}})
 }
 
 // attachmentFile serves a stored attachment for transcript previews. Both
@@ -343,6 +418,76 @@ func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r)
 }
 
+func (s *Server) pinThread(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.PinThread(r.Context(), r.PathValue("id"), r.URL.Path[len(r.URL.Path)-4:] == "/pin"); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
+// setSidebarMode stores the sidebar's list order in a cookie, so it is
+// a per-browser choice like the theme: "inbox" is one list with the
+// newest activity on top, "project" groups threads under their project.
+// Open sidebars redraw on the seen event, which already marks them dirty.
+func (s *Server) setSidebarMode(w http.ResponseWriter, r *http.Request) {
+	var sig struct {
+		Sidebar string `json:"sidebar"`
+	}
+	datastar.ReadSignals(r, &sig)
+	if sig.Sidebar != "inbox" && sig.Sidebar != "project" {
+		s.fail(w, r, errors.New("unknown sidebar mode"))
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "sidebar", Value: sig.Sidebar, Path: "/", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
+	// The page's stream read the cookie when it connected; reopening it
+	// draws the sidebar in the new layout. Other pages pick it up on
+	// their next connect.
+	sse := datastar.NewSSE(w, r)
+	sse.ExecuteScript("window.dispatchEvent(new Event('stream'))")
+}
+
+// setSettle stores the two settle settings for the instance: whether a
+// merged pull request archives its thread, and after how many idle days
+// a thread archives on its own. A new day count runs the sweep right
+// away, so the sidebar shows the effect without waiting for the hour.
+func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
+	var sig struct {
+		SettleMerged bool `json:"settleMerged"`
+		SettleDays   int  `json:"settleDays"`
+	}
+	datastar.ReadSignals(r, &sig)
+	days := min(max(sig.SettleDays, 0), 365)
+	ctx := r.Context()
+	merged := "1"
+	if !sig.SettleMerged {
+		merged = "0"
+	}
+	if err := s.App.Store.SetSetting(ctx, "settle_merged", merged); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	before := s.App.Store.SettleIdleDays(ctx)
+	if err := s.App.Store.SetSetting(ctx, "settle_idle_days", strconv.Itoa(days)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if days != before {
+		go s.App.SettleIdle(context.Background())
+	}
+	s.ok(w, r)
+}
+
+// steer stops the running turn so the queued prompts start now; the
+// button sits on the first queued message, which is what goes out next.
+func (s *Server) steer(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.Interrupt(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
 func (s *Server) unarchiveThread(w http.ResponseWriter, r *http.Request) {
 	if err := s.App.UnarchiveThread(r.Context(), r.PathValue("id")); err != nil {
 		s.fail(w, r, err)
@@ -382,18 +527,19 @@ func (s *Server) setTheme(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) gitRefresh(w http.ResponseWriter, r *http.Request) {
-	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	p, err := s.projectFor(r)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	sse := datastar.NewSSE(w, r)
-	sse.PatchElementTempl(views.GitHeader(views.GitData{Project: p, Status: gitx.Read(r.Context(), p.Path)}))
-	sse.PatchElementTempl(views.GitFiles(views.GitData{Project: p, Status: gitx.Read(r.Context(), p.Path)}))
+	d := views.GitData{Project: p, Status: gitx.Read(r.Context(), p.Path)}
+	sse.PatchElementTempl(views.GitHeader(d))
+	sse.PatchElementTempl(views.GitFiles(d))
 }
 
 func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
-	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	p, err := s.projectFor(r)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -404,7 +550,7 @@ func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "file": ""})
+	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "_file": ""})
 	sse.PatchElementTempl(views.GitDetail(views.GitData{
 		Project:  p,
 		Selected: path,
@@ -413,7 +559,7 @@ func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) gitFile(w http.ResponseWriter, r *http.Request) {
-	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	p, err := s.projectFor(r)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -425,12 +571,12 @@ func (s *Server) gitFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": true, "file": content})
+	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": true, "_file": content})
 	sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Diff: gitx.Diff(r.Context(), p.Path, path), Editing: true}))
 }
 
 func (s *Server) saveGitFile(w http.ResponseWriter, r *http.Request) {
-	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
+	p, err := s.projectFor(r)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -440,9 +586,9 @@ func (s *Server) saveGitFile(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.App.Bus.Publish(domain.GitChanged{})
+	s.App.Bus.Publish(domain.GitChanged{ProjectID: p.ID})
 	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "file": ""})
+	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "_file": ""})
 	sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Diff: gitx.Diff(r.Context(), p.Path, path)}))
 }
 

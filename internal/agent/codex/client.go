@@ -283,6 +283,11 @@ func threadOf(params json.RawMessage) string {
 }
 
 func (c *client) handleNotification(msg wireMessage) {
+	if msg.Method == "account/rateLimits/updated" {
+		// Account-wide, no thread: fan out to every session.
+		c.limitsUpdated(msg.Params)
+		return
+	}
 	threadID := threadOf(msg.Params)
 	if threadID == "" {
 		// Thread lifecycle notifications carry the thread inside "thread"

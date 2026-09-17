@@ -187,6 +187,30 @@ func (s *session) run(turnID, prompt string) {
 		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t2, Status: "done"}})
 	}
 
+	// A subagent: a Task tool whose nested calls carry its id as Parent,
+	// the way Claude Code's parent_tool_use_id does.
+	t3 := turnID + "-t3"
+	in3, _ := json.Marshal(map[string]any{"description": "Look over the tests", "subagent_type": "Explore", "prompt": "List the test files and say what they cover."})
+	s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: t3, Name: "Task", Input: in3, Summary: "Look over the tests"}})
+	for i, name := range []string{"Glob", "Read"} {
+		nid := fmt.Sprintf("%s-n%d", t3, i)
+		nin, _ := json.Marshal(map[string]any{"pattern": "**/*_test.go"})
+		s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: nid, Name: name, Input: nin, Summary: "**/*_test.go", Parent: t3}})
+		if !s.sleep() {
+			finish("interrupted")
+			return
+		}
+		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: nid, Status: "done", Output: "internal/app/app_test.go"}})
+	}
+	for _, w := range strings.SplitAfter("The tests cover the queue, restarts and the store. ", " ") {
+		s.emit(agent.Event{Kind: agent.KindTextDelta, TextDelta: &agent.TextDelta{MessageID: t3 + "-m", Text: w, Parent: t3}})
+		if !s.sleep() {
+			finish("interrupted")
+			return
+		}
+	}
+	s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t3, Status: "done", Output: "The tests cover the queue, restarts and the store."}})
+
 	s.context(4_500)
 	msg2 := turnID + "-m2"
 	prose := "You asked: *" + firstWords(prompt, 12) + "*\n\nHere is what I did:\n\n1. Listed the Go files with `Glob`.\n2. Ran the tests (decision: **" + string(d) + "**).\n\n```go\nfunc main() {\n\tfmt.Println(\"hello from the fake agent\")\n}\n```\n\nNothing else needed changing."

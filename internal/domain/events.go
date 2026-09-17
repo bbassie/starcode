@@ -86,6 +86,39 @@ type ThreadArchived struct{}
 
 type ThreadUnarchived struct{}
 
+// ThreadWorktreeSet gives a thread a checkout of its own (see gitx
+// worktrees): the agent, the terminal and the panel work in Path from
+// then on. Empty Path puts it back on the project's main checkout.
+type ThreadWorktreeSet struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch,omitempty"`
+}
+
+// ProjectSettingsChanged is the per-project default for new threads:
+// whether they start in a worktree.
+type ProjectSettingsChanged struct {
+	ID        string `json:"id"`
+	Worktrees bool   `json:"worktrees"`
+}
+
+// ThreadPinned keeps a thread at the top of its project's list; pinning
+// is not activity, so it leaves updated_at and the unread mark alone.
+type ThreadPinned struct{}
+
+type ThreadUnpinned struct{}
+
+// ThreadPRLinked ties a thread to the pull request it produced or works
+// on. The agent running `gh pr create` sets it, as does opening a thread
+// from a PR; the reader can also set or clear it by hand. Only the newest
+// link counts.
+type ThreadPRLinked struct {
+	Repo   string `json:"repo"` // "owner/name"
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+}
+
+type ThreadPRUnlinked struct{}
+
 // ThreadSettingsChanged updates how the thread's agent is launched. The
 // agent itself can only change before the first prompt; the rest applies
 // from the next turn on.
@@ -215,6 +248,10 @@ type GitChanged struct {
 	ProjectID string `json:"project_id"`
 }
 
+// LimitsChanged is bus-only: an instance's subscription windows moved
+// (a probe, or a window an agent streamed mid-turn).
+type LimitsChanged struct{}
+
 // ProvidersChanged is bus-only: an agent CLI's version, sign-in state or
 // available update changed, so sidebars and the providers page refresh.
 type ProvidersChanged struct{}
@@ -224,6 +261,10 @@ type ProvidersChanged struct{}
 type SeenChanged struct {
 	ThreadID string `json:"thread_id"`
 }
+
+// PRStateChanged is bus-only: the poll of linked pull requests found a
+// state that differs from the last one, so sidebars redraw their chips.
+type PRStateChanged struct{}
 
 // BinaryUpdated is bus-only: the starcode executable on disk is newer than
 // the running one, so every open page shows the restart banner.
@@ -246,6 +287,18 @@ func TypeOf(p any) string {
 		return "thread.archived"
 	case ThreadUnarchived, *ThreadUnarchived:
 		return "thread.unarchived"
+	case ThreadWorktreeSet, *ThreadWorktreeSet:
+		return "thread.worktree_set"
+	case ProjectSettingsChanged, *ProjectSettingsChanged:
+		return "project.settings_changed"
+	case ThreadPinned, *ThreadPinned:
+		return "thread.pinned"
+	case ThreadUnpinned, *ThreadUnpinned:
+		return "thread.unpinned"
+	case ThreadPRLinked, *ThreadPRLinked:
+		return "thread.pr_linked"
+	case ThreadPRUnlinked, *ThreadPRUnlinked:
+		return "thread.pr_unlinked"
 	case ThreadSettingsChanged, *ThreadSettingsChanged:
 		return "thread.settings"
 	case AgentSessionBound, *AgentSessionBound:
@@ -280,6 +333,8 @@ func TypeOf(p any) string {
 		return "providers.changed"
 	case BinaryUpdated, *BinaryUpdated:
 		return "binary.updated"
+	case PRStateChanged, *PRStateChanged:
+		return "pr.state_changed"
 	case SeenChanged, *SeenChanged:
 		return "seen.changed"
 	}
@@ -304,6 +359,18 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &ThreadArchived{}
 	case "thread.unarchived":
 		p = &ThreadUnarchived{}
+	case "thread.worktree_set":
+		p = &ThreadWorktreeSet{}
+	case "project.settings_changed":
+		p = &ProjectSettingsChanged{}
+	case "thread.pinned":
+		p = &ThreadPinned{}
+	case "thread.unpinned":
+		p = &ThreadUnpinned{}
+	case "thread.pr_linked":
+		p = &ThreadPRLinked{}
+	case "thread.pr_unlinked":
+		p = &ThreadPRUnlinked{}
 	case "thread.settings", "thread.agent":
 		p = &ThreadSettingsChanged{}
 	case "thread.session_bound":

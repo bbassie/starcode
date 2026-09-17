@@ -32,8 +32,10 @@ const (
 )
 
 var (
-	_ agent.Agent   = (*Agent)(nil)
-	_ agent.Session = (*session)(nil)
+	_ agent.Agent       = (*Agent)(nil)
+	_ agent.Describer   = (*Agent)(nil)
+	_ agent.LimitReader = (*Agent)(nil)
+	_ agent.Session     = (*session)(nil)
 )
 
 // Agent creates codex sessions. The zero value is not usable; call New.

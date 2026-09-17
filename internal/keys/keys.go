@@ -33,6 +33,7 @@ var Actions = []Action{
 	{ID: "thread-prev", Label: "Previous thread", Desc: "Open the thread above the current one", Default: "alt+up", Where: "everywhere"},
 	{ID: "thread-next", Label: "Next thread", Desc: "Open the thread below the current one", Default: "alt+down", Where: "everywhere"},
 	{ID: "thread-new", Label: "New thread", Desc: "Start a thread in the current project", Default: "mod+shift+o", Where: "everywhere"},
+	{ID: "prs", Label: "Pull requests", Desc: "Open your pull requests", Default: "alt+p", Where: "everywhere"},
 	{ID: "settings", Label: "Settings", Desc: "Open the settings", Default: "mod+,", Where: "everywhere"},
 	{ID: "terminal", Label: "Toggle terminal", Desc: "Open or close the shell panel", Default: "mod+`", Where: "threads, also inside the terminal"},
 	{ID: "changes", Label: "Toggle changes panel", Desc: "Open or close the side panel", Default: "mod+shift+g", Where: "threads, also inside the terminal"},

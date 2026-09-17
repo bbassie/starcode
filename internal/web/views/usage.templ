@@ -69,6 +69,8 @@ type UsageData struct {
 	Series       []UsageSeries
 	Agents       []UsageGroup
 	Models       []UsageGroup
+	// Limits is each instance's plan windows (see LimitsSection).
+	Limits []LimitsRow
 }
 
 func usageURL(days int, metric string) string {
@@ -275,6 +277,9 @@ templ UsagePage(d UsageData) {
 			<div class="settings-shell usage-shell">
 				@SettingsNav("usage")
 				<div class="settings-content usage-content">
+					if len(d.Limits) > 0 {
+						@LimitsSection(d.Limits)
+					}
 					<div class="usage-toolbar">
 						<div class="segmented" aria-label="Usage metric">
 							<a class={ templ.KV("current", d.Metric == "cost") } href={ templ.SafeURL(usageURL(d.Days, "cost")) }>Cost</a>

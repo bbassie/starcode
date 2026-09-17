@@ -115,7 +115,10 @@ func run() (string, error) {
 		return "", errors.New("refusing to listen on a non-loopback address without -token")
 	}
 
-	b := bus.New(256)
+	// A page that falls behind by this many events gets a full redraw;
+	// an agent turn streams deltas in bursts of hundreds, so the buffer is
+	// generous to keep those redraws rare.
+	b := bus.New(1024)
 	// Agent instances come from <data>/providers.json; the built-in
 	// "claude" and "codex" run the binaries named by the flags unless the
 	// file says otherwise.
@@ -136,6 +139,7 @@ func run() (string, error) {
 		agents[in.Name] = ag
 	}
 	a := app.New(st, b, agents, log)
+	a.WorktreeRoot = filepath.Join(*data, "worktrees")
 	if err := a.Recover(context.Background()); err != nil {
 		return "", err
 	}

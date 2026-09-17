@@ -11,9 +11,11 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/starfederation/datastar-go/datastar"
@@ -54,10 +56,11 @@ type Server struct {
 	Secure bool
 	CA     []byte
 	// Keys are the shortcut overrides; nil serves the defaults.
-	Keys *keys.Store
+	Keys      *keys.Store
 	mux       *http.ServeMux
 	cache     capsCache
 	providers providerCache
+	limits    limitsCache
 	prs       prCache
 	files     fileListCache
 	assets    string
@@ -71,6 +74,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 		usageCacheDir = filepath.Dir(attachDir)
 	}
 	s := &Server{App: a, Log: log, Token: token, Term: term.NewManager(log), AttachDir: attachDir, Usage: usagex.New(usageCacheDir), Providers: prov, mux: http.NewServeMux()}
+	s.prs.refresh = make(chan struct{}, 1)
 	if usageCacheDir != "" {
 		s.cache.path = filepath.Join(usageCacheDir, "capabilities.json")
 		s.cache.load()
@@ -79,9 +83,30 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	views.SetAssetVersion(s.assets)
 	static, _ := fs.Sub(staticFS, "static")
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", cacheStatic(http.FileServerFS(static))))
+	// The icon sprite (views.Sprite) is versioned by its own hash, so it
+	// can be cached for good.
+	s.mux.HandleFunc("GET /static/icons.svg", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := views.Sprite()
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Write([]byte(body))
+	})
+	// The service worker (notifications) must be served from the root
+	// to control every page; it is never cached, so a rebuild replaces
+	// it on the next page load.
+	s.mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		http.ServeFileFS(w, r, static, "sw.js")
+	})
 
 	s.mux.HandleFunc("GET /{$}", s.home)
+	s.mux.HandleFunc("GET /prs", s.prsPage)
+	s.mux.HandleFunc("GET /api/prs", s.refreshPRs)
+	s.mux.HandleFunc("GET /api/prs/{owner}/{name}/{n}", s.pullRequestPageDetail)
+	s.mux.HandleFunc("POST /api/prs/{owner}/{name}/{n}/thread", s.pullRequestPageThread)
 	s.mux.HandleFunc("GET /settings", s.settings)
+	s.mux.HandleFunc("GET /settings/appearance", s.appearance)
 	s.mux.HandleFunc("GET /settings/usage", s.usage)
 	s.mux.HandleFunc("GET /settings/providers", s.providersPage)
 	s.mux.HandleFunc("GET /settings/keys", s.keysPage)
@@ -96,10 +121,14 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/providers/{name}/toggle", s.toggleProvider)
 	s.mux.HandleFunc("POST /api/providers/{name}/delete", s.deleteProvider)
 	s.mux.HandleFunc("POST /api/providers/{name}/update", s.updateProvider)
+	s.mux.HandleFunc("POST /api/providers/{name}/login", s.loginProvider)
+	s.mux.HandleFunc("POST /api/providers/{name}/login/code", s.loginCode)
+	s.mux.HandleFunc("POST /api/providers/{name}/login/cancel", s.loginCancel)
 	s.mux.HandleFunc("POST /api/providers/{name}/models/toggle", s.toggleModel)
 	s.mux.HandleFunc("POST /api/providers/{name}/models/add", s.addModel)
 	s.mux.HandleFunc("POST /api/restart", s.restart)
 	s.mux.HandleFunc("GET /threads/{id}", s.thread)
+	s.mux.HandleFunc("GET /api/threads/{id}/items", s.earlierItems)
 	s.mux.HandleFunc("GET /events", s.events)
 	s.mux.HandleFunc("GET /api/search", s.search)
 
@@ -122,7 +151,21 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/threads/{id}/delete", s.deleteThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/archive", s.archiveThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/unarchive", s.unarchiveThread)
+	s.mux.HandleFunc("POST /api/threads/{id}/pin", s.pinThread)
+	s.mux.HandleFunc("POST /api/threads/{id}/unpin", s.pinThread)
+	s.mux.HandleFunc("POST /api/threads/{id}/steer", s.steer)
+	s.mux.HandleFunc("POST /api/threads/{id}/worktree/remove", s.removeWorktree)
+	s.mux.HandleFunc("POST /api/threads/{id}/worktree/thread", s.newThreadInWorktree)
+	s.mux.HandleFunc("POST /api/projects/{id}/worktrees/toggle", s.setProjectWorktrees)
+	s.mux.HandleFunc("POST /api/limits/refresh", s.refreshLimits)
+	s.mux.HandleFunc("POST /api/sidebar", s.setSidebarMode)
+	s.mux.HandleFunc("POST /api/settle", s.setSettle)
+	s.prActionRoutes()
+	s.slashRoutes()
+	s.worktreeRoutes()
 	s.mux.HandleFunc("POST /api/threads/{id}/rename", s.renameThread)
+	s.mux.HandleFunc("POST /api/threads/{id}/pr/link", s.linkPR)
+	s.mux.HandleFunc("POST /api/threads/{id}/pr/unlink", s.unlinkPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/rules/revoke", s.revokeRule)
 	s.mux.HandleFunc("POST /api/drafts/{key}", s.saveDraft)
 	s.mux.HandleFunc("POST /api/threads/{id}/settings", s.setThreadSettings)
@@ -142,10 +185,11 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	return s
 }
 
-// Watch runs the background checks (provider versions, a rebuilt binary)
-// until ctx ends.
+// Watch runs the background checks (provider versions, linked pull
+// requests, a rebuilt binary) until ctx ends.
 func (s *Server) Watch(ctx context.Context) {
 	go s.watchProviders(ctx)
+	go s.watchPRs(ctx)
 	if s.Update != nil {
 		go s.Update.Watch(ctx, s.App.Bus.Publish)
 	}
@@ -277,6 +321,15 @@ func cacheStatic(h http.Handler) http.Handler {
 	})
 }
 
+// sidebarMode is the sidebar layout the browser chose (Settings >
+// Appearance > Threads): "inbox", one list, or "project", grouped.
+func (s *Server) sidebarMode(r *http.Request) string {
+	if c, err := r.Cookie("sidebar"); err == nil && c.Value == "project" {
+		return "project"
+	}
+	return "inbox"
+}
+
 func (s *Server) theme(r *http.Request) string {
 	if c, err := r.Cookie("theme"); err == nil {
 		for _, t := range Themes {
@@ -293,7 +346,7 @@ func (s *Server) agentNames() []string { return s.App.AgentNames() }
 // ---- pages ----
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "home", views.Page{View: "home", Theme: s.theme(r), Draft: s.draft(r, "home")}).Render(r.Context(), w)
+	s.page(r.Context(), "home", views.Page{View: "home", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Draft: s.draft(r, "home")}).Render(r.Context(), w)
 }
 
 // draft is the saved composer text for key, for the page's initial
@@ -306,12 +359,52 @@ func (s *Server) draft(r *http.Request, key string) string {
 	return d
 }
 
+func (s *Server) appearance(w http.ResponseWriter, r *http.Request) {
+	s.page(r.Context(), "appearance", views.Page{View: "appearance", Theme: s.theme(r), Sidebar: s.sidebarMode(r)}).Render(r.Context(), w)
+}
+
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "settings", views.Page{View: "settings", Theme: s.theme(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "settings", views.Page{View: "settings", Theme: s.theme(r), Sidebar: s.sidebarMode(r), PairURL: s.pairURL(r)}).Render(r.Context(), w)
+}
+
+// pairURL is the link a phone can open to sign in: the address this
+// browser used when it is one a phone can reach, else the machine's first
+// private IPv4, with the token in the query (authed turns that into the
+// cookie). Empty without a token, when there is nothing to pair.
+func (s *Server) pairURL(r *http.Request) string {
+	if s.Token == "" {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host, port = r.Host, ""
+	}
+	if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+		host = ""
+		if addrs, err := net.InterfaceAddrs(); err == nil {
+			for _, a := range addrs {
+				if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil && ipn.IP.IsPrivate() {
+					host = ipn.IP.String()
+					break
+				}
+			}
+		}
+		if host == "" {
+			return ""
+		}
+	}
+	scheme := "http"
+	if s.Secure {
+		scheme = "https"
+	}
+	if port != "" {
+		host = net.JoinHostPort(host, port)
+	}
+	return scheme + "://" + host + "/?token=" + url.QueryEscape(s.Token)
 }
 
 func (s *Server) keysPage(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "keys", views.Page{View: "keys", Theme: s.theme(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "keys", views.Page{View: "keys", Theme: s.theme(r), Sidebar: s.sidebarMode(r)}).Render(r.Context(), w)
 }
 
 func (s *Server) keysData() views.KeysPageData {
@@ -367,7 +460,7 @@ func (s *Server) resetKeys(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	days, metric := usageParams(r)
-	s.page(r.Context(), "usage", views.Page{View: "usage", Theme: s.theme(r), UsageDays: days, UsageMetric: metric}).Render(r.Context(), w)
+	s.page(r.Context(), "usage", views.Page{View: "usage", Theme: s.theme(r), Sidebar: s.sidebarMode(r), UsageDays: days, UsageMetric: metric}).Render(r.Context(), w)
 }
 
 func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
@@ -378,12 +471,12 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.App.MarkSeen(r.Context(), id)
-	s.page(r.Context(), views.TabTitle(t), views.Page{View: "thread", ThreadID: id, Theme: s.theme(r), Draft: s.draft(r, id)}).Render(r.Context(), w)
+	s.page(r.Context(), views.TabTitle(t), views.Page{View: "thread", ThreadID: id, Theme: s.theme(r), Sidebar: s.sidebarMode(r), Draft: s.draft(r, id)}).Render(r.Context(), w)
 }
 
 // ---- helpers shared by events and commands ----
 
-func (s *Server) sidebarData(ctx context.Context, current, view string) (views.SidebarData, error) {
+func (s *Server) sidebarData(ctx context.Context, current, view, mode string) (views.SidebarData, error) {
 	ps, err := s.App.Store.Projects(ctx)
 	if err != nil {
 		return views.SidebarData{}, err
@@ -396,7 +489,11 @@ func (s *Server) sidebarData(ctx context.Context, current, view string) (views.S
 	if err != nil {
 		return views.SidebarData{}, err
 	}
-	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Agents: s.agentNames(), View: view, Updates: s.updateCount(), Looks: s.agentLooks(), Seen: seen}, nil
+	prs, err := s.App.Store.PRStates(ctx)
+	if err != nil {
+		return views.SidebarData{}, err
+	}
+	return views.SidebarData{Projects: ps, Threads: ts, Current: current, Mode: mode, Agents: s.agentNames(), View: view, Updates: s.updateCount(), SignedOut: s.signedOutCount(), Looks: s.agentLooks(), Seen: seen, PRs: prs}, nil
 }
 
 // contextData is the little the window gauge needs: the thread and the
@@ -409,7 +506,7 @@ func (s *Server) contextData(ctx context.Context, id string) (views.ThreadData, 
 		return views.ThreadData{}, err
 	}
 	caps, capsErrs := s.capabilities(ctx)
-	return views.ThreadData{Thread: t, Settings: views.SettingsData{
+	return views.ThreadData{Thread: t, Limits: s.agentLimits(t.Agent), Settings: views.SettingsData{
 		Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs,
 		Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode,
 	}}, nil
@@ -437,10 +534,23 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 		return views.ThreadData{}, err
 	}
 	caps, capsErrs := s.capabilities(ctx)
-	branch := ""
+	branch, repo := "", ""
 	if p.Path != "" {
-		branch = gitx.Read(ctx, p.Path).Branch
+		branch = gitx.Read(ctx, t.Dir(p)).Branch
 	}
-	return views.ThreadData{Thread: t, Project: p, Items: items, Queued: queued, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch,
+	var pr store.PRState
+	if ref, ok := t.Linked(); ok {
+		states, err := s.App.Store.PRStates(ctx)
+		if err != nil {
+			return views.ThreadData{}, err
+		}
+		pr = states[ref]
+		// The panel can show the PR when its repository is one of the
+		// project's remotes (a fork's clone has the upstream too).
+		if slices.Contains(s.projectRemotes(ctx, p), ref.Repo) {
+			repo = ref.Repo
+		}
+	}
+	return views.ThreadData{Thread: t, Project: p, Items: items, Queued: queued, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent),
 		Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }

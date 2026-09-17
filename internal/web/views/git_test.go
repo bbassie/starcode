@@ -49,7 +49,7 @@ func TestPRDetailRender(t *testing.T) {
 		Checks: []gitx.Check{{Name: "test", Status: "failure", URL: "https://ci/1"}, {Name: "lint", Status: "success"}},
 	}
 	var b strings.Builder
-	if err := PRDetailView(PRDetailData{Project: store.Project{ID: "p1"}, Detail: d, Loaded: true}).Render(context.Background(), &b); err != nil {
+	if err := PRDetailView(PRDetailData{Project: store.Project{ID: "p1"}, ProjectID: "p1", Base: "/api/projects/p1/prs/9", Detail: d, Loaded: true}).Render(context.Background(), &b); err != nil {
 		t.Fatal(err)
 	}
 	html := b.String()
@@ -62,8 +62,118 @@ func TestPRDetailRender(t *testing.T) {
 	// A clean, approved PR has no Needs work block.
 	clean := gitx.PRDetail{PR: gitx.PR{Number: 1, Title: "ok", Review: "approved", Checks: "success"}, MergeState: "CLEAN"}
 	b.Reset()
-	PRDetailView(PRDetailData{Project: store.Project{ID: "p1"}, Detail: clean, Loaded: true}).Render(context.Background(), &b)
+	PRDetailView(PRDetailData{Project: store.Project{ID: "p1"}, ProjectID: "p1", Base: "/api/projects/p1/prs/9", Detail: clean, Loaded: true}).Render(context.Background(), &b)
 	if strings.Contains(b.String(), "Needs work") || !strings.Contains(b.String(), "ready to merge") {
 		t.Errorf("clean PR rendered wrong:\n%s", b.String())
+	}
+}
+
+func TestPRsPageRender(t *testing.T) {
+	mine := gitx.MyPullRequests{Login: "bb",
+		Assigned: []gitx.MyPR{{PR: gitx.PR{Number: 3, Title: "Assigned one", URL: "https://github.com/o/r/pull/3", Head: "a", Base: "main", Author: "cc", Review: "changes_requested", Checks: "failure", Comments: 4, UpdatedAt: time.Now()}, Repo: "o/r", State: "open"}},
+		Authored: []gitx.MyPR{{PR: gitx.PR{Number: 5, Title: "Elsewhere", URL: "https://github.com/x/y/pull/5", Head: "b", Base: "main", Author: "bb", UpdatedAt: time.Now()}, Repo: "x/y", State: "open"}},
+	}
+	d := PRsPageData{Mine: mine, Loaded: true, At: time.Now(),
+		Repos:   map[string]store.Project{"o/r": {ID: "p1", Name: "r"}},
+		Threads: map[store.PR][]store.Thread{{Repo: "o/r", Number: 3}: {{ID: "t1", Title: "Fix the review", Status: "idle"}}},
+	}
+	var b strings.Builder
+	if err := PRsPage(d).Render(context.Background(), &b); err != nil {
+		t.Fatal(err)
+	}
+	html := b.String()
+	for _, want := range []string{"Assigned to you", "Waiting for your review", "Opened by you", "changes requested", "checks failed", `href="/threads/t1"`, "Fix the review", `/api/prs/o/r/3/thread?project=p1`, `@get(&#39;/api/prs/o/r/3&#39;)`, "https://github.com/x/y/pull/5", "none.", `title="4 comments"`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	b.Reset()
+	PRsPage(PRsPageData{Err: "the GitHub CLI (gh) is not installed", Loaded: true}).Render(context.Background(), &b)
+	if !strings.Contains(b.String(), "gh) is not installed") {
+		t.Error("error not shown")
+	}
+}
+
+func TestPRChipStates(t *testing.T) {
+	for _, tc := range []struct {
+		st   store.PRState
+		word string
+		icon string
+	}{
+		{store.PRState{PR: store.PR{Number: 1}}, "", "git-pull-request"},
+		{store.PRState{PR: store.PR{Number: 1}, State: "open"}, "open", "git-pull-request"},
+		{store.PRState{PR: store.PR{Number: 1}, State: "open", Draft: true}, "draft", "git-pull-request-draft"},
+		{store.PRState{PR: store.PR{Number: 1}, State: "open", Draft: true, Review: "changes_requested"}, "changes requested", "message-square-x"},
+		{store.PRState{PR: store.PR{Number: 1}, State: "open", Review: "approved"}, "approved", "check"},
+		{store.PRState{PR: store.PR{Number: 1}, State: "open", Review: "rereview_requested"}, "re-review requested", "eye"},
+		{store.PRState{PR: store.PR{Number: 1}, State: "merged", Review: "changes_requested"}, "merged", "git-merge"},
+		{store.PRState{PR: store.PR{Number: 1}, State: "closed"}, "closed", "git-pull-request-closed"},
+	} {
+		if got := prWord(tc.st); got != tc.word {
+			t.Errorf("prWord(%+v) = %q, want %q", tc.st, got, tc.word)
+		}
+		if got := prChipIcon(tc.st); got != tc.icon {
+			t.Errorf("prChipIcon(%+v) = %q, want %q", tc.st, got, tc.icon)
+		}
+	}
+	th := store.Thread{ID: "t1", Title: "T", Status: "idle", PRRepo: "o/r", PRNumber: 12, PRURL: "u"}
+	var b strings.Builder
+	ThreadRow(th, store.Project{Name: "p"}, false, false, AgentLook{}, false, prOf(th, map[store.PR]store.PRState{{Repo: "o/r", Number: 12}: {State: "merged", PR: store.PR{Repo: "o/r", Number: 12}, Title: "Merged one"}})).Render(context.Background(), &b)
+	if html := b.String(); !strings.Contains(html, "#12") || !strings.Contains(html, "pr-chip merged") || !strings.Contains(html, "Merged one (merged)") {
+		t.Errorf("row chip:\n%s", html)
+	}
+}
+
+func TestPRDetailPageActions(t *testing.T) {
+	det := gitx.PRDetail{PR: gitx.PR{Number: 4, Title: "P", URL: "https://github.com/o/r/pull/4", Head: "h", Base: "main", Review: "changes_requested"},
+		Reviews: []gitx.Review{{Author: "cool", State: "CHANGES_REQUESTED", Body: "fix it", URL: "https://github.com/o/r/pull/4#pullrequestreview-7"}}}
+	// Known project: the thread posts straight to it, no draft button on a page.
+	d := PRDetailData{Detail: det, Loaded: true, Page: true, Repo: "o/r", Base: "/api/prs/o/r/4", ProjectID: "p1", Project: store.Project{ID: "p1"}, Projects: []store.Project{{ID: "p1", Name: "r"}}}
+	var b strings.Builder
+	PRPageDetail(d).Render(context.Background(), &b)
+	html := b.String()
+	for _, want := range []string{`@post(&#39;/api/prs/o/r/4/thread?project=p1&#39;)`, `@post(&#39;/api/prs/o/r/4/thread?focus=https://github.com/o/r/pull/4%23pullrequestreview-7&amp;project=p1&#39;)`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(html, "/draft") || strings.Contains(html, "pr-pick") {
+		t.Error("page shows a draft button or a picker it should not")
+	}
+	// Unknown repository: a picker, and the thread action reads it.
+	d.ProjectID, d.Project = "", store.Project{}
+	b.Reset()
+	PRPageDetail(d).Render(context.Background(), &b)
+	html = b.String()
+	if !strings.Contains(html, "pr-pick") || !strings.Contains(html, `project=&#39; + $prproject)`) {
+		t.Errorf("picker missing:\n%s", html)
+	}
+	// The panel: draft buttons, no picker, project routes.
+	pd := PRDetailData{Detail: det, Loaded: true, Repo: "o/r", Base: "/api/projects/p1/prs/4", ProjectID: "p1", Project: store.Project{ID: "p1"}, ThreadID: "t1"}
+	b.Reset()
+	PRDetailView(pd).Render(context.Background(), &b)
+	html = b.String()
+	for _, want := range []string{`@post(&#39;/api/projects/p1/prs/4/thread&#39;)`, `@post(&#39;/api/projects/p1/prs/4/draft?focus=`, "link to thread"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("panel missing %q", want)
+		}
+	}
+}
+
+// The review card offers merge on an open PR and nothing on a merged one.
+func TestPRReviewCard(t *testing.T) {
+	open := gitx.PRDetail{PR: gitx.PR{Number: 9, Base: "main"}, State: "open", MergeState: "BEHIND"}
+	var b strings.Builder
+	PRDetailView(PRDetailData{Project: store.Project{ID: "p1"}, ProjectID: "p1", Base: "/api/projects/p1/prs/9", Detail: open, Loaded: true}).Render(context.Background(), &b)
+	for _, want := range []string{"prs/9/merge", "prs/9/approve", "prs/9/request-changes", "prs/9/comment", "prs/9/update-branch"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("open PR card lacks %s", want)
+		}
+	}
+	b.Reset()
+	merged := gitx.PRDetail{PR: gitx.PR{Number: 9, Base: "main"}, State: "merged"}
+	PRDetailView(PRDetailData{Project: store.Project{ID: "p1"}, ProjectID: "p1", Base: "/api/projects/p1/prs/9", Detail: merged, Loaded: true}).Render(context.Background(), &b)
+	if strings.Contains(b.String(), "prs/9/merge") || strings.Contains(b.String(), "prs/9/approve") {
+		t.Error("merged PR card still offers merge or approve")
 	}
 }

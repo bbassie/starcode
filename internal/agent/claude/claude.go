@@ -55,6 +55,11 @@ type Agent struct {
 	binary string
 	env    []string // extra KEY=VALUE pairs for every child
 	log    *slog.Logger
+
+	// lmu guards overageModel: the display name of the model-scoped weekly
+	// the last Limits probe saw. See limits.go.
+	lmu          sync.Mutex
+	overageModel string
 }
 
 type Option func(*Agent)
@@ -98,7 +103,11 @@ func New(opts ...Option) *Agent {
 	return a
 }
 
-var _ agent.Agent = (*Agent)(nil)
+var (
+	_ agent.Agent       = (*Agent)(nil)
+	_ agent.Describer   = (*Agent)(nil)
+	_ agent.LimitReader = (*Agent)(nil)
+)
 
 func (a *Agent) Name() string { return "claude" }
 
@@ -387,6 +396,7 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 
 		bypassOK: cfg.PermissionMode == "bypassPermissions",
 	}
+	s.st.scopedModel = a.scopedModel
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -539,9 +549,12 @@ type session struct {
 	st *state
 	// title is the last native ai-title surfaced to the app. Claude's public
 	// stream does not currently include it, so readLoop supplements the
-	// stream from the CLI's session transcript after a turn completes.
-	title  string
-	titles titleReader
+	// stream from the CLI's session transcript: at most once a second while
+	// the session has no title yet, and again after every turn completes.
+	// titleAt is the time of the last such read.
+	title   string
+	titles  titleReader
+	titleAt time.Time
 
 	// emu orders sends on events against closing it.
 	emu      sync.Mutex
@@ -750,7 +763,11 @@ func (s *session) readLoop() {
 			if ev.Kind == agent.KindThreadTitle && ev.ThreadTitle != nil {
 				s.title = strings.TrimSpace(ev.ThreadTitle.Title)
 			}
-			if ev.Kind == agent.KindTurnCompleted {
+			// The CLI names a session seconds after the first prompt, long
+			// before a first turn that may run for an hour ends. Reading only
+			// at completion would leave the prompt text as the title until
+			// then, so poll while there is nothing better to show.
+			if ev.Kind == agent.KindTurnCompleted || (s.title == "" && time.Since(s.titleAt) >= titlePollInterval) {
 				s.mu.Lock()
 				sessionID := s.st.sessionID
 				s.mu.Unlock()
@@ -775,7 +792,15 @@ func (s *session) readLoop() {
 	}
 }
 
+// titlePollInterval bounds how often readLoop reads the transcript while a
+// session has no title yet. Tests set it to zero.
+var titlePollInterval = time.Second
+
 func (s *session) emitPersistedTitle(sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	s.titleAt = time.Now()
 	title := s.titles.read(s.config, sessionID)
 	if title == "" || title == s.title {
 		return nil
@@ -897,6 +922,10 @@ type state struct {
 
 	// outbox holds lines the session must write back to the CLI.
 	outbox [][]byte
+
+	// scopedModel names the model-scoped weekly window, for the streamed
+	// overage event that does not name it itself. nil means unknown.
+	scopedModel func() string
 }
 
 type blockState struct {
@@ -967,6 +996,9 @@ func (st *state) endTurn() {
 type outLine struct {
 	Type    string `json:"type"`
 	Subtype string `json:"subtype"`
+	// ParentToolUseID is set on everything a subagent does: the Task
+	// tool call it runs under. The transcript nests it there.
+	ParentToolUseID string `json:"parent_tool_use_id"`
 
 	// system/init
 	SessionID string `json:"session_id"`
@@ -1108,22 +1140,38 @@ func parseLine(line []byte, st *state) []agent.Event {
 		st.log.Debug("unparsable line", "err", err, "line", clip(string(line), 200))
 		return nil
 	}
+	evs := parseOut(&out, line, st)
+	if out.ParentToolUseID != "" {
+		for i := range evs {
+			switch {
+			case evs[i].ToolStarted != nil:
+				evs[i].ToolStarted.Parent = out.ParentToolUseID
+			case evs[i].TextDelta != nil:
+				evs[i].TextDelta.Parent = out.ParentToolUseID
+			case evs[i].ThinkingDelta != nil:
+				evs[i].ThinkingDelta.Parent = out.ParentToolUseID
+			}
+		}
+	}
+	return evs
+}
 
+func parseOut(out *outLine, line []byte, st *state) []agent.Event {
 	switch out.Type {
 	case "system":
-		return parseSystem(&out, st)
+		return parseSystem(out, st)
 	case "stream_event":
-		return parseStreamEvent(&out, st)
+		return parseStreamEvent(out, st)
 	case "assistant":
-		return parseAssistant(&out, st)
+		return parseAssistant(out, st)
 	case "user":
-		return parseUser(&out, st)
+		return parseUser(out, st)
 	case "control_request":
-		return parseControlRequest(&out, st)
+		return parseControlRequest(out, st)
 	case "rate_limit_event":
-		return parseRateLimit(&out, st)
+		return parseRateLimit(out, st)
 	case "result":
-		return parseResult(&out, st)
+		return parseResult(out, st)
 	case "ai-title":
 		if title := strings.TrimSpace(out.AITitle); title != "" {
 			return []agent.Event{{Kind: agent.KindThreadTitle, ThreadTitle: &agent.ThreadTitle{Title: title}}}
@@ -1385,24 +1433,38 @@ func parseControlRequest(out *outLine, st *state) []agent.Event {
 	}}
 }
 
+// parseRateLimit turns a rate_limit_event into a notice when the CLI is
+// being throttled, and into a Limits update for the one window it names
+// when it carries a utilization.
 func parseRateLimit(out *outLine, st *state) []agent.Event {
-	status := out.Status
+	var info rateLimitInfo
 	if len(out.RateLimitInfo) > 0 {
-		var info struct {
-			Status        string `json:"status"`
-			RateLimitType string `json:"rateLimitType"`
-		}
-		if err := json.Unmarshal(out.RateLimitInfo, &info); err == nil && info.Status != "" {
-			status = info.Status
+		if err := json.Unmarshal(out.RateLimitInfo, &info); err != nil {
+			st.log.Debug("unparsable rate_limit_info", "err", err)
 		}
 	}
-	if status == "" || status == "allowed" {
-		return nil
+	status := out.Status
+	if info.Status != "" {
+		status = info.Status
 	}
-	return []agent.Event{{
-		Kind:   agent.KindNotice,
-		Notice: &agent.Notice{Text: "Rate limit " + status + "."},
-	}}
+	var events []agent.Event
+	if status != "" && status != "allowed" {
+		events = append(events, agent.Event{
+			Kind:   agent.KindNotice,
+			Notice: &agent.Notice{Text: "Rate limit " + status + "."},
+		})
+	}
+	scoped := ""
+	if st.scopedModel != nil {
+		scoped = st.scopedModel()
+	}
+	if w, ok := limitWindowFromEvent(info, scoped); ok {
+		events = append(events, agent.Event{
+			Kind:   agent.KindLimits,
+			Limits: &agent.Limits{CheckedAt: time.Now(), Windows: []agent.LimitWindow{w}},
+		})
+	}
+	return events
 }
 
 func parseResult(out *outLine, st *state) []agent.Event {
