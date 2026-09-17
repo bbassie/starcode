@@ -213,7 +213,9 @@ func (su *SelfUpdate) Watch(ctx context.Context, publish func(...any)) {
 func (su *SelfUpdate) gitHome(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
+	// --no-optional-locks: the status check must not take index.lock
+	// under a git command the user is running in the same checkout.
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks"}, args...)...)
 	cmd.Dir = filepath.Dir(su.Home)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
