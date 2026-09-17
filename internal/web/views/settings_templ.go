@@ -1481,7 +1481,7 @@ func SettingsPage(d SettingsPageData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, ">By project</option></select></div><div class=\"setting-row\"><div><label for=\"settle-merged\">Settle merged threads</label><p class=\"dim\">A thread settles when its pull request merges.</p></div><input id=\"settle-merged\" type=\"checkbox\" data-bind:settle-merged data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"settle-days\">Settle inactive threads after</label><p class=\"dim\">Days without activity before a thread settles on its own; 0 keeps them. Any new activity brings a thread back.</p></div><span class=\"num-unit\"><input id=\"settle-days\" class=\"in num\" type=\"number\" min=\"0\" max=\"365\" step=\"1\" inputmode=\"numeric\" data-bind:settle-days data-on:change__debounce.500ms=\"@post('/api/settle')\"> <span class=\"dim\">days</span></span></div></div></section><section id=\"device\" class=\"settings-section\"><header><h1>This device</h1><p class=\"dim\">Notifications on this browser, and signing a phone in.</p></header><div class=\"settings-card\"><div class=\"setting-row\"><div><label for=\"notify-btn\">Notifications</label><p class=\"dim\">A turn that ends or asks for an approval while starcode is out of sight posts a notification on this device. Needs the certificate installed (see the login page) or another secure context.</p></div><button id=\"notify-btn\" class=\"btn\" type=\"button\" data-init=\"el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)\" data-on:click=\"(el.dataset.state === 'on' ? Promise.resolve(notifyDisable()) : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })\">notifications</button></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, ">By project</option></select></div><div class=\"setting-row\"><div><label for=\"settle-merged\">Settle merged threads</label><p class=\"dim\">A thread settles when its pull request merges.</p></div><input id=\"settle-merged\" type=\"checkbox\" data-bind:settle-merged data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"settle-days\">Settle inactive threads after</label><p class=\"dim\">Days without activity before a thread settles on its own; 0 keeps them. Any new activity brings a thread back.</p></div><span class=\"num-unit\"><input id=\"settle-days\" class=\"in num\" type=\"number\" min=\"0\" max=\"365\" step=\"1\" inputmode=\"numeric\" data-bind:settle-days data-on:change__debounce.500ms=\"@post('/api/settle')\"> <span class=\"dim\">days</span></span></div></div></section><section id=\"device\" class=\"settings-section\"><header><h1>This device</h1><p class=\"dim\">Notifications and VS Code on this browser, and signing a phone in.</p></header><div class=\"settings-card\"><div class=\"setting-row\"><div><label for=\"notify-btn\">Notifications</label><p class=\"dim\">A turn that ends or asks for an approval while starcode is out of sight posts a notification on this device. Needs the certificate installed (see the login page) or another secure context.</p></div><button id=\"notify-btn\" class=\"btn\" type=\"button\" data-init=\"el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)\" data-on:click=\"(el.dataset.state === 'on' ? Promise.resolve(notifyDisable()) : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })\">notifications</button></div><div class=\"setting-row\"><div><label for=\"vscode-host\">VS Code SSH host</label><p class=\"dim\">The VS Code button on a thread opens its folder over Remote-SSH on this host, named the way this computer's ssh config knows it (user@host works). Empty means the account starcode runs as at the address in the browser, or a local folder when that address is localhost. Saved for this browser.</p></div><input id=\"vscode-host\" class=\"in\" type=\"text\" autocomplete=\"off\" spellcheck=\"false\" autocapitalize=\"off\" data-init=\"el.value = vscodeHost(); el.placeholder = vscodeLocal() ? 'opens locally' : vscodeDefaultHost()\" data-preserve-attr=\"placeholder\" data-on:input=\"vscodeHostSet(el.value)\"></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1493,7 +1493,7 @@ func SettingsPage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var54 string
 			templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.ResolveAttributeValue("copyText(" + jsq(d.PairURL) + ", el)")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 591, Col: 98}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 598, Col: 98}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var54)
 			if templ_7745c5c3_Err != nil {
@@ -1514,7 +1514,7 @@ func SettingsPage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var55 string
 			templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.PairQR)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 593, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 600, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var55)
 			if templ_7745c5c3_Err != nil {
@@ -1583,7 +1583,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var57 string
 			templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.ResolveAttributeValue(theme)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 628, Col: 31}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 635, Col: 31}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var57)
 			if templ_7745c5c3_Err != nil {
@@ -1606,7 +1606,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var58 string
 			templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.JoinStringErrs(themeName(theme))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 628, Col: 83}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 635, Col: 83}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var58))
 			if templ_7745c5c3_Err != nil {

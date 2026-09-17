@@ -24,7 +24,7 @@ func TestSpriteCoversTemplateIcons(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
-			if !spriteSet[m[1]] {
+			if !spriteSet[m[1]] && brandPaths[m[1]] == "" {
 				t.Errorf("%s: icon %q is not in spriteIcons", e.Name(), m[1])
 			}
 		}

@@ -285,6 +285,10 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 			Hotkey{Combo: Key("terminal"), Label: "Toggle terminal", Action: "$term = !$term", Term: true},
 			Hotkey{Combo: Key("changes"), Label: "Toggle changes panel", Action: "$git = !$git", Term: true},
 			Hotkey{Combo: Key("prompt"), Label: "Focus the prompt", Action: "promptFocus()", Term: true},
+			// The header's button, which the stream redraws when the
+			// thread gets or loses a worktree; the page's copy of these
+			// keys is not redrawn.
+			Hotkey{Combo: Key("vscode"), Label: "Open in VS Code", Action: "document.querySelector('#mainhead .vscode-open')?.click()"},
 			Hotkey{Combo: Key("approve"), Label: "Allow the waiting approval", Action: approveFirst(domain.DecisionAllow)},
 			Hotkey{Combo: Key("approve-session"), Label: "Allow it for the session", Action: approveFirst(domain.DecisionAllowSession)},
 			Hotkey{Combo: Key("deny"), Label: "Deny the waiting approval", Action: approveFirst(domain.DecisionDeny)},

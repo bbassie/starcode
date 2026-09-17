@@ -791,6 +791,10 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 			Hotkey{Combo: Key("terminal"), Label: "Toggle terminal", Action: "$term = !$term", Term: true},
 			Hotkey{Combo: Key("changes"), Label: "Toggle changes panel", Action: "$git = !$git", Term: true},
 			Hotkey{Combo: Key("prompt"), Label: "Focus the prompt", Action: "promptFocus()", Term: true},
+			// The header's button, which the stream redraws when the
+			// thread gets or loses a worktree; the page's copy of these
+			// keys is not redrawn.
+			Hotkey{Combo: Key("vscode"), Label: "Open in VS Code", Action: "document.querySelector('#mainhead .vscode-open')?.click()"},
 			Hotkey{Combo: Key("approve"), Label: "Allow the waiting approval", Action: approveFirst(domain.DecisionAllow)},
 			Hotkey{Combo: Key("approve-session"), Label: "Allow it for the session", Action: approveFirst(domain.DecisionAllowSession)},
 			Hotkey{Combo: Key("deny"), Label: "Deny the waiting approval", Action: approveFirst(domain.DecisionDeny)},
@@ -841,7 +845,7 @@ func HotkeyButtons(keys []Hotkey) templ.Component {
 			var templ_7745c5c3_Var30 string
 			templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.ResolveAttributeValue(k.Combo)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 308, Col: 46}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 312, Col: 46}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var30)
 			if templ_7745c5c3_Err != nil {
@@ -864,7 +868,7 @@ func HotkeyButtons(keys []Hotkey) templ.Component {
 			var templ_7745c5c3_Var31 string
 			templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.ResolveAttributeValue(k.Action)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 308, Col: 95}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 312, Col: 95}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var31)
 			if templ_7745c5c3_Err != nil {
@@ -877,7 +881,7 @@ func HotkeyButtons(keys []Hotkey) templ.Component {
 			var templ_7745c5c3_Var32 string
 			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(k.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 308, Col: 107}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 312, Col: 107}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 			if templ_7745c5c3_Err != nil {
@@ -938,7 +942,7 @@ func ShortcutHelp(keys []Hotkey) templ.Component {
 			var templ_7745c5c3_Var34 string
 			templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(k.Label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 320, Col: 42}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/palette.templ`, Line: 324, Col: 42}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 			if templ_7745c5c3_Err != nil {

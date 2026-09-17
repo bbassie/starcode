@@ -94,8 +94,12 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 		out = append(out,
 			views.Command{Label: "Toggle terminal", Icon: "terminal", Action: "$term = !$term", Key: views.Key("terminal")},
 			views.Command{Label: "Toggle changes panel", Icon: "git-compare-arrows", Action: "$git = !$git", Key: views.Key("changes")},
-			views.Command{Label: "Delete thread", Icon: "trash-2", Action: "confirm('Delete this thread?') && @post('/api/threads/" + t.ID + "/delete')"},
 		)
+		// The sort above put the thread's project first.
+		if len(ps) > 0 && ps[0].ID == t.ProjectID {
+			out = append(out, views.Command{Label: "Open in VS Code", Icon: "brand-vscode", Action: views.VSCodeOpen(t.Dir(ps[0])), Key: views.Key("vscode")})
+		}
+		out = append(out, views.Command{Label: "Delete thread", Icon: "trash-2", Action: "confirm('Delete this thread?') && @post('/api/threads/" + t.ID + "/delete')"})
 	}
 	out = append(out,
 		views.Command{Label: "Projects overview", Icon: "star", Href: "/"},

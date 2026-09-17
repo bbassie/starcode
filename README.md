@@ -118,6 +118,12 @@ Any text file up to 1 MiB opens in the panel, from the tree, the changes list or
 
 The terminal button (or Ctrl+`) opens a shell in the project directory under the transcript. Split opens another one beside it; the restart and close buttons act on the pane that last had focus, and closing the last pane hides the panel. Shells run on the server and outlive the page: a reload gets its panes back with their scrollback (`GET /api/term/{id}/panes` lists them), and they end when the thread is deleted or starcode stops.
 
+## VS Code
+
+The VS Code button in a thread's header (or Ctrl+O, or "Open in VS Code" in the palette) opens the thread's folder in VS Code on the computer the browser runs on. For a thread with a worktree that is the worktree; otherwise it is the project checkout. starcode mostly runs on another machine, so the button hands the browser a `vscode://vscode-remote/ssh-remote+<host><path>` link, as T3 Code does, and VS Code's Remote-SSH extension connects and opens the folder there. The browser asks once whether to open VS Code.
+
+The host defaults to the account starcode runs as at the address in the address bar: `bbassie@devbox` for a page on `https://devbox:4000`. When your ssh config knows the machine by another name, or you reach starcode through a tunnel on localhost, put that name under Settings > General, This device. The browser keeps it in localStorage, since every computer has its own ssh config. On localhost with no host set the link is `vscode://file<path>`, which opens the folder locally. Phones and tablets have no VS Code, so the button is hidden there.
+
 ## Search, commands and keys
 
 Each sent prompt has a copy button and an "edit and resend" button that puts the text back in the composer; each finished reply has a copy button for its markdown. Selecting part of a reply (or a PR body) and pressing Ctrl+C also copies markdown: `static/mdcopy.js` walks the selected HTML back into headings, emphasis, links, lists, fences and tables, keeps the rendered HTML in the rich-text flavor, and copies a selection inside a code block as bare code. In the terminal, Ctrl+V pastes (xterm.js would otherwise send it to the shell as a control byte), and the paste button in the terminal head does the same for a phone. Copying falls back to a selection copy without a secure context; pasting has no fallback, which is one reason for HTTPS above.
@@ -152,6 +158,7 @@ Defaults:
 | Ctrl+` | toggle the terminal |
 | Ctrl+Shift+G | toggle the changes panel |
 | Ctrl+Shift+F | focus the prompt |
+| Ctrl+O | open the thread in VS Code |
 | Alt+Y / Alt+Shift+Y / Alt+N | allow, allow for session, deny the oldest waiting approval |
 | Alt+P | pull requests |
 | Ctrl+, | settings |
@@ -160,7 +167,7 @@ Defaults:
 
 ## Settings
 
-General holds the thread settings (the sidebar layout, when threads settle), this device's notifications and the phone pairing link. Appearance picks the theme. Usage charts cost and tokens from the CLIs' own transcripts (see `internal/usage`), scanning every instance's config dir and showing each instance as its own series, in its tag colour when it has one. Sessions starcode itself ran are matched to their transcript by session id so nothing is counted twice.
+General holds the thread settings (the sidebar layout, when threads settle), this device's notifications and VS Code host, and the phone pairing link. Appearance picks the theme. Usage charts cost and tokens from the CLIs' own transcripts (see `internal/usage`), scanning every instance's config dir and showing each instance as its own series, in its tag colour when it has one. Sessions starcode itself ran are matched to their transcript by session id so nothing is counted twice.
 
 Above the chart, Plan limits shows what each instance's subscription has used: the 5-hour session window and the weekly one (and the model-scoped weekly, "Weekly · Fable", where the plan has it), each with its percentage and when it resets. Claude Code answers a `get_usage` request over the same control channel the model list comes from, Codex its app server's `account/rateLimits/read`; both cost a process launch and no tokens. The read runs with the provider check in the background and on the section's refresh button, and the windows an agent streams during a turn (Claude's `rate_limit_event`, Codex's `account/rateLimits/updated`) move the bars as it works. The same bars sit at the bottom of the composer's context card, so "can I start another task before the reset" has an answer next to the prompt.
 
