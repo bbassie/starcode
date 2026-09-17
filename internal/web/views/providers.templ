@@ -515,7 +515,7 @@ templ UpdateBanner(d BannerData) {
 			}
 			for _, b := range d.Builds {
 				<div class="update-row">
-					<span>@Icon("folder-git-2", "ui-icon") <span>Branch <span class="mono">{ b.Branch }</span> was built</span>
+					<span>@Icon("folder-git-2", "ui-icon") <span>This thread's build is ready: <span class="mono">{ b.Branch }</span></span>
 						if b.Title != "" {
 							<span class="dim">({ b.Title })</span>
 						}

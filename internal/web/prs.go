@@ -526,6 +526,8 @@ func (s *Server) pollPRs(ctx context.Context, refs []store.PR) {
 		}
 		if had && old.State != "merged" && st.State == "merged" {
 			s.settleMerged(ctx, st.PR)
+			// A merge is what leaves the home checkout behind origin.
+			s.Update.ScanHomeSoon()
 		}
 	}
 	if changed {

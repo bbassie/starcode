@@ -294,7 +294,7 @@ func (c *conn) renderProviders(ctx context.Context) error {
 }
 
 func (c *conn) renderUpdateBanner(ctx context.Context) error {
-	return c.sse.PatchElementTempl(views.UpdateBanner(c.s.bannerData(ctx)))
+	return c.sse.PatchElementTempl(views.UpdateBanner(c.s.bannerData(ctx, c.threadID)))
 }
 
 func (c *conn) renderSidebar(ctx context.Context) error {

@@ -48,6 +48,10 @@ type SelfUpdate struct {
 	changed atomic.Bool
 	log     *slog.Logger
 
+	// rescan asks the watcher to check the home checkout now (a merge
+	// the PR poll saw) instead of at the next interval.
+	rescan chan struct{}
+
 	mu     sync.Mutex
 	builds []Build
 	target string
@@ -77,7 +81,7 @@ type Build struct {
 }
 
 func NewSelfUpdate(log *slog.Logger) *SelfUpdate {
-	su := &SelfUpdate{log: log, started: time.Now()}
+	su := &SelfUpdate{log: log, started: time.Now(), rescan: make(chan struct{}, 1)}
 	path, err := os.Executable()
 	if err != nil {
 		return su
@@ -174,8 +178,21 @@ func (su *SelfUpdate) choose(path string) bool {
 	return false
 }
 
+// ScanHomeSoon has the watcher check the home checkout against origin
+// at its next tick; the PR poll calls it when a pull request merged.
+func (su *SelfUpdate) ScanHomeSoon() {
+	if su == nil {
+		return
+	}
+	select {
+	case su.rescan <- struct{}{}:
+	default:
+	}
+}
+
 // Watch polls until ctx ends: the home binary every five seconds, the
-// worktrees every fifteen. Each finding publishes BinaryUpdated once.
+// worktrees every fifteen, the home checkout against origin every two
+// minutes or when asked. Each finding publishes BinaryUpdated once.
 func (su *SelfUpdate) Watch(ctx context.Context, publish func(...any)) {
 	if su.Home == "" {
 		return
@@ -198,9 +215,13 @@ func (su *SelfUpdate) Watch(ctx context.Context, publish func(...any)) {
 			if n++; n%3 == 0 && su.scanWorktrees(ctx) {
 				publish(domain.BinaryUpdated{})
 			}
-			// The home checkout against origin: at the second tick, then
-			// every five minutes, the PR poll's pace.
-			if n == 2 || n%60 == 0 {
+			asked := false
+			select {
+			case <-su.rescan:
+				asked = true
+			default:
+			}
+			if asked || n == 2 || n%24 == 0 {
 				if su.scanHome(ctx) {
 					publish(domain.BinaryUpdated{})
 				}
@@ -221,20 +242,29 @@ func (su *SelfUpdate) gitHome(ctx context.Context, timeout time.Duration, args .
 	return strings.TrimSpace(string(out)), err
 }
 
-// scanHome fetches origin for the home checkout and counts how far
-// behind it is. Only a checkout on its default branch, clean, with no
-// local commits ahead, is reported: that is the one a fast-forward pull
-// brings up without a merge. True when the count changed.
+// scanHome fetches the home checkout's upstream and counts how far
+// behind it is. Only a clean checkout on a branch with an upstream and
+// no local commits ahead is reported: that is the one a fast-forward
+// pull brings up without a merge. Anything else is logged at debug and
+// shown as nothing. True when the count changed.
 func (su *SelfUpdate) scanHome(ctx context.Context) bool {
 	behind := 0
-	if _, err := su.gitHome(ctx, 60*time.Second, "fetch", "--quiet", "origin"); err == nil {
-		branch, _ := su.gitHome(ctx, 10*time.Second, "rev-parse", "--abbrev-ref", "HEAD")
-		def, _ := su.gitHome(ctx, 10*time.Second, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	if _, err := su.gitHome(ctx, 60*time.Second, "fetch", "--quiet"); err != nil {
+		su.log.Debug("home checkout fetch failed", "err", err)
+	} else {
 		status, _ := su.gitHome(ctx, 10*time.Second, "status", "--porcelain")
 		counts, err := su.gitHome(ctx, 10*time.Second, "rev-list", "--left-right", "--count", "HEAD...@{u}")
-		if err == nil && branch != "" && def == "origin/"+branch && status == "" {
-			var ahead int
-			if _, err := fmt.Sscanf(counts, "%d\t%d", &ahead, &behind); err != nil || ahead > 0 {
+		var ahead int
+		switch {
+		case err != nil:
+			su.log.Debug("home checkout has no upstream", "out", counts)
+		case status != "":
+			su.log.Debug("home checkout has local changes, no pull offered")
+		default:
+			if _, err := fmt.Sscanf(counts, "%d %d", &ahead, &behind); err != nil || ahead > 0 {
+				if ahead > 0 {
+					su.log.Debug("home checkout is ahead of its upstream, no pull offered", "ahead", ahead)
+				}
 				behind = 0
 			}
 		}
@@ -264,7 +294,7 @@ func (su *SelfUpdate) PullAndBuild(publish func(...any)) error {
 	publish(domain.BinaryUpdated{})
 	go func() {
 		ctx := context.Background()
-		out, err := su.gitHome(ctx, 2*time.Minute, "pull", "--ff-only", "--quiet", "origin")
+		out, err := su.gitHome(ctx, 2*time.Minute, "pull", "--ff-only", "--quiet")
 		if err == nil {
 			// templ lives in ~/go/bin, which the service's PATH may lack.
 			ctx2, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -429,13 +459,22 @@ func (s *Server) selfWorktrees(ctx context.Context) []Worktree {
 	return out
 }
 
-// bannerData is what the update banner shows for this connection.
-func (s *Server) bannerData(ctx context.Context) views.BannerData {
+// bannerData is what the update banner shows for a page. A branch build
+// is offered on the thread that owns the worktree it was built in (and
+// on any other thread sharing it), not on every page; the bar for a
+// running branch binary and the home rows show everywhere.
+func (s *Server) bannerData(ctx context.Context, threadID string) views.BannerData {
 	d := views.BannerData{HomeChanged: s.Update.Changed(), Behind: s.Update.Behind()}
 	d.PullRunning, d.PullErr, d.PullLog = s.Update.Pull()
 	d.Branch, d.BranchTitle = s.Update.OnBranch(ctx)
-	for _, b := range s.Update.Builds() {
-		d.Builds = append(d.Builds, views.BranchBuild{Path: b.Path, Branch: b.Branch, Title: b.Title, At: b.ModTime})
+	if builds := s.Update.Builds(); len(builds) > 0 && threadID != "" {
+		if t, err := s.App.Store.Thread(ctx, threadID); err == nil && t.Worktree != "" {
+			for _, b := range builds {
+				if filepath.Dir(b.Path) == t.Worktree {
+					d.Builds = append(d.Builds, views.BranchBuild{Path: b.Path, Branch: b.Branch, Title: b.Title, At: b.ModTime})
+				}
+			}
+		}
 	}
 	if d.HomeChanged || d.Branch != "" || len(d.Builds) > 0 || d.Behind > 0 {
 		d.Running = s.runningThreads(ctx)
