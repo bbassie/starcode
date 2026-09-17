@@ -29,7 +29,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 	pt.Sidebar = views.Sidebar(side)
 	pt.Projects = side.Projects
 	pt.Git = views.GitPanel(views.GitData{})
-	pt.Update = views.UpdateBanner(s.Update.Changed(), s.runningThreads(ctx))
+	pt.Update = views.UpdateBanner(s.bannerData(ctx))
 	switch p.View {
 	case "thread":
 		d, err := s.threadData(ctx, p.ThreadID)

@@ -294,12 +294,7 @@ func (c *conn) renderProviders(ctx context.Context) error {
 }
 
 func (c *conn) renderUpdateBanner(ctx context.Context) error {
-	show := c.s.Update.Changed()
-	running := 0
-	if show {
-		running = c.s.runningThreads(ctx)
-	}
-	return c.sse.PatchElementTempl(views.UpdateBanner(show, running))
+	return c.sse.PatchElementTempl(views.UpdateBanner(c.s.bannerData(ctx)))
 }
 
 func (c *conn) renderSidebar(ctx context.Context) error {

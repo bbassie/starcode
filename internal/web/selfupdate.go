@@ -5,77 +5,223 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"starcode/internal/domain"
+	"starcode/internal/web/views"
 )
 
-// SelfUpdate notices when the executable on disk is no longer the one that
-// is running. `make build` renames a fresh binary over the old path, so a
-// size or mtime change means a new version is waiting; every open page
-// then gets a banner with a restart button. Nothing restarts on its own:
-// a restart kills running turns, so the reader picks the moment.
+// SelfUpdate notices when there is a binary to restart into. `make build`
+// renames a fresh binary over the home path (the one the service was
+// started with), so a size or mtime change there means a new version is
+// waiting. A `make build` in one of the project's worktrees leaves a
+// binary in that worktree instead; those are watched too, and the banner
+// offers a restart into each, named by its branch. While a branch binary
+// runs, the bar stays up with a way back to the home binary. Nothing
+// restarts on its own: a restart kills running turns, so the reader picks
+// the moment.
+//
+// HomeExeEnv carries the home path across a re-exec into a branch
+// binary, since os.Executable then names the worktree's file.
+const HomeExeEnv = "STARCODE_HOME_EXE"
+
 type SelfUpdate struct {
-	// Path is the executable as it was at startup. os.Executable reports
-	// "(deleted)" once the file is replaced, so it is captured early and
-	// also used by main for the re-exec.
-	Path    string
+	// Home is the binary the service was started with; Running the one
+	// this process is (the same unless a branch binary was chosen).
+	Home    string
+	Running string
+	// Lister names the worktrees of the project the home binary lives in,
+	// with their branch and thread title; set by the server.
+	Lister func(ctx context.Context) []Worktree
+
 	size    int64
 	modTime time.Time
+	started time.Time
 	changed atomic.Bool
 	log     *slog.Logger
+
+	mu     sync.Mutex
+	builds []Build
+	target string
+}
+
+// Worktree is one checkout of the project, as the Lister reports it.
+type Worktree struct {
+	Path, Branch, Title string
+}
+
+// Build is a binary in a worktree that is newer than this process.
+type Build struct {
+	Path, Branch, Title string
+	ModTime             time.Time
 }
 
 func NewSelfUpdate(log *slog.Logger) *SelfUpdate {
-	su := &SelfUpdate{log: log}
+	su := &SelfUpdate{log: log, started: time.Now()}
 	path, err := os.Executable()
 	if err != nil {
 		return su
 	}
-	su.Path = strings.TrimSuffix(path, " (deleted)")
-	if info, err := os.Stat(su.Path); err == nil {
+	su.Running = strings.TrimSuffix(path, " (deleted)")
+	su.Home = su.Running
+	if h := os.Getenv(HomeExeEnv); h != "" {
+		su.Home = h
+	}
+	if info, err := os.Stat(su.Home); err == nil {
 		su.size, su.modTime = info.Size(), info.ModTime()
 	}
 	return su
 }
 
-// Changed reports whether a newer binary has been seen on disk.
+// Changed reports whether a newer home binary has been seen on disk.
 func (su *SelfUpdate) Changed() bool { return su != nil && su.changed.Load() }
 
-// Watch polls the path until ctx ends and publishes BinaryUpdated once.
+// OnBranch is the branch this process was built from, "" on the home
+// binary; the title is the thread that owns the worktree.
+func (su *SelfUpdate) OnBranch(ctx context.Context) (branch, title string) {
+	if su == nil || su.Running == su.Home || su.Lister == nil {
+		return "", ""
+	}
+	dir := filepath.Dir(su.Running)
+	for _, w := range su.Lister(ctx) {
+		if w.Path == dir {
+			return w.Branch, w.Title
+		}
+	}
+	return filepath.Base(dir), ""
+}
+
+// Builds are the worktree binaries newer than this process, newest first.
+func (su *SelfUpdate) Builds() []Build {
+	if su == nil {
+		return nil
+	}
+	su.mu.Lock()
+	defer su.mu.Unlock()
+	return append([]Build(nil), su.builds...)
+}
+
+// Target is the binary the next restart runs: what the reader chose, or
+// the home binary.
+func (su *SelfUpdate) Target() string {
+	if su == nil {
+		return ""
+	}
+	su.mu.Lock()
+	defer su.mu.Unlock()
+	if su.target != "" {
+		return su.target
+	}
+	return su.Home
+}
+
+// choose records the binary the reader wants next; only the home binary
+// and a listed build qualify.
+func (su *SelfUpdate) choose(path string) bool {
+	su.mu.Lock()
+	defer su.mu.Unlock()
+	if path == "" || path == su.Home {
+		su.target = su.Home
+		return true
+	}
+	for _, b := range su.builds {
+		if b.Path == path {
+			su.target = path
+			return true
+		}
+	}
+	return false
+}
+
+// Watch polls until ctx ends: the home binary every five seconds, the
+// worktrees every fifteen. Each finding publishes BinaryUpdated once.
 func (su *SelfUpdate) Watch(ctx context.Context, publish func(...any)) {
-	if su.Path == "" || su.modTime.IsZero() {
+	if su.Home == "" {
 		return
 	}
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
+	n := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			info, err := os.Stat(su.Path)
-			if err != nil || (info.Size() == su.size && info.ModTime().Equal(su.modTime)) {
-				continue
+			if !su.modTime.IsZero() {
+				info, err := os.Stat(su.Home)
+				if err == nil && (info.Size() != su.size || !info.ModTime().Equal(su.modTime)) && su.changed.CompareAndSwap(false, true) {
+					su.log.Info("new binary on disk, restart to use it", "path", su.Home)
+					publish(domain.BinaryUpdated{})
+				}
 			}
-			if su.changed.CompareAndSwap(false, true) {
-				su.log.Info("new binary on disk, restart to use it", "path", su.Path)
+			if n++; n%3 == 0 && su.scanWorktrees(ctx) {
 				publish(domain.BinaryUpdated{})
 			}
 		}
 	}
 }
 
+// scanWorktrees lists the binaries built in the project's worktrees since
+// this process started; true when the list changed.
+func (su *SelfUpdate) scanWorktrees(ctx context.Context) bool {
+	if su.Lister == nil {
+		return false
+	}
+	name := filepath.Base(su.Home)
+	var found []Build
+	for _, w := range su.Lister(ctx) {
+		p := filepath.Join(w.Path, name)
+		info, err := os.Stat(p)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		// A binary older than this process is stale, and the one that
+		// runs now is not a change.
+		if !info.ModTime().After(su.started) || (p == su.Running && info.ModTime().Before(su.started)) {
+			continue
+		}
+		found = append(found, Build{Path: p, Branch: w.Branch, Title: w.Title, ModTime: info.ModTime()})
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].ModTime.After(found[j].ModTime) })
+	su.mu.Lock()
+	defer su.mu.Unlock()
+	changed := len(found) != len(su.builds)
+	for i := range found {
+		if changed {
+			break
+		}
+		if found[i].Path != su.builds[i].Path || !found[i].ModTime.Equal(su.builds[i].ModTime) {
+			changed = true
+		}
+	}
+	if changed {
+		for _, b := range found {
+			su.log.Info("branch binary on disk, restart into it from the banner", "path", b.Path, "branch", b.Branch)
+		}
+		su.builds = found
+	}
+	return changed
+}
+
 // restart answers first, then hands over to main through OnRestart; the
-// stream reconnects on its own once the new process listens.
+// stream reconnects on its own once the new process listens. ?into=
+// names a branch build, or the home binary when empty.
 func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 	if s.OnRestart == nil {
 		s.fail(w, r, errRestartUnavailable)
 		return
 	}
-	s.Log.Info("restart requested", "from", r.RemoteAddr)
+	into := r.URL.Query().Get("into")
+	if !s.Update.choose(into) {
+		s.fail(w, r, errUnknownBuild)
+		return
+	}
+	s.Log.Info("restart requested", "from", r.RemoteAddr, "exe", s.Update.Target())
 	s.ok(w, r)
 	go func() {
 		time.Sleep(200 * time.Millisecond)
@@ -96,4 +242,53 @@ func (s *Server) runningThreads(ctx context.Context) int {
 		}
 	}
 	return n
+}
+
+// selfWorktrees lists the worktrees of the project the home binary lives
+// in (starcode developing itself), from the threads that own them.
+func (s *Server) selfWorktrees(ctx context.Context) []Worktree {
+	if s.Update == nil || s.Update.Home == "" {
+		return nil
+	}
+	home := filepath.Dir(s.Update.Home)
+	ps, err := s.App.Store.Projects(ctx)
+	if err != nil {
+		return nil
+	}
+	var pid string
+	for _, p := range ps {
+		if p.Path == home {
+			pid = p.ID
+		}
+	}
+	if pid == "" {
+		return nil
+	}
+	ts, err := s.App.Store.Threads(ctx)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []Worktree
+	for _, t := range ts {
+		if t.ProjectID != pid || t.Worktree == "" || seen[t.Worktree] {
+			continue
+		}
+		seen[t.Worktree] = true
+		out = append(out, Worktree{Path: t.Worktree, Branch: t.WorktreeBranch, Title: t.Title})
+	}
+	return out
+}
+
+// bannerData is what the update banner shows for this connection.
+func (s *Server) bannerData(ctx context.Context) views.BannerData {
+	d := views.BannerData{HomeChanged: s.Update.Changed()}
+	d.Branch, d.BranchTitle = s.Update.OnBranch(ctx)
+	for _, b := range s.Update.Builds() {
+		d.Builds = append(d.Builds, views.BranchBuild{Path: b.Path, Branch: b.Branch, Title: b.Title, At: b.ModTime})
+	}
+	if d.HomeChanged || d.Branch != "" || len(d.Builds) > 0 {
+		d.Running = s.runningThreads(ctx)
+	}
+	return d
 }

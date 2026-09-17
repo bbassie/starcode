@@ -33,6 +33,10 @@ import (
 	"starcode/internal/web/views"
 )
 
+// restartHome is the home binary as run() saw it, for the re-exec's
+// environment.
+var restartHome string
+
 func main() {
 	restart, err := run()
 	if err != nil {
@@ -41,8 +45,21 @@ func main() {
 	}
 	if restart != "" {
 		// Same arguments, same environment, new binary. Exec keeps the pid,
-		// so a service manager sees nothing happen.
-		if err := syscall.Exec(restart, os.Args, os.Environ()); err != nil {
+		// so a service manager sees nothing happen. A branch binary (a
+		// worktree's build) gets told where home is, so its banner can
+		// offer the way back; the home binary runs without the variable.
+		env := []string{}
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, web.HomeExeEnv+"=") {
+				env = append(env, kv)
+			}
+		}
+		if home := os.Getenv(web.HomeExeEnv); home != "" && restart != home {
+			env = append(env, web.HomeExeEnv+"="+home)
+		} else if home == "" && restart != restartHome {
+			env = append(env, web.HomeExeEnv+"="+restartHome)
+		}
+		if err := syscall.Exec(restart, os.Args, env); err != nil {
 			fmt.Fprintln(os.Stderr, "starcode: restart:", err)
 			os.Exit(1)
 		}
@@ -231,8 +248,9 @@ func run() (string, error) {
 		return "", err
 	}
 	if restart.Load() {
-		log.Info("restarting", "exe", h.Update.Path)
-		return h.Update.Path, nil
+		restartHome = h.Update.Home
+		log.Info("restarting", "exe", h.Update.Target())
+		return h.Update.Target(), nil
 	}
 	return "", nil
 }

@@ -66,6 +66,7 @@ type Server struct {
 	assets    string
 }
 
+var errUnknownBuild = errors.New("that build is not on the list any more")
 var errRestartUnavailable = errors.New("restart is not available in this build")
 
 func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.Store) *Server {
@@ -191,6 +192,7 @@ func (s *Server) Watch(ctx context.Context) {
 	go s.watchProviders(ctx)
 	go s.watchPRs(ctx)
 	if s.Update != nil {
+		s.Update.Lister = s.selfWorktrees
 		go s.Update.Watch(ctx, s.App.Bus.Publish)
 	}
 }

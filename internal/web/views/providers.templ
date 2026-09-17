@@ -441,25 +441,77 @@ func contains(xs []string, x string) bool {
 // survive a restart: their sessions resume and queued prompts continue,
 // but a turn that is running when the process goes is lost, hence the
 // count.
-templ UpdateBanner(show bool, running int) {
-	if show {
+// BannerData is what the update bar shows: the home binary rebuilt,
+// binaries built in the project's worktrees (one row each, by branch),
+// and, while a branch binary runs, the way back to the home one.
+type BannerData struct {
+	HomeChanged bool
+	Running     int // turns a restart would cut off
+	Branch      string
+	BranchTitle string
+	Builds      []BranchBuild
+}
+
+type BranchBuild struct {
+	Path, Branch, Title string
+	At                  time.Time
+}
+
+templ UpdateBanner(d BannerData) {
+	if d.HomeChanged || d.Branch != "" || len(d.Builds) > 0 {
 		<div id="update" class="update">
-			<span>@Icon("rotate-cw", "ui-icon") starcode was rebuilt. Restart to run the new version.</span>
-			if running > 0 {
-				<span class="dim">{ fmt.Sprintf("%d running %s would be cut off.", running, plural(running, "turn", "turns")) }</span>
+			if d.Branch != "" {
+				// Stays up while a branch binary runs; no "later".
+				<div class="update-row branch">
+					<span>@Icon("folder-git-2", "ui-icon") <span>Running the build from <span class="mono">{ d.Branch }</span></span>
+						if d.BranchTitle != "" {
+							<span class="dim">({ d.BranchTitle })</span>
+						}
+					</span>
+					<span class="spacer"></span>
+					<button class="btn tiny" data-on:click={ restartClick(d.Running, "") } title="Restart into the main checkout's binary">@Icon("undo-2", "ui-icon") back to main</button>
+				</div>
 			}
-			<span class="spacer"></span>
-			<button class="btn primary tiny" data-on:click={ restartClick(running) }>restart now</button>
-			<button class="btn ghost tiny" data-on:click="document.getElementById('update').replaceChildren()" title="Hide until the next page load">later</button>
+			if d.HomeChanged {
+				<div class="update-row">
+					<span>@Icon("rotate-cw", "ui-icon") starcode was rebuilt. Restart to run the new version.</span>
+					if d.Running > 0 {
+						<span class="dim">{ fmt.Sprintf("%d running %s would be cut off.", d.Running, plural(d.Running, "turn", "turns")) }</span>
+					}
+					<span class="spacer"></span>
+					<button class="btn primary tiny" data-on:click={ restartClick(d.Running, "") }>restart now</button>
+					<button class="btn ghost tiny" data-on:click="el.closest('.update-row').remove()" title="Hide until the next page load">later</button>
+				</div>
+			}
+			for _, b := range d.Builds {
+				<div class="update-row">
+					<span>@Icon("folder-git-2", "ui-icon") <span>Branch <span class="mono">{ b.Branch }</span> was built</span>
+						if b.Title != "" {
+							<span class="dim">({ b.Title })</span>
+						}
+						<span class="dim" data-ago={ b.At.UTC().Format(time.RFC3339) }>{ ago(b.At) }</span>
+					</span>
+					<span class="spacer"></span>
+					<button class="btn primary tiny" data-on:click={ restartClick(d.Running, b.Path) } title={ "Restart into " + b.Path }>restart into it</button>
+					<button class="btn ghost tiny" data-on:click="el.closest('.update-row').remove()" title="Hide until the next page load">later</button>
+				</div>
+			}
 		</div>
 	} else {
 		<div id="update"></div>
 	}
 }
 
-func restartClick(running int) string {
-	if running > 0 {
-		return fmt.Sprintf("confirm('%d running %s will be interrupted. Restart now?') && @post('/api/restart')", running, plural(running, "turn", "turns"))
+// restartClick posts the restart, into a branch build when into is set,
+// after a warning when turns would be cut off.
+func restartClick(running int, into string) string {
+	url := "/api/restart"
+	if into != "" {
+		url += "?into=" + urlQuery(into)
 	}
-	return "@post('/api/restart')"
+	if running > 0 {
+		return fmt.Sprintf("confirm('%d running %s will be interrupted. Restart now?') && @post('%s')", running, plural(running, "turn", "turns"), url)
+	}
+	return "@post('" + url + "')"
 }
+

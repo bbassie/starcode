@@ -101,12 +101,37 @@ func gh(ctx context.Context, dir string, args ...string) ([]byte, error) {
 		if errors.Is(err, exec.ErrNotFound) {
 			return nil, errors.New("the GitHub CLI (gh) is not installed")
 		}
+		// A cancelled or expired context kills gh; say so instead of
+		// "signal: killed", and let callers tell the two apart.
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: gh %s", ctx.Err(), strings.Join(args[:min(2, len(args))], " "))
+		}
 		if msg := strings.TrimSpace(errb.String()); msg != "" {
 			return nil, errors.New(firstLine(msg))
 		}
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// PullRequestForBranch finds the pull request whose head is branch, open
+// or not: gh pr view takes a branch name. For a thread that works on a
+// branch of its own, this is how it gets linked to a PR someone opened
+// on GitHub rather than with gh pr create.
+func PullRequestForBranch(ctx context.Context, dir, branch string) (repo string, number int, url string, ok bool) {
+	raw, err := gh(ctx, dir, "pr", "view", branch, "--json", "number,url")
+	if err != nil {
+		return "", 0, "", false
+	}
+	var v struct {
+		Number int    `json:"number"`
+		URL    string `json:"url"`
+	}
+	if json.Unmarshal(raw, &v) != nil || v.Number == 0 {
+		return "", 0, "", false
+	}
+	repo, number, url, ok = FindPullURL(v.URL)
+	return repo, number, url, ok
 }
 
 func firstLine(s string) string {

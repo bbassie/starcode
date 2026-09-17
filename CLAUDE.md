@@ -28,6 +28,13 @@ instance. So:
 - Do not run `make dev` or `go run` against `~/.starcode`. For a scratch
   instance use another port and data dir:
   `STARCODE_DATA=/tmp/sc ./starcode -addr 127.0.0.1:4777 -fake`.
+- In a worktree (your directory is under `~/.starcode/worktrees/`),
+  `make build` writes the binary into the worktree, not over the running
+  one. The running instance watches the worktrees too and offers a
+  "restart into it" row in its banner, named by your branch; the user
+  presses it, and can go back to the main binary from the same bar. Say
+  in your summary that a branch build is waiting in the banner. The main
+  binary only changes through a build in `~/starcode`, after a merge.
 
 ## Build and test
 

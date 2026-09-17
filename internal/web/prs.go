@@ -108,7 +108,13 @@ func (s *Server) prList(r *http.Request, p store.Project) prEntry {
 	s.prs.mu.Unlock()
 	refresh := r.URL.Query().Get("refresh") != ""
 	if !ok || time.Since(e.at) > prTTL || refresh {
-		e = prEntry{at: time.Now(), list: gitx.PullRequests(r.Context(), p.Path)}
+		// Detached from the request: a tab switch mid-fetch would kill gh
+		// and leave "signal: killed" in the cache for a minute.
+		e = prEntry{at: time.Now(), list: gitx.PullRequests(context.WithoutCancel(r.Context()), p.Path)}
+		if e.list.Err != "" {
+			// A failed read is worth retrying on the next open.
+			e.at = e.at.Add(-prTTL + 5*time.Second)
+		}
 		s.prs.mu.Lock()
 		s.prs.items[p.Path] = e
 		if refresh {
@@ -160,7 +166,8 @@ func (s *Server) prDetailN(r *http.Request, p store.Project, n int, refresh bool
 	if list.list.Repo == "" {
 		return gitx.PRDetail{}, "", errors.New(list.list.Err)
 	}
-	d, err := gitx.PullRequestDetail(r.Context(), p.Path, list.list.Repo, n)
+	// Detached from the request for the same reason as the list.
+	d, err := gitx.PullRequestDetail(context.WithoutCancel(r.Context()), p.Path, list.list.Repo, n)
 	e = prDetailEntry{at: time.Now(), detail: d, repo: list.list.Repo}
 	if err != nil {
 		e.err = err.Error()
@@ -439,6 +446,9 @@ func (s *Server) watchPRs(ctx context.Context) {
 				}
 				var linked bool
 				if pr, linked = t.Linked(); !linked {
+					// A thread on a branch of its own may have a PR opened
+					// on GitHub by hand; find it by the branch.
+					go s.linkByBranch(ctx, t)
 					continue
 				}
 			default:
@@ -465,6 +475,14 @@ func (s *Server) pollPRs(ctx context.Context, refs []store.PR) {
 			if pr, ok := t.Linked(); ok && !seen[pr] {
 				seen[pr] = true
 				refs = append(refs, pr)
+			} else if !ok && t.WorktreeBranch != "" && !t.Archived && time.Since(t.UpdatedAt) < 14*24*time.Hour {
+				// Recent worktree threads without a link: one gh call each,
+				// so a PR opened on GitHub by hand still finds its thread.
+				if s.linkByBranch(ctx, t) {
+					if pr, ok := t.Linked(); ok {
+						refs = append(refs, pr)
+					}
+				}
 			}
 		}
 	}
@@ -513,6 +531,29 @@ func (s *Server) pollPRs(ctx context.Context, refs []store.PR) {
 	if changed {
 		s.App.Bus.Publish(domain.PRStateChanged{})
 	}
+}
+
+// linkByBranch links t to the pull request whose head is its worktree
+// branch, when GitHub has one. The lookup runs in the project's checkout;
+// the worktree may be gone by now. True when a link was made.
+func (s *Server) linkByBranch(ctx context.Context, t store.Thread) bool {
+	if t.WorktreeBranch == "" || t.PRNumber > 0 {
+		return false
+	}
+	p, err := s.App.Store.Project(ctx, t.ProjectID)
+	if err != nil {
+		return false
+	}
+	repo, n, url, ok := gitx.PullRequestForBranch(ctx, p.Path, t.WorktreeBranch)
+	if !ok {
+		return false
+	}
+	if err := s.App.LinkPR(ctx, t.ID, repo, n, url); err != nil {
+		s.Log.Warn("link pull request by branch", "thread", t.ID, "err", err)
+		return false
+	}
+	s.Log.Info("linked pull request by branch", "thread", t.ID, "branch", t.WorktreeBranch, "pr", n)
+	return true
 }
 
 // settleMerged archives the idle threads linked to a pull request the
