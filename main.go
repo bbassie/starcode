@@ -22,6 +22,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/klauspost/compress/gzhttp"
+
 	"starcode/internal/agent"
 	"starcode/internal/app"
 	"starcode/internal/bus"
@@ -219,9 +221,13 @@ func run() (string, error) {
 	// once; otherwise Shutdown would sit out its timeout waiting on them.
 	reqCtx, cancelReqs := context.WithCancel(context.Background())
 	defer cancelReqs()
+	// Pages, fragments and SSE streams go out gzipped when the browser
+	// accepts it. gzhttp flushes the compressor on every Flush, so each
+	// SSE event still reaches the page as soon as it is sent, and the
+	// stream keeps one compression window for its whole life.
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           h,
+		Handler:           gzhttp.GzipHandler(h),
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return reqCtx },
