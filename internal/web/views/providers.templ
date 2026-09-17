@@ -450,6 +450,12 @@ type BannerData struct {
 	Branch      string
 	BranchTitle string
 	Builds      []BranchBuild
+	// Behind is how many commits the home checkout is behind origin;
+	// the pull fields are the state of "pull and build".
+	Behind      int
+	PullRunning bool
+	PullErr     string
+	PullLog     string
 }
 
 type BranchBuild struct {
@@ -458,8 +464,32 @@ type BranchBuild struct {
 }
 
 templ UpdateBanner(d BannerData) {
-	if d.HomeChanged || d.Branch != "" || len(d.Builds) > 0 {
+	if d.HomeChanged || d.Branch != "" || len(d.Builds) > 0 || d.Behind > 0 || d.PullRunning || d.PullErr != "" {
 		<div id="update" class="update">
+			if d.PullRunning {
+				<div class="update-row">
+					<span>@Icon("loader-circle", "ui-icon spin-icon") pulling and building the main checkout…</span>
+				</div>
+			} else if d.PullErr != "" {
+				<div class="update-row err-row">
+					<span>@Icon("circle-alert", "ui-icon") <span>pull and build failed: { d.PullErr }</span></span>
+					if d.PullLog != "" {
+						<pre class="update-log">{ d.PullLog }</pre>
+					}
+					<span class="spacer"></span>
+					<button class="btn tiny" data-on:click="@post('/api/pull-main')">try again</button>
+					<button class="btn ghost tiny" data-on:click="el.closest('.update-row').remove()">later</button>
+				</div>
+			} else if d.Behind > 0 {
+				// Merged on GitHub, so the main checkout is behind: a
+				// fast-forward pull and a build bring the home binary up.
+				<div class="update-row">
+					<span>@Icon("git-merge", "ui-icon") <span>The main checkout is { fmt.Sprintf("%d %s", d.Behind, plural(d.Behind, "commit", "commits")) } behind origin.</span></span>
+					<span class="spacer"></span>
+					<button class="btn primary tiny" data-on:click="@post('/api/pull-main')" title="git pull --ff-only, then make build; the restart row follows">pull and build</button>
+					<button class="btn ghost tiny" data-on:click="el.closest('.update-row').remove()" title="Hide until the next page load">later</button>
+				</div>
+			}
 			if d.Branch != "" {
 				// Stays up while a branch binary runs; no "later".
 				<div class="update-row branch">

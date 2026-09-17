@@ -160,6 +160,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/projects/{id}/worktrees/toggle", s.setProjectWorktrees)
 	s.mux.HandleFunc("POST /api/limits/refresh", s.refreshLimits)
 	s.mux.HandleFunc("POST /api/sidebar", s.setSidebarMode)
+	s.mux.HandleFunc("POST /api/pull-main", s.pullMain)
 	s.mux.HandleFunc("POST /api/settle", s.setSettle)
 	s.prActionRoutes()
 	s.slashRoutes()

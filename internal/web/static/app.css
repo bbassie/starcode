@@ -1507,3 +1507,5 @@ details.item.agent > summary .tag { display: inline-flex; align-items: center; g
 /* A number with its unit: wide enough for three digits and the spinner. */
 .num-unit { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .in.num { width: 6.5em; min-width: 88px; text-align: right; }
+.update-row.err-row { background: color-mix(in srgb, var(--err) 12%, var(--bg-2)); border-bottom-color: var(--err); }
+.update-log { flex-basis: 100%; margin: 0; max-height: 120px; overflow: auto; font-size: 0.85em; white-space: pre-wrap; }

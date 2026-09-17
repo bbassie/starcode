@@ -2,9 +2,12 @@ package web
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -48,6 +51,18 @@ type SelfUpdate struct {
 	mu     sync.Mutex
 	builds []Build
 	target string
+	// behind is how many commits the home checkout is behind its upstream
+	// (0 when it is not on its default branch, not clean, ahead, or has
+	// no upstream); pull is the state of the last "pull and build".
+	behind int
+	pull   pullState
+}
+
+// pullState is one "pull and build" of the home checkout.
+type pullState struct {
+	running bool
+	err     string
+	log     string
 }
 
 // Worktree is one checkout of the project, as the Lister reports it.
@@ -96,7 +111,28 @@ func (su *SelfUpdate) OnBranch(ctx context.Context) (branch, title string) {
 	return filepath.Base(dir), ""
 }
 
-// Builds are the worktree binaries newer than this process, newest first.
+// Behind is how many commits the home checkout is behind origin, when a
+// fast-forward pull would bring it up; 0 otherwise.
+func (su *SelfUpdate) Behind() int {
+	if su == nil {
+		return 0
+	}
+	su.mu.Lock()
+	defer su.mu.Unlock()
+	return su.behind
+}
+
+// Pull is the state of the last "pull and build".
+func (su *SelfUpdate) Pull() (running bool, errText, logTail string) {
+	if su == nil {
+		return false, "", ""
+	}
+	su.mu.Lock()
+	defer su.mu.Unlock()
+	return su.pull.running, su.pull.err, su.pull.log
+}
+
+// Builds are the worktree binaries newer than the home one, newest first.
 func (su *SelfUpdate) Builds() []Build {
 	if su == nil {
 		return nil
@@ -162,8 +198,104 @@ func (su *SelfUpdate) Watch(ctx context.Context, publish func(...any)) {
 			if n++; n%3 == 0 && su.scanWorktrees(ctx) {
 				publish(domain.BinaryUpdated{})
 			}
+			// The home checkout against origin: at the second tick, then
+			// every five minutes, the PR poll's pace.
+			if n == 2 || n%60 == 0 {
+				if su.scanHome(ctx) {
+					publish(domain.BinaryUpdated{})
+				}
+			}
 		}
 	}
+}
+
+// gitHome runs git in the home checkout with a bound on its time.
+func (su *SelfUpdate) gitHome(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = filepath.Dir(su.Home)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// scanHome fetches origin for the home checkout and counts how far
+// behind it is. Only a checkout on its default branch, clean, with no
+// local commits ahead, is reported: that is the one a fast-forward pull
+// brings up without a merge. True when the count changed.
+func (su *SelfUpdate) scanHome(ctx context.Context) bool {
+	behind := 0
+	if _, err := su.gitHome(ctx, 60*time.Second, "fetch", "--quiet", "origin"); err == nil {
+		branch, _ := su.gitHome(ctx, 10*time.Second, "rev-parse", "--abbrev-ref", "HEAD")
+		def, _ := su.gitHome(ctx, 10*time.Second, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+		status, _ := su.gitHome(ctx, 10*time.Second, "status", "--porcelain")
+		counts, err := su.gitHome(ctx, 10*time.Second, "rev-list", "--left-right", "--count", "HEAD...@{u}")
+		if err == nil && branch != "" && def == "origin/"+branch && status == "" {
+			var ahead int
+			if _, err := fmt.Sscanf(counts, "%d\t%d", &ahead, &behind); err != nil || ahead > 0 {
+				behind = 0
+			}
+		}
+	}
+	su.mu.Lock()
+	defer su.mu.Unlock()
+	if behind == su.behind {
+		return false
+	}
+	if behind > 0 {
+		su.log.Info("home checkout is behind origin, pull and build from the banner", "behind", behind)
+	}
+	su.behind = behind
+	return true
+}
+
+// PullAndBuild fast-forwards the home checkout and runs make build in it,
+// in the background; the watcher then sees the new binary. One at a time.
+func (su *SelfUpdate) PullAndBuild(publish func(...any)) error {
+	su.mu.Lock()
+	if su.pull.running {
+		su.mu.Unlock()
+		return errors.New("a pull and build is already running")
+	}
+	su.pull = pullState{running: true}
+	su.mu.Unlock()
+	publish(domain.BinaryUpdated{})
+	go func() {
+		ctx := context.Background()
+		out, err := su.gitHome(ctx, 2*time.Minute, "pull", "--ff-only", "--quiet", "origin")
+		if err == nil {
+			// templ lives in ~/go/bin, which the service's PATH may lack.
+			ctx2, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			cmd := exec.CommandContext(ctx2, "make", "build")
+			cmd.Dir = filepath.Dir(su.Home)
+			cmd.Env = append(os.Environ(), "PATH="+os.Getenv("PATH")+":"+filepath.Join(os.Getenv("HOME"), "go", "bin"))
+			var b []byte
+			b, err = cmd.CombinedOutput()
+			cancel()
+			out = strings.TrimSpace(string(b))
+		}
+		su.mu.Lock()
+		su.pull = pullState{}
+		if err != nil {
+			su.pull.err = err.Error()
+			su.pull.log = tailLines(out, 8)
+			su.log.Warn("pull and build failed", "err", err, "out", su.pull.log)
+		} else {
+			su.behind = 0
+			su.log.Info("pulled and built the home checkout")
+		}
+		su.mu.Unlock()
+		publish(domain.BinaryUpdated{})
+	}()
+	return nil
+}
+
+func tailLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // scanWorktrees lists the binaries built in the project's worktrees since
@@ -173,6 +305,13 @@ func (su *SelfUpdate) scanWorktrees(ctx context.Context) bool {
 		return false
 	}
 	name := filepath.Base(su.Home)
+	// A branch build counts while it is newer than the home binary; a
+	// home build after it (the merge, usually) makes it stale. The one
+	// running now is not a change to offer.
+	homeMod := su.modTime
+	if info, err := os.Stat(su.Home); err == nil {
+		homeMod = info.ModTime()
+	}
 	var found []Build
 	for _, w := range su.Lister(ctx) {
 		p := filepath.Join(w.Path, name)
@@ -180,9 +319,7 @@ func (su *SelfUpdate) scanWorktrees(ctx context.Context) bool {
 		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
 			continue
 		}
-		// A binary older than this process is stale, and the one that
-		// runs now is not a change.
-		if !info.ModTime().After(su.started) || (p == su.Running && info.ModTime().Before(su.started)) {
+		if !info.ModTime().After(homeMod) || p == su.Running {
 			continue
 		}
 		found = append(found, Build{Path: p, Branch: w.Branch, Title: w.Title, ModTime: info.ModTime()})
@@ -227,6 +364,16 @@ func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
 		s.OnRestart()
 	}()
+}
+
+// pullMain is the banner's "pull and build" button.
+func (s *Server) pullMain(w http.ResponseWriter, r *http.Request) {
+	if err := s.Update.PullAndBuild(s.App.Bus.Publish); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.Log.Info("pull and build requested", "from", r.RemoteAddr)
+	s.ok(w, r)
 }
 
 // runningThreads counts turns a restart would cut off.
@@ -282,12 +429,13 @@ func (s *Server) selfWorktrees(ctx context.Context) []Worktree {
 
 // bannerData is what the update banner shows for this connection.
 func (s *Server) bannerData(ctx context.Context) views.BannerData {
-	d := views.BannerData{HomeChanged: s.Update.Changed()}
+	d := views.BannerData{HomeChanged: s.Update.Changed(), Behind: s.Update.Behind()}
+	d.PullRunning, d.PullErr, d.PullLog = s.Update.Pull()
 	d.Branch, d.BranchTitle = s.Update.OnBranch(ctx)
 	for _, b := range s.Update.Builds() {
 		d.Builds = append(d.Builds, views.BranchBuild{Path: b.Path, Branch: b.Branch, Title: b.Title, At: b.ModTime})
 	}
-	if d.HomeChanged || d.Branch != "" || len(d.Builds) > 0 {
+	if d.HomeChanged || d.Branch != "" || len(d.Builds) > 0 || d.Behind > 0 {
 		d.Running = s.runningThreads(ctx)
 	}
 	return d
