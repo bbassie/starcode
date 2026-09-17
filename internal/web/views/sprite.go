@@ -12,11 +12,14 @@ import (
 )
 
 // spriteIcons are the lucide icons the templates use. Icon renders these
-// as a <use> of the sprite at /static/icons.svg, a fifth of the bytes of
-// the inline SVG, which mattered: icons were a third of every page and
-// of every sidebar redraw. A name outside the list still renders inline,
-// so the list only needs to be complete for the saving, not for
-// correctness; sprite_test.go checks the literal names in the templates.
+// as a <use> of a symbol in the sprite, a fifth of the bytes of the
+// inline SVG, which mattered: icons were a third of every page and of
+// every sidebar redraw. The sprite sits at the top of every page's body
+// (SpriteInline), so the references resolve on the first paint; as a
+// separate file (/static/icons.svg) the icons showed up a beat after
+// the text. A name outside the list still renders inline, so the list
+// only needs to be complete for the saving, not for correctness;
+// sprite_test.go checks the literal names in the templates.
 var spriteIcons = []string{
 	"archive", "archive-restore", "arrow-down", "arrow-left", "arrow-right", "arrow-up",
 	"bot", "brain", "chart-no-axes-combined", "check", "chevron-down", "chevron-right", "chevrons-up",
@@ -85,8 +88,16 @@ func Sprite() (body, version string) {
 	return spriteBody, spriteVersion
 }
 
-// spriteRef is the <use> target of a listed icon.
+// spriteRef is the <use> target of a listed icon: a symbol of the
+// sprite inlined in the page.
 func spriteRef(name string) string {
-	_, v := Sprite()
-	return "/static/icons.svg?v=" + v + "#" + name
+	return "#" + name
+}
+
+// SpriteInline is the sprite as a hidden element for the top of the body.
+// Zero size rather than display: none, which some engines take as "do
+// not render the symbols either".
+func SpriteInline() string {
+	body, _ := Sprite()
+	return strings.Replace(body, `<svg xmlns="http://www.w3.org/2000/svg">`, `<svg xmlns="http://www.w3.org/2000/svg" style="position: absolute; width: 0; height: 0; overflow: hidden" aria-hidden="true">`, 1)
 }

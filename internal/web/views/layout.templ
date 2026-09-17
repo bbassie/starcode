@@ -138,6 +138,9 @@ templ Layout(title string, p Page, parts Parts) {
 			data-on:stream__window={ streamOpen(p) }
 			data-effect="$_hb; streamAlive()"
 		>
+			// The icon sprite first, so every <use> below finds its symbol
+			// as the page paints.
+			@templ.Raw(SpriteInline())
 			<div class="shell">
 				if parts.Sidebar != nil {
 					@parts.Sidebar

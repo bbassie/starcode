@@ -185,7 +185,7 @@ With a token set, Settings > General shows a QR code of the sign-in link (the in
 
 Every colour and size is a CSS custom property on `:root` in `internal/web/static/app.css`. A theme is a `[data-theme="name"]` block that overrides some of them; add the name to `web.Themes` in `internal/web/server.go` to make it selectable. The choice is stored in a cookie and applied live through a Datastar signal. `dark` and `light` use the system sans-serif face; `amber` and `green` switch `--font-ui` to monospace and drop the rounded corners for a terminal look.
 
-Driver marks (the Claude sunburst, the OpenAI flower) are inline SVGs from Simple Icons in `internal/web/views/brand.templ`; other icons are lucide.
+Icons are lucide, and the driver marks (the Claude sunburst, the OpenAI flower) are from Simple Icons. Both come from one SVG sprite (`internal/web/views/sprite.go`) that is inlined at the top of every page, so each icon is a `<use>` of a symbol: a fifth of the bytes of an inline icon, and no separate request to wait for on the first paint.
 
 Variables worth knowing: `--bg`, `--bg-2`, `--bg-3`, `--bg-4`, `--fg`, `--fg-dim`, `--border`, `--accent`, `--accent-fg`, `--ok`, `--warn`, `--err`, `--add-bg`, `--del-bg`, `--font-ui`, `--font-mono`, `--font-size`, `--radius`, `--sidebar-w`, `--gitpanel-w`, `--content-w`, `--tap`.
 
