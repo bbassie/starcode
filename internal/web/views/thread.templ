@@ -364,6 +364,11 @@ templ MainHead(d ThreadData) {
 				<span>{ d.Branch }</span>
 			</span>
 		}
+		// The thread's folder in VS Code on the reader's machine; the
+		// layout's vscodeOpen builds the link. Left out on a phone, which
+		// has no VS Code to hand it to.
+		{{ dir := d.Thread.Dir(d.Project) }}
+		<button class="btn ghost vscode-open" type="button" data-on:click={ VSCodeOpen(dir) } title={ "Open " + dir + " in VS Code" }>@Icon("brand-vscode", "ui-icon") <span class="hide-sm">VS Code</span></button>
 		<button class="btn ghost" data-on:click="$term = !$term" title="Toggle terminal">@Icon("terminal", "ui-icon") <span class="hide-sm">terminal</span></button>
 		<button class="btn ghost gittoggle" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
 		// Archive and delete are inline on a wide window (the wrapper
@@ -388,6 +393,13 @@ templ MainHead(d ThreadData) {
 			<button class="btn ghost dim" data-on:click={ "confirm('Delete this thread?') && @post('/api/threads/" + d.Thread.ID + "/delete')" } title="Delete thread">@Icon("trash-2", "ui-icon") <span class="hide-sm">delete</span></button>
 		</div>
 	</header>
+}
+
+// VSCodeOpen is the expression that opens dir in VS Code (vscodeOpen in
+// the layout script). For a thread, dir is Thread.Dir: its worktree when
+// it has one.
+func VSCodeOpen(dir string) string {
+	return "vscodeOpen(" + jsq(dir) + ")"
 }
 
 // branchTitle is the header's tooltip on the branch: the worktree's

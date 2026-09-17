@@ -14,10 +14,13 @@ func lucideSVG(name, class string) string {
 
 // Icon draws one lucide icon: a <use> of the sprite (see sprite.go) for
 // a listed name, the inline SVG otherwise. The presentation attributes
-// sit on the outer element, where the symbol's paths inherit them.
+// sit on the outer element, where the symbol's paths inherit them. A
+// brand mark's name ("brand-vscode") draws that mark, filled.
 templ Icon(name string, class string) {
 	if spriteSet[name] {
 		<svg class={ "i", class } width="16" height="16" viewBox="0 0 24 24"><use href={ spriteRef(name) }></use></svg>
+	} else if brandPaths[name] != "" {
+		<svg class={ "i", "b", class } width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href={ spriteRef(name) }></use></svg>
 	} else {
 		@templ.Raw(lucideSVG(name, class))
 	}

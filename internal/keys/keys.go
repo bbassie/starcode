@@ -38,6 +38,7 @@ var Actions = []Action{
 	{ID: "terminal", Label: "Toggle terminal", Desc: "Open or close the shell panel", Default: "mod+`", Where: "threads, also inside the terminal"},
 	{ID: "changes", Label: "Toggle changes panel", Desc: "Open or close the side panel", Default: "mod+shift+g", Where: "threads, also inside the terminal"},
 	{ID: "prompt", Label: "Focus the prompt", Desc: "Put the cursor in the composer", Default: "mod+shift+f", Where: "threads, also inside the terminal"},
+	{ID: "vscode", Label: "Open in VS Code", Desc: "Open the thread's folder, or its worktree, in VS Code", Default: "mod+o", Where: "threads"},
 	{ID: "approve", Label: "Allow", Desc: "Answer the oldest waiting approval with allow", Default: "alt+y", Where: "threads with an approval waiting"},
 	{ID: "approve-session", Label: "Allow for session", Desc: "Allow it and every later request like it in this thread", Default: "alt+shift+y", Where: "threads with an approval waiting"},
 	{ID: "deny", Label: "Deny", Desc: "Answer the oldest waiting approval with deny", Default: "alt+n", Where: "threads with an approval waiting"},

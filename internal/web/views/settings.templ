@@ -571,7 +571,7 @@ templ SettingsPage(d SettingsPageData) {
 					<section id="device" class="settings-section">
 						<header>
 							<h1>This device</h1>
-							<p class="dim">Notifications on this browser, and signing a phone in.</p>
+							<p class="dim">Notifications and VS Code on this browser, and signing a phone in.</p>
 						</header>
 						<div class="settings-card">
 							<div class="setting-row">
@@ -582,6 +582,13 @@ templ SettingsPage(d SettingsPageData) {
 								// The state word comes from the layout's notify helpers;
 								// the button asks for permission, then toggles.
 								<button id="notify-btn" class="btn" type="button" data-init="el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)" data-on:click="(el.dataset.state === 'on' ? Promise.resolve(notifyDisable()) : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })">notifications</button>
+							</div>
+							<div class="setting-row">
+								<div>
+									<label for="vscode-host">VS Code SSH host</label>
+									<p class="dim">The VS Code button on a thread opens its folder over Remote-SSH on this host, named the way this computer's ssh config knows it (user@host works). Empty means the account starcode runs as at the address in the browser, or a local folder when that address is localhost. Saved for this browser.</p>
+								</div>
+								<input id="vscode-host" class="in" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" data-init="el.value = vscodeHost(); el.placeholder = vscodeLocal() ? 'opens locally' : vscodeDefaultHost()" data-preserve-attr="placeholder" data-on:input="vscodeHostSet(el.value)"/>
 							</div>
 							if d.PairURL != "" {
 								<div class="setting-row pair-row">

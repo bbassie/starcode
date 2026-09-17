@@ -3,7 +3,10 @@ package views
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/user"
 	"starcode/internal/store"
+	"sync"
 )
 
 // Page identifies what the SSE stream should render.
@@ -40,6 +43,15 @@ func draftJSON(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+// runUser is the account starcode runs as. Opening a thread in VS Code
+// over SSH logs in as that account by default, since the folders are its.
+var runUser = sync.OnceValue(func() string {
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return os.Getenv("USER")
+})
 
 // streamURL carries the asset version the page was served with, so a
 // stream that reconnects to a rebuilt server can tell the page to reload
@@ -539,6 +551,39 @@ templ Layout(title string, p Page, parts Parts) {
 					};
 					apply();
 					new MutationObserver(apply).observe(document.body, { attributeFilter: ['data-theme'] });
+				})();
+			</script>
+			// VS Code. vscodeOpen hands a folder of this machine to VS Code on
+			// the reader's machine through its URL handler. starcode mostly
+			// runs somewhere else, so the link goes through the Remote-SSH
+			// extension: to the host set for this browser in Settings >
+			// General (localStorage, since every client has its own ssh
+			// config), or else to the account starcode runs as at the address
+			// in the address bar. A page on localhost with no host set opens
+			// the folder locally.
+			@templ.JSONScript("run-user", runUser())
+			<script>
+				(() => {
+					const key = 'vscode-host';
+					const user = JSON.parse(document.getElementById('run-user').textContent);
+					window.vscodeHost = () => localStorage.getItem(key) || '';
+					window.vscodeHostSet = (v) => { v = v.trim(); if (v) localStorage.setItem(key, v); else localStorage.removeItem(key); };
+					window.vscodeLocal = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+					window.vscodeDefaultHost = () => (user ? user + '@' : '') + location.hostname;
+					window.vscodeURL = (dir) => {
+						const path = dir.split('/').map(encodeURIComponent).join('/');
+						const host = vscodeHost();
+						if (!host && vscodeLocal()) return 'vscode://file' + path;
+						return 'vscode://vscode-remote/ssh-remote+' + encodeURIComponent(host || vscodeDefaultHost()).replaceAll('%40', '@') + path;
+					};
+					// The browser runs beforeunload for a link it hands to another
+					// app, though the page stays; linkOut tells the editor's
+					// unsaved-changes guard to let this one through.
+					window.vscodeOpen = (dir) => {
+						window.linkOut = true;
+						setTimeout(() => { window.linkOut = false; }, 1000);
+						location.assign(vscodeURL(dir));
+					};
 				})();
 			</script>
 			// Notifications. Once allowed (Settings > Appearance) a thread
@@ -1146,7 +1191,7 @@ templ Layout(title string, p Page, parts Parts) {
 						onDOM(scan);
 						scan();
 						window.addEventListener('beforeunload', (e) => {
-							if (document.querySelector('form.git-editor.dirty')) e.preventDefault();
+							if (!window.linkOut && document.querySelector('form.git-editor.dirty')) e.preventDefault();
 						});
 					})();
 				</script>
