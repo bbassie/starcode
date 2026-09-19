@@ -538,7 +538,7 @@ func envLines(text string) []string {
 
 func (s *Server) providersPage(w http.ResponseWriter, r *http.Request) {
 	sel, tab := providerParams(r)
-	s.page(r.Context(), "providers", views.Page{View: "providers", Theme: s.theme(r), Sidebar: s.sidebarMode(r), ProviderSel: sel, ProviderTab: tab}).Render(r.Context(), w)
+	s.page(r.Context(), "providers", views.Page{View: "providers", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), ProviderSel: sel, ProviderTab: tab}).Render(r.Context(), w)
 }
 
 // refreshProviders re-runs every check now; every open page redraws

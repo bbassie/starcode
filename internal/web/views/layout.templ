@@ -34,8 +34,10 @@ type Page struct {
 	Full bool
 	// PairURL is the settings page's sign-in link for a phone.
 	PairURL string
-	// Sidebar is the sidebar layout, "inbox" or "project".
+	// Sidebar is the sidebar layout, "inbox" or "project"; Dense its
+	// one-line rows.
 	Sidebar string
+	Dense   bool
 }
 
 // draftJSON is the draft as a JS string literal for the signals object.
@@ -184,6 +186,24 @@ templ Layout(title string, p Page, parts Parts) {
 			@Palette(p)
 			@ShortcutHelp(keys)
 			@HotkeyButtons(keys)
+			// The visible height as a CSS variable. iOS Safari does not resize
+			// the layout viewport when the keyboard opens (interactive-widget
+			// is Chrome's), so a page sized with dvh keeps its composer under
+			// the keys. The body takes --vvh instead, and the page is held at
+			// the top, since iOS also scrolls it to bring the field into view.
+			<script>
+				(() => {
+					const vv = window.visualViewport;
+					if (!vv) return;
+					const apply = () => {
+						document.documentElement.style.setProperty('--vvh', Math.round(vv.height) + 'px');
+						if (vv.offsetTop > 0) window.scrollTo(0, 0);
+					};
+					vv.addEventListener('resize', apply);
+					vv.addEventListener('scroll', apply);
+					apply();
+				})();
+			</script>
 			// One MutationObserver for every script that watches the page.
 			// Datastar patches the DOM many times a second while a turn
 			// streams, and each watcher used to observe the whole body on
@@ -608,6 +628,7 @@ templ Layout(title string, p Page, parts Parts) {
 					// on this device and turns the watcher on; returns the state
 					// word the button shows.
 					window.notifyEnable = async () => {
+						if (iosTab) return 'ios-tab';
 						if (!('Notification' in window) || !('serviceWorker' in navigator)) return 'unsupported';
 						if (!window.isSecureContext) return 'insecure';
 						const perm = await Notification.requestPermission();
@@ -624,9 +645,13 @@ templ Layout(title string, p Page, parts Parts) {
 						denied: 'blocked in the browser settings',
 						insecure: 'needs https (install the certificate)',
 						unsupported: 'not supported by this browser',
+						'ios-tab': 'add starcode to the home screen first (share, add to home screen)',
 						'no-worker': 'the browser refused the service worker (certificate not trusted?)',
 					})[st] || st;
+					// iOS only has notifications in the app on the home screen.
+					const iosTab = /iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone && !matchMedia('(display-mode: standalone)').matches;
 					window.notifyState = () => {
+						if (iosTab) return 'ios-tab';
 						if (!('Notification' in window) || !('serviceWorker' in navigator)) return 'unsupported';
 						if (!window.isSecureContext) return 'insecure';
 						if (Notification.permission === 'denied') return 'denied';
@@ -701,6 +726,28 @@ templ Layout(title string, p Page, parts Parts) {
 					});
 					document.addEventListener('scroll', hide, true);
 					document.addEventListener('click', hide, true);
+				})();
+			</script>
+			// Banner rows hidden with "later" stay hidden in this browser until
+			// what they announce changes: each row carries a key (the build's
+			// path and time, the home binary's time, the commit count), and
+			// dismissed keys are kept in localStorage.
+			<script>
+				(() => {
+					const key = 'banner-dismissed';
+					const read = () => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; } };
+					window.bannerDismiss = (el) => {
+						const row = el.closest('[data-dismiss]');
+						if (!row) return;
+						localStorage.setItem(key, JSON.stringify([...new Set([...read(), row.dataset.dismiss])].slice(-50)));
+						row.hidden = true;
+					};
+					const apply = () => {
+						const gone = new Set(read());
+						for (const row of document.querySelectorAll('#update [data-dismiss]')) row.hidden = gone.has(row.dataset.dismiss);
+					};
+					onDOM(apply);
+					apply();
 				})();
 			</script>
 			// Phone swipes: the thread list and the changes panel follow the

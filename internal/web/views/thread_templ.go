@@ -1245,9 +1245,9 @@ func MainHead(d ThreadData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var46 string
-			templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.ResolveAttributeValue("confirm(" + jsq("Remove this thread's worktree and work on the project checkout instead?\n\nThe branch "+d.Thread.WorktreeBranch+" is kept. If the worktree has uncommitted changes, nothing is removed.") + ") && @post('/api/threads/" + d.Thread.ID + "/worktree/remove')")
+			templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.ResolveAttributeValue("confirm(" + jsq("Remove this thread's worktree and work on the project checkout instead?\n\nThe branch "+d.Thread.WorktreeBranch+" is kept. If the worktree has uncommitted files, you are asked again before they are lost.") + ") && @post('/api/threads/" + d.Thread.ID + "/worktree/remove')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 384, Col: 320}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 384, Col: 340}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var46)
 			if templ_7745c5c3_Err != nil {
@@ -1260,7 +1260,7 @@ func MainHead(d ThreadData) templ.Component {
 			var templ_7745c5c3_Var47 string
 			templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.ResolveAttributeValue("Remove the worktree " + d.Thread.Worktree + " and work on the project's checkout")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 384, Col: 413}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 384, Col: 433}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var47)
 			if templ_7745c5c3_Err != nil {

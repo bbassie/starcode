@@ -22,7 +22,7 @@ import (
 // stream can seat its bookkeeping.
 func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 	var pt views.Parts
-	side, err := s.sidebarData(ctx, p.ThreadID, p.View, p.Sidebar)
+	side, err := s.sidebarData(ctx, p.ThreadID, p.View, p.Sidebar, p.Dense)
 	if err != nil {
 		return pt, err
 	}
@@ -63,7 +63,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 	case "appearance":
 		pt.Main = views.AppearancePage(views.SettingsPageData{Theme: p.Theme, Themes: Themes})
 	case "settings":
-		pt.Main = views.SettingsPage(views.SettingsPageData{Theme: p.Theme, Themes: Themes, PairURL: p.PairURL, PairQR: pairQR(p.PairURL), Sidebar: p.Sidebar, SettleMerged: s.App.Store.SettleMerged(ctx), SettleDays: s.App.Store.SettleIdleDays(ctx)})
+		pt.Main = views.SettingsPage(views.SettingsPageData{Theme: p.Theme, Themes: Themes, PairURL: p.PairURL, PairQR: pairQR(p.PairURL), Sidebar: p.Sidebar, Dense: p.Dense, SettleMerged: s.App.Store.SettleMerged(ctx), SettleDays: s.App.Store.SettleIdleDays(ctx)})
 	case "providers":
 		pt.Main = views.ProvidersPage(s.providersData(ctx, p.ProviderSel, p.ProviderTab, false))
 	case "keys":

@@ -676,7 +676,7 @@ func (s *Server) prsPageData(ctx context.Context, refresh bool) (views.PRsPageDa
 }
 
 func (s *Server) prsPage(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "pull requests", views.Page{View: "prs", Theme: s.theme(r), Sidebar: s.sidebarMode(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "pull requests", views.Page{View: "prs", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r)}).Render(r.Context(), w)
 }
 
 // refreshPRs rereads the search and every linked PR's state.
@@ -811,7 +811,11 @@ func (s *Server) forgetPR(p store.Project, repo string, n int) {
 	delete(s.prs.details, repo+"#"+strconv.Itoa(n))
 	if p.ID != "" {
 		delete(s.prs.details, p.ID+"/"+strconv.Itoa(n))
-		delete(s.prs.items, p.ID)
+		// The list is cached per checkout (a worktree has its own
+		// current branch), so drop every entry of this project's repo.
+		for k := range s.prs.items {
+			delete(s.prs.items, k)
+		}
 	}
 	s.prs.mine = myPRsEntry{}
 	one := s.prs.one

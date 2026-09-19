@@ -76,9 +76,9 @@ templ Home(d HomeData) {
 						<ul class="threads">
 							{{ n := 0 }}
 							for _, t := range d.Threads {
-								if t.ProjectID == p.ID && listed(t) && n < 8 {
+								if t.ProjectID == p.ID && listed(t) && n < 5 {
 									{{ n++ }}
-									@ThreadRow(t, p, false, false, d.Looks[t.Agent], unread(t, "", d.Seen), prOf(t, d.PRs))
+									@HomeRow(t, d.Looks[t.Agent], unread(t, "", d.Seen), prOf(t, d.PRs))
 								}
 							}
 						</ul>
@@ -107,6 +107,27 @@ func FirstOr(xs []string, def string) string {
 		return xs[0]
 	}
 	return def
+}
+
+// HomeRow is a thread on a project card: one line, since the sidebar
+// already lists every thread in full. No id: the sidebar's rows own those.
+templ HomeRow(t store.Thread, look AgentLook, isUnread bool, pr store.PRState) {
+	<li class={ "thread-row", "home-row", "st-" + t.Status, templ.KV("unread", isUnread) } data-id={ t.ID }>
+		<a href={ templ.SafeURL("/threads/" + t.ID) }>
+			<span class="row-main">
+				<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
+				if t.Pinned {
+					<span class="pin-mark" title="Pinned">@Icon("pin", "ui-icon")</span>
+				}
+				<span class="ellipsis">{ t.Title }</span>
+				if pr.Number > 0 {
+					@PRChip(pr, "")
+				}
+				<span class="agent-mark" style={ agentMarkStyle(look.Color) } title={ t.Agent }>@Brand(look.Driver, "ui-icon")</span>
+				<span class="dim tiny-text" data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span>
+			</span>
+		</a>
+	</li>
 }
 
 func worktreesTitle(on bool) string {

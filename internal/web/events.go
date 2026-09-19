@@ -28,6 +28,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	provSel, provTab := providerParams(r)
 	theme := s.theme(r)
 	sidebar := s.sidebarMode(r)
+	dense := s.denseMode(r)
 	ctx := r.Context()
 
 	// Subscribe before the initial render so nothing slips between them.
@@ -39,7 +40,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		sse.ExecuteScript("location.reload()")
 		return
 	}
-	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, sidebar: sidebar, usageDays: usageDays, usageMetric: usageMetric, provSel: provSel, provTab: provTab, dirty: map[string]bool{}, tails: map[string]*tail{}}
+	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, sidebar: sidebar, dense: dense, rowDirty: map[string]bool{}, usageDays: usageDays, usageMetric: usageMetric, provSel: provSel, provTab: provTab, dirty: map[string]bool{}, tails: map[string]*tail{}}
 	// The page sends its signals with the request; the side panel's open
 	// detail is the one worth keeping across a reconnect, and whether the
 	// reader had loaded the whole transcript.
@@ -99,14 +100,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 					c.gitDirty = true
 				}
 			case domain.ProvidersChanged:
-				c.sideDirty = true
+				c.sideDirty, c.sideFull = true, true
 				if view == "providers" {
 					err = c.renderProviders(ctx)
 				}
 			case domain.BinaryUpdated:
 				err = c.renderUpdateBanner(ctx)
 			case domain.SeenChanged:
-				c.sideDirty = true
+				c.sideDirty, c.sideFull = true, true
 				c.homeDirty = view == "home"
 			case domain.LimitsChanged:
 				if view == "usage" {
@@ -115,7 +116,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 					c.ctxDirty = true
 				}
 			case domain.PRStateChanged:
-				c.sideDirty = true
+				c.sideDirty, c.sideFull = true, true
 				c.homeDirty = view == "home"
 				if view == "thread" {
 					err = c.renderHead(ctx, false)
@@ -132,12 +133,20 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 type conn struct {
-	s           *Server
-	sse         *datastar.ServerSentEventGenerator
-	view        string
-	threadID    string
-	theme       string
-	sidebar     string
+	s        *Server
+	sse      *datastar.ServerSentEventGenerator
+	view     string
+	threadID string
+	theme    string
+	sidebar  string
+	dense    bool
+	// rowDirty names the threads whose sidebar row changed since the last
+	// flush; sideFull says something else did (projects, seen marks, PR
+	// states). With only rows dirty and the order as it was, the rows are
+	// patched one by one instead of the whole list; lastOrder is that order.
+	rowDirty    map[string]bool
+	sideFull    bool
+	lastOrder   string
 	usageDays   int
 	usageMetric string
 	provSel     string
@@ -231,6 +240,9 @@ func (c *conn) render(ctx context.Context, withDetail bool) error {
 		return err
 	}
 	c.lastSide = side
+	if sd, err := c.s.sidebarData(ctx, c.threadID, c.view, c.sidebar, c.dense); err == nil {
+		c.lastOrder = views.SidebarOrder(sd)
+	}
 	sideV, mainV := hashHTML(side), hashHTML(main)
 	if sideV != c.sideV {
 		if err := c.sse.PatchElements(side); err != nil {
@@ -266,7 +278,7 @@ func hashHTML(s string) string {
 }
 
 func (c *conn) page() views.Page {
-	return views.Page{View: c.view, ThreadID: c.threadID, Theme: c.theme, UsageDays: c.usageDays, UsageMetric: c.usageMetric, ProviderSel: c.provSel, ProviderTab: c.provTab, GitPath: c.gitPath, GitEdit: c.gitEdit, PanelTab: c.panelTab, Full: c.full, PairURL: c.pairURL, Sidebar: c.sidebar}
+	return views.Page{View: c.view, ThreadID: c.threadID, Theme: c.theme, UsageDays: c.usageDays, UsageMetric: c.usageMetric, ProviderSel: c.provSel, ProviderTab: c.provTab, GitPath: c.gitPath, GitEdit: c.gitEdit, PanelTab: c.panelTab, Full: c.full, PairURL: c.pairURL, Sidebar: c.sidebar, Dense: c.dense}
 }
 
 // renderHome redraws the projects overview. The composer in it keeps what
@@ -274,7 +286,7 @@ func (c *conn) page() views.Page {
 // lives in a signal anyway.
 func (c *conn) renderHome(ctx context.Context) error {
 	c.homeDirty = false
-	side, err := c.s.sidebarData(ctx, c.threadID, c.view, c.sidebar)
+	side, err := c.s.sidebarData(ctx, c.threadID, c.view, c.sidebar, c.dense)
 	if err != nil {
 		return err
 	}
@@ -298,9 +310,27 @@ func (c *conn) renderUpdateBanner(ctx context.Context) error {
 }
 
 func (c *conn) renderSidebar(ctx context.Context) error {
-	d, err := c.s.sidebarData(ctx, c.threadID, c.view, c.sidebar)
+	d, err := c.s.sidebarData(ctx, c.threadID, c.view, c.sidebar, c.dense)
 	if err != nil {
 		return err
+	}
+	// A thread's own change with every row where it was needs that row
+	// only: a status flip then costs one row, not the list.
+	rows, full := c.rowDirty, c.sideFull
+	c.rowDirty, c.sideFull = map[string]bool{}, false
+	order := views.SidebarOrder(d)
+	same := order == c.lastOrder
+	c.lastOrder = order
+	if same && !full && len(rows) > 0 && len(rows) <= 4 && !c.homeDirty {
+		for id := range rows {
+			if row := views.SidebarRow(d, id); row != nil {
+				if err := c.sse.PatchElementTempl(row); err != nil {
+					return err
+				}
+			}
+		}
+		c.lastSide = "" // the list as last sent whole is stale now
+		return nil
 	}
 	// Many events mark the sidebar dirty without changing what it shows
 	// (a seen stamp, a status this page already drew); the redraw is a
@@ -628,12 +658,13 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 	}
 	switch p := ev.Payload.(type) {
 	case domain.ProjectAdded, domain.ProjectRemoved, domain.ProjectSettingsChanged, domain.ThreadCreated:
-		c.sideDirty = true
+		c.sideDirty, c.sideFull = true, true
 		if c.view == "home" {
 			return c.renderAll(ctx)
 		}
 	case domain.ThreadRenamed, domain.ThreadStatusChanged, domain.ThreadSettingsChanged, domain.AgentSessionBound, domain.ThreadArchived, domain.ThreadUnarchived, domain.ThreadPinned, domain.ThreadUnpinned, domain.ThreadWorktreeSet, domain.ThreadPRLinked, domain.ThreadPRUnlinked:
 		c.sideDirty = true
+		c.rowDirty[ev.ThreadID] = true
 		// The project cards on the home page show the same glyphs and
 		// titles as the sidebar; a burst of changes costs one redraw.
 		c.homeDirty = c.view == "home"
@@ -663,7 +694,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 			return c.renderHead(ctx, false)
 		}
 	case domain.ThreadDeleted:
-		c.sideDirty = true
+		c.sideDirty, c.sideFull = true, true
 		c.homeDirty = c.view == "home"
 		if mine {
 			return c.sse.Redirect("/")

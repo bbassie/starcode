@@ -503,6 +503,8 @@ type SettingsPageData struct {
 	Sidebar      string
 	SettleMerged bool
 	SettleDays   int
+	// Dense is this browser's one-line sidebar rows.
+	Dense bool
 }
 
 // ThemeName is the display name of a theme id.
@@ -536,7 +538,7 @@ templ SettingsPage(d SettingsPageData) {
 			<div class="settings-shell">
 				@SettingsNav("general")
 				<div class="settings-content">
-					<section id="threads" class="settings-section" data-signals={ fmt.Sprintf("{sidebar: %q, settleMerged: %t, settleDays: %d}", d.Sidebar, d.SettleMerged, d.SettleDays) }>
+					<section id="threads" class="settings-section" data-signals={ fmt.Sprintf("{sidebar: %q, dense: %t, settleMerged: %t, settleDays: %d}", d.Sidebar, d.Dense, d.SettleMerged, d.SettleDays) }>
 						<header>
 							<h1>Threads</h1>
 							<p class="dim">How the sidebar lists threads and when they settle.</p>
@@ -551,6 +553,13 @@ templ SettingsPage(d SettingsPageData) {
 									<option value="inbox" selected?={ d.Sidebar != "project" }>Inbox</option>
 									<option value="project" selected?={ d.Sidebar == "project" }>By project</option>
 								</select>
+							</div>
+							<div class="setting-row">
+								<div>
+									<label for="dense-rows">Compact rows</label>
+									<p class="dim">One line per thread in the sidebar instead of two. Saved for this browser.</p>
+								</div>
+								<input id="dense-rows" type="checkbox" data-bind:dense data-on:change="@post('/api/sidebar')"/>
 							</div>
 							<div class="setting-row">
 								<div>

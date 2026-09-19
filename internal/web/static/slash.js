@@ -51,6 +51,9 @@
 		} catch (e) {}
 		if (n !== fetches || !html) return;
 		box.innerHTML = html;
+		// An agent without commands (Codex takes none over its app
+		// server) gets no menu rather than an empty one.
+		if (!box.querySelector('.opt')) { close(); return; }
 		box.classList.add('open');
 		filter();
 	};

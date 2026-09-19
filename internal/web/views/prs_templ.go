@@ -580,14 +580,14 @@ func prRow(pr gitx.MyPR, d PRsPageData) templ.Component {
 		ctx = templ.ClearChildren(ctx)
 		p, known := d.Repos[pr.Repo]
 		threads := d.Threads[store.PR{Repo: pr.Repo, Number: pr.Number}]
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "<li><a class=\"pr-row\" href=\"#\" title=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "<li><a class=\"pr-row\" role=\"button\" tabindex=\"0\" data-on:keydown=\"evt.key === 'Enter' && el.click()\" title=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.ResolveAttributeValue(pr.Head + " → " + pr.Base)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/prs.templ`, Line: 122, Col: 64}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/prs.templ`, Line: 122, Col: 134}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var22)
 		if templ_7745c5c3_Err != nil {
@@ -600,7 +600,7 @@ func prRow(pr gitx.MyPR, d PRsPageData) templ.Component {
 		var templ_7745c5c3_Var23 string
 		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); @get('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/prs.templ`, Line: 122, Col: 171}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/prs.templ`, Line: 122, Col: 241}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 		if templ_7745c5c3_Err != nil {

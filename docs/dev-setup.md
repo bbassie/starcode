@@ -112,3 +112,18 @@ systemctl --user disable --now starcode
 rm ~/.config/systemd/user/starcode.service ~/.config/starcode.env
 rm -r ~/.starcode      # only if you also want the threads gone
 ```
+
+## Where settings live
+
+Four places, by who the setting belongs to:
+
+| setting | where | why there |
+|---|---|---|
+| agent instances (binary, config dir, env, colour), the check interval | `<data>/providers.json`, owner-readable | the env may hold API keys; edited from Settings > Providers |
+| settle merged threads, settle after N idle days | `settings` table in `<data>/starcode.db` | one value for the instance, every browser sees the same |
+| keybindings | `<data>/keybindings.json` | same, and hand-editable |
+| theme, sidebar layout (inbox or by project), compact rows | cookies (`theme`, `sidebar`, `dense`) | per browser, and the server needs them to render the first paint |
+| panel width, notifications on or off, dismissed banner rows, open folders | localStorage and sessionStorage | per browser, and only scripts read them |
+
+A setting every device should share goes in the table; one the server must know before it renders goes in a cookie; the rest stays in the browser.
+

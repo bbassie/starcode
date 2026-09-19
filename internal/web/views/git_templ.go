@@ -489,14 +489,14 @@ func GitFiles(d GitData) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "\"><a href=\"#\" data-on:click=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "\"><a role=\"button\" tabindex=\"0\" data-on:keydown=\"evt.key === 'Enter' && el.click()\" data-on:click=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/diff?path=" + urlQuery(f.Path) + "')")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 185, Col: 190}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 185, Col: 260}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var14)
 				if templ_7745c5c3_Err != nil {
@@ -932,14 +932,14 @@ func TreeChildren(d ExplorerData) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 71, "\"><a href=\"#\" title=\"Open in editor\" data-on:click=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 71, "\"><a role=\"button\" tabindex=\"0\" data-on:keydown=\"evt.key === 'Enter' && el.click()\" title=\"Open in editor\" data-on:click=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var39 string
 				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 246, Col: 212}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 246, Col: 282}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var39)
 				if templ_7745c5c3_Err != nil {
@@ -1174,14 +1174,14 @@ func PullRequests(d PRData) templ.Component {
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 93, "\"><a href=\"#\" title=\"")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 93, "\"><a role=\"button\" tabindex=\"0\" data-on:keydown=\"evt.key === 'Enter' && el.click()\" title=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var50 string
 					templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.ResolveAttributeValue(pr.Head + " → " + pr.Base)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 304, Col: 54}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 304, Col: 124}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var50)
 					if templ_7745c5c3_Err != nil {
@@ -1194,7 +1194,7 @@ func PullRequests(d PRData) templ.Component {
 					var templ_7745c5c3_Var51 string
 					templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); @get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + prQuery(d.ThreadID) + "')")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 304, Col: 197}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 304, Col: 267}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var51)
 					if templ_7745c5c3_Err != nil {
@@ -2185,14 +2185,14 @@ func PRDetailBody(d PRDetailData) templ.Component {
 						return templ_7745c5c3_Err
 					}
 					if d.Project.ID != "" && !d.Page {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 204, "<a class=\"mono ellipsis\" href=\"#\" title=\"Open in the editor\" data-on:click=\"")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 204, "<a class=\"mono ellipsis\" role=\"button\" tabindex=\"0\" data-on:keydown=\"evt.key === 'Enter' && el.click()\" title=\"Open in the editor\" data-on:click=\"")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 						var templ_7745c5c3_Var89 string
 						templ_7745c5c3_Var89, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); " + openFile(d.Project, t.Path))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 460, Col: 140}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 460, Col: 210}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var89)
 						if templ_7745c5c3_Err != nil {
@@ -2205,7 +2205,7 @@ func PRDetailBody(d PRDetailData) templ.Component {
 						var templ_7745c5c3_Var90 string
 						templ_7745c5c3_Var90, templ_7745c5c3_Err = templ.JoinStringErrs(threadWhere(t))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 460, Col: 159}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 460, Col: 229}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var90))
 						if templ_7745c5c3_Err != nil {

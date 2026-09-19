@@ -574,10 +574,11 @@ func (a *App) SetProjectWorktrees(ctx context.Context, id string, on bool) error
 	return err
 }
 
-// RemoveWorktree drops a thread's checkout when it is clean and puts the
-// thread back on the project's; an unpushed branch stays in the
-// repository. Used by delete, and by hand from the thread's menu.
-func (a *App) RemoveWorktree(ctx context.Context, id string) error {
+// RemoveWorktree drops a thread's checkout and puts the thread back on
+// the project's; an unpushed branch stays in the repository. Without
+// force a checkout with changes is refused. With force its modified and
+// untracked files go with it. Called by hand from the thread's menu.
+func (a *App) RemoveWorktree(ctx context.Context, id string, force bool) error {
 	t, err := a.Store.Thread(ctx, id)
 	if err != nil {
 		return err
@@ -598,7 +599,7 @@ func (a *App) RemoveWorktree(ctx context.Context, id string) error {
 		_, err = a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: ""})
 		return err
 	}
-	if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree); err != nil {
+	if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree, force); err != nil {
 		return err
 	}
 	_, err = a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: ""})
@@ -744,9 +745,10 @@ func (a *App) DeleteThread(ctx context.Context, id string) error {
 	a.closeSession(id)
 	// A clean worktree goes with the thread; a dirty one is left on disk
 	// with its branch, since deleting the thread should not lose work.
+	// So this never forces.
 	if t, err := a.Store.Thread(ctx, id); err == nil && t.Worktree != "" && !a.sharedWorktree(ctx, t) {
 		if p, err := a.Store.Project(ctx, t.ProjectID); err == nil {
-			if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree); err != nil {
+			if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree, false); err != nil {
 				a.Log.Info("worktree kept", "thread", id, "dir", t.Worktree, "err", err)
 			}
 		}

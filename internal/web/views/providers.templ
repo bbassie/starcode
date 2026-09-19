@@ -456,6 +456,9 @@ type BannerData struct {
 	PullRunning bool
 	PullErr     string
 	PullLog     string
+	// HomeKey changes with every build of the home binary, so a "later"
+	// on one build does not hide the next.
+	HomeKey string
 }
 
 type BranchBuild struct {
@@ -471,23 +474,23 @@ templ UpdateBanner(d BannerData) {
 					<span>@Icon("loader-circle", "ui-icon spin-icon") pulling and building the main checkout…</span>
 				</div>
 			} else if d.PullErr != "" {
-				<div class="update-row err-row">
+				<div class="update-row err-row" data-dismiss={ "pullerr:" + d.PullErr }>
 					<span>@Icon("circle-alert", "ui-icon") <span>pull and build failed: { d.PullErr }</span></span>
 					if d.PullLog != "" {
 						<pre class="update-log">{ d.PullLog }</pre>
 					}
 					<span class="spacer"></span>
 					<button class="btn tiny" data-on:click="@post('/api/pull-main')">try again</button>
-					<button class="btn ghost tiny" data-on:click="el.closest('.update-row').remove()">later</button>
+					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)">later</button>
 				</div>
 			} else if d.Behind > 0 {
 				// Merged on GitHub, so the main checkout is behind: a
 				// fast-forward pull and a build bring the home binary up.
-				<div class="update-row">
+				<div class="update-row" data-dismiss={ fmt.Sprintf("behind:%d", d.Behind) }>
 					<span>@Icon("git-merge", "ui-icon") <span>The main checkout is { fmt.Sprintf("%d %s", d.Behind, plural(d.Behind, "commit", "commits")) } behind origin.</span></span>
 					<span class="spacer"></span>
 					<button class="btn primary tiny" data-on:click="@post('/api/pull-main')" title="git pull --ff-only, then make build; the restart row follows">pull and build</button>
-					<button class="btn ghost tiny" data-on:click="el.closest('.update-row').remove()" title="Hide until the next page load">later</button>
+					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
 				</div>
 			}
 			if d.Branch != "" {
@@ -503,18 +506,18 @@ templ UpdateBanner(d BannerData) {
 				</div>
 			}
 			if d.HomeChanged {
-				<div class="update-row">
+				<div class="update-row" data-dismiss={ "home:" + d.HomeKey }>
 					<span>@Icon("rotate-cw", "ui-icon") starcode was rebuilt. Restart to run the new version.</span>
 					if d.Running > 0 {
 						<span class="dim">{ fmt.Sprintf("%d running %s would be cut off.", d.Running, plural(d.Running, "turn", "turns")) }</span>
 					}
 					<span class="spacer"></span>
 					<button class="btn primary tiny" data-on:click={ restartClick(d.Running, "") }>restart now</button>
-					<button class="btn ghost tiny" data-on:click="el.closest('.update-row').remove()" title="Hide until the next page load">later</button>
+					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
 				</div>
 			}
 			for _, b := range d.Builds {
-				<div class="update-row">
+				<div class="update-row" data-dismiss={ "build:" + b.Path + ":" + b.At.UTC().Format(time.RFC3339) }>
 					<span>@Icon("folder-git-2", "ui-icon") <span>This thread's build is ready: <span class="mono">{ b.Branch }</span></span>
 						if b.Title != "" {
 							<span class="dim">({ b.Title })</span>
@@ -523,7 +526,7 @@ templ UpdateBanner(d BannerData) {
 					</span>
 					<span class="spacer"></span>
 					<button class="btn primary tiny" data-on:click={ restartClick(d.Running, b.Path) } title={ "Restart into " + b.Path }>restart into it</button>
-					<button class="btn ghost tiny" data-on:click="el.closest('.update-row').remove()" title="Hide until the next page load">later</button>
+					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
 				</div>
 			}
 		</div>

@@ -182,7 +182,7 @@ templ GitFiles(d GitData) {
 			<ul class="files">
 				for _, f := range d.Status.Files {
 					<li data-class:current={ "$gitPath === " + strconv.Quote(f.Path) }>
-						<a href="#" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/diff?path=" + urlQuery(f.Path) + "')" }>
+						<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/diff?path=" + urlQuery(f.Path) + "')" }>
 							<span class={ "code", statusClass(f.Status) }>{ strings.TrimSpace(f.Status) }</span>
 							<span class="ellipsis">{ f.Path }</span>
 						</a>
@@ -243,7 +243,7 @@ templ TreeChildren(d ExplorerData) {
 				</li>
 			} else {
 				<li data-class:current={ "$gitPath === " + strconv.Quote(f.Path) }>
-					<a href="#" title="Open in editor" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')" }>
+					<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title="Open in editor" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')" }>
 						<span class="explorer-kind">@Icon("file", "ui-icon")</span>
 						<span class={ "ellipsis", templ.KV("dim", strings.HasPrefix(f.Name, ".")) }>{ f.Name }</span>
 					</a>
@@ -301,7 +301,7 @@ templ PullRequests(d PRData) {
 						<li class={ templ.KV("current", pr.Head == d.List.Branch) }>
 							// The row opens the detail in the panel; the GitHub page
 							// is one click further, in the detail's head.
-							<a href="#" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + prQuery(d.ThreadID) + "')" }>
+							<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + prQuery(d.ThreadID) + "')" }>
 								<span class={ "pr-mark", prClass(pr) }>@Icon(prIcon(pr), "ui-icon")</span>
 								<span class="pr-text">
 									<span class="ellipsis">{ pr.Title }</span>
@@ -457,7 +457,7 @@ templ PRDetailBody(d PRDetailData) {
 							<div class="pr-card-head">
 								@Icon("message-square", "ui-icon opt-icon")
 								if d.Project.ID != "" && !d.Page {
-									<a class="mono ellipsis" href="#" title="Open in the editor" data-on:click={ "evt.preventDefault(); " + openFile(d.Project, t.Path) }>{ threadWhere(t) }</a>
+									<a class="mono ellipsis" role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title="Open in the editor" data-on:click={ "evt.preventDefault(); " + openFile(d.Project, t.Path) }>{ threadWhere(t) }</a>
 								} else {
 									<span class="mono ellipsis">{ threadWhere(t) }</span>
 								}

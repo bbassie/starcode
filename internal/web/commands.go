@@ -1,8 +1,12 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -123,13 +127,31 @@ func (s *Server) projectFor(r *http.Request) (store.Project, error) {
 	var sig struct {
 		TID string `json:"tid"`
 	}
-	datastar.ReadSignals(r, &sig)
+	peekSignals(r, &sig)
 	if sig.TID != "" {
 		if t, err := s.App.Store.Thread(r.Context(), sig.TID); err == nil && t.ProjectID == p.ID {
 			p.Path = t.Dir(p)
 		}
 	}
 	return p, nil
+}
+
+// peekSignals reads the request's signals and leaves the body as it was.
+// A POST carries them in its body, which can be read once; the handler
+// that called projectFor still has its own signals to read (the file
+// text, the uploads, a PR comment), and without this it found none.
+func peekSignals(r *http.Request, v any) {
+	if r.Method == http.MethodGet || r.Body == nil {
+		datastar.ReadSignals(r, v)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	datastar.ReadSignals(r, v)
+	r.Body = io.NopCloser(bytes.NewReader(body))
 }
 
 // setProjectWorktrees flips the project's default for new threads.
@@ -166,10 +188,68 @@ func (s *Server) newThreadInWorktree(w http.ResponseWriter, r *http.Request) {
 	sse.Redirect("/threads/" + id)
 }
 
-// removeWorktree puts the thread back on the project's checkout.
+// errRunningFromWorktree is the refusal for a worktree whose build this
+// process runs: removing it would delete the executable under the server.
+var errRunningFromWorktree = errors.New("starcode is running the build from this thread's worktree; press \"back to main\" in the banner first")
+
+// runsFrom reports whether this process runs a binary built in dir, a
+// thread's worktree, rather than the main one.
+func (s *Server) runsFrom(dir string) bool {
+	if s.Update == nil || dir == "" || s.Update.Running == s.Update.Home {
+		return false
+	}
+	return filepath.Dir(s.Update.Running) == filepath.Clean(dir)
+}
+
+// worktreeShared reports whether another thread works in t's worktree.
+// App.RemoveWorktree only steps off a shared one and deletes nothing. A
+// failed listing counts as shared, the same way the app reads it.
+func (s *Server) worktreeShared(ctx context.Context, t store.Thread) bool {
+	ts, err := s.App.Store.Threads(ctx)
+	if err != nil {
+		return true
+	}
+	for _, o := range ts {
+		if o.ID != t.ID && o.Worktree == t.Worktree {
+			return true
+		}
+	}
+	return false
+}
+
+// removeWorktree puts the thread back on the project's checkout. A
+// worktree with changes is not removed on the first request: the answer
+// is a confirm dialog that names the count, and a yes posts the same URL
+// again with ?force=1.
 func (s *Server) removeWorktree(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.App.RemoveWorktree(r.Context(), id); err != nil {
+	ctx := r.Context()
+	t, err := s.App.Store.Thread(ctx, id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if s.runsFrom(t.Worktree) {
+		s.fail(w, r, errRunningFromWorktree)
+		return
+	}
+	force := r.URL.Query().Get("force") == "1"
+	if !force && t.Worktree != "" && !s.worktreeShared(ctx, t) {
+		if n := gitx.WorktreeChanges(ctx, t.Worktree); n > 0 {
+			files := "files"
+			if n == 1 {
+				files = "file"
+			}
+			msg, _ := json.Marshal(fmt.Sprintf("The worktree has %d uncommitted or untracked %s. Remove it anyway? Those files are lost; the branch %s is kept.", n, files, t.WorktreeBranch))
+			url, _ := json.Marshal(r.URL.Path + "?force=1")
+			// The page's stream shows the result, so the script drops
+			// the response.
+			sse := datastar.NewSSE(w, r)
+			sse.ExecuteScript(fmt.Sprintf("if (confirm(%s)) fetch(%s, {method: 'POST'})", msg, url))
+			return
+		}
+	}
+	if err := s.App.RemoveWorktree(ctx, id, force); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -372,6 +452,12 @@ func (s *Server) setThreadSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteThread(w http.ResponseWriter, r *http.Request) {
+	// Deleting takes a clean worktree along, and with it the binary this
+	// process may be running.
+	if t, err := s.App.Store.Thread(r.Context(), r.PathValue("id")); err == nil && s.runsFrom(t.Worktree) {
+		s.fail(w, r, errRunningFromWorktree)
+		return
+	}
 	if err := s.App.DeleteThread(r.Context(), r.PathValue("id")); err != nil {
 		s.fail(w, r, err)
 		return
@@ -426,20 +512,37 @@ func (s *Server) pinThread(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r)
 }
 
-// setSidebarMode stores the sidebar's list order in a cookie, so it is
-// a per-browser choice like the theme: "inbox" is one list with the
-// newest activity on top, "project" groups threads under their project.
-// Open sidebars redraw on the seen event, which already marks them dirty.
+// setSidebarMode stores the sidebar's list order and its density in two
+// cookies, so they are per-browser choices like the theme: "inbox" is
+// one list with the newest activity on top, "project" groups threads
+// under their project, and dense is "1" or "0". A request without the
+// sidebar signal keeps the mode the cookie holds. Open sidebars redraw
+// on the seen event, which already marks them dirty.
 func (s *Server) setSidebarMode(w http.ResponseWriter, r *http.Request) {
 	var sig struct {
 		Sidebar string `json:"sidebar"`
+		Dense   bool   `json:"dense"`
 	}
 	datastar.ReadSignals(r, &sig)
-	if sig.Sidebar != "inbox" && sig.Sidebar != "project" {
+	if sig.Sidebar == "" {
+		if c, err := r.Cookie("sidebar"); err == nil {
+			sig.Sidebar = c.Value
+		}
+	}
+	dense := "0"
+	if sig.Dense {
+		dense = "1"
+	}
+	switch sig.Sidebar {
+	case "inbox", "project":
+		http.SetCookie(w, &http.Cookie{Name: "sidebar", Value: sig.Sidebar, Path: "/", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
+	case "":
+		// No signal and no cookie yet: the page's default mode stays.
+	default:
 		s.fail(w, r, errors.New("unknown sidebar mode"))
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "sidebar", Value: sig.Sidebar, Path: "/", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
+	http.SetCookie(w, &http.Cookie{Name: "dense", Value: dense, Path: "/", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
 	// The page's stream read the cookie when it connected; reopening it
 	// draws the sidebar in the new layout. Other pages pick it up on
 	// their next connect.

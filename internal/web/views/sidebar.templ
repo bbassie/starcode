@@ -34,7 +34,9 @@ type SidebarData struct {
 	// chip on thread rows.
 	PRs map[store.PR]store.PRState
 	// Mode is "inbox" (one list) or "project" (grouped); see Sidebar.
-	Mode string
+	// Dense draws one line per row instead of two.
+	Mode  string
+	Dense bool
 }
 
 // prOf is the polled state of t's linked pull request; the zero value
@@ -113,7 +115,7 @@ templ Sidebar(d SidebarData) {
 		{{ byID[p.ID] = p }}
 	}
 	// The inline style is the swipe drag position; a refresh mid-swipe must not wipe it.
-	<aside id="sidebar" data-class:open="$nav" data-preserve-attr="style">
+	<aside id="sidebar" class={ templ.KV("dense", d.Dense) } data-class:open="$nav" data-preserve-attr="style">
 		<div class="side-brand">
 			<a class="brand" href="/" title="Projects overview">@Icon("star", "brand-mark") starcode</a>
 			<span class="spacer"></span>
@@ -221,6 +223,55 @@ templ Sidebar(d SidebarData) {
 	</aside>
 }
 
+// SidebarOrder names every row of the sidebar in the order drawn, the
+// settled ones after a bar. While it stays the same a changed thread can
+// be patched as one row (SidebarRow) instead of redrawing the list.
+func SidebarOrder(d SidebarData) string {
+	var b strings.Builder
+	b.WriteString(d.Mode)
+	if d.Mode == "project" {
+		for _, p := range d.Projects {
+			b.WriteString("/" + p.ID)
+			for _, t := range inboxOrder(d.Threads) {
+				if t.ProjectID == p.ID && listed(t) {
+					b.WriteString("," + t.ID)
+				}
+			}
+		}
+	} else {
+		for _, t := range inboxOrder(d.Threads) {
+			if listed(t) {
+				b.WriteString("," + t.ID)
+			}
+		}
+	}
+	b.WriteString("|")
+	for _, t := range settledThreads(d.Threads) {
+		b.WriteString("," + t.ID)
+	}
+	return b.String()
+}
+
+// SidebarRow is thread id's row as Sidebar draws it, for a patch of that
+// row alone; nil when the thread has no row.
+func SidebarRow(d SidebarData, id string) templ.Component {
+	byID := map[string]store.Project{}
+	for _, p := range d.Projects {
+		byID[p.ID] = p
+	}
+	for i, t := range settledThreads(d.Threads) {
+		if t.ID == id {
+			return SettledRow(t, byID[t.ProjectID], t.ID == d.Current, prOf(t, d.PRs), i >= settledShown)
+		}
+	}
+	for _, t := range d.Threads {
+		if t.ID == id && listed(t) {
+			return ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, d.Mode != "project", d.Looks[t.Agent], unread(t, d.Current, d.Seen), prOf(t, d.PRs))
+		}
+	}
+	return nil
+}
+
 // settledShown is how many settled rows show before "Show more".
 const settledShown = 10
 
@@ -303,6 +354,7 @@ func initialsStyle(name string) string {
 // the first line, the status and title on the second.
 templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool, look AgentLook, isUnread bool, pr store.PRState) {
 	<li
+		id={ "row-" + t.ID }
 		class={ "thread-row", "st-" + t.Status, templ.KV("current", current), templ.KV("unread", isUnread) }
 		data-id={ t.ID }
 		data-k={ searchKey(t, p) }
@@ -321,6 +373,9 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 				<span class="dim tiny-text row-age" data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span>
 			</span>
 			<span class="row-main">
+				if showProject {
+					<span class="proj-init dense-only" style={ initialsStyle(p.Name) } title={ p.Name }>{ initials(p.Name) }</span>
+				}
 				<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
 				if t.Pinned {
 					<span class="pin-mark" title="Pinned">@Icon("pin", "ui-icon")</span>
@@ -378,6 +433,7 @@ func agentLabelOf(look AgentLook, name string) string {
 // title, PR chip and age. Rows past settledShown wait for the button.
 templ SettledRow(t store.Thread, p store.Project, current bool, pr store.PRState, more bool) {
 	<li
+		id={ "row-" + t.ID }
 		class={ "thread-row", "compact", templ.KV("current", current) }
 		data-id={ t.ID }
 		data-k={ searchKey(t, p) }

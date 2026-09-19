@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -497,5 +498,269 @@ func TestSettings(t *testing.T) {
 	}
 	if v := s.Setting(ctx, "settle_idle_days", "3"); v != "0" {
 		t.Fatalf("raw value = %q", v)
+	}
+}
+
+// ftsRows counts the search index rows of a thread.
+func ftsRows(t *testing.T, s *Store, threadID string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT count(*) FROM items_fts WHERE thread_id=?`, threadID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestSearchIndexFollowsItems(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	hitIDs := func(q string) string {
+		t.Helper()
+		hits, err := s.SearchItems(ctx, q, 10)
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		ids := make([]string, 0, len(hits))
+		for _, h := range hits {
+			ids = append(ids, h.ItemID)
+		}
+		return strings.Join(ids, ",")
+	}
+	if _, err := s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/fts", Name: "fts"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "t1",
+		domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "one", Agent: "claude"},
+		domain.ItemStarted{ID: "u1", Kind: domain.KindUser, Status: domain.ItemDone, Body: "why does the scheduler stall?"},
+		domain.ItemStarted{ID: "a1", Kind: domain.KindAssistant, Status: domain.ItemRunning, Body: "The sched"},
+		domain.ItemDelta{ID: "a1", Text: "uler waits on a café mutex"},
+		domain.ItemStarted{ID: "x1", Kind: domain.KindTool, ToolName: "Bash", Status: domain.ItemDone, Body: "scheduler grep"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	// The prompt is searchable at once, the streaming reply is not yet,
+	// the tool call never is.
+	if got := hitIDs("scheduler"); got != "u1" {
+		t.Fatalf("while streaming = %q", got)
+	}
+	if _, err := s.Append(ctx, "t1", domain.ItemCompleted{ID: "a1", Status: domain.ItemDone}); err != nil {
+		t.Fatal(err)
+	}
+	if got := hitIDs("scheduler"); got != "a1,u1" {
+		t.Fatalf("after completion = %q", got)
+	}
+	// Words match by prefix and all of them must match; case and
+	// diacritics do not count.
+	for q, want := range map[string]string{
+		"sched":        "a1,u1",
+		"SCHED stal":   "u1",
+		"cafe mut":     "a1",
+		"sched absent": "",
+		"heduler":      "",
+	} {
+		if got := hitIDs(q); got != want {
+			t.Fatalf("search %q = %q, want %q", q, got, want)
+		}
+	}
+	// A completion that carries the whole body replaces the indexed text.
+	if _, err := s.Append(ctx, "t1", domain.ItemCompleted{ID: "a1", Status: domain.ItemDone, Body: "It waits on a lock."}); err != nil {
+		t.Fatal(err)
+	}
+	if got := hitIDs("mutex"); got != "" {
+		t.Fatalf("old body still indexed: %q", got)
+	}
+	if got := hitIDs("lock"); got != "a1" {
+		t.Fatalf("new body = %q", got)
+	}
+	if n := ftsRows(t, s, "t1"); n != 2 {
+		t.Fatalf("index rows = %d", n)
+	}
+
+	// Query syntax in the text is plain text.
+	for _, q := range []string{
+		`"`, `""`, `"lock`, `lock"`, `wa"its`, `*`, `lock*`, `-lock`, `- lock`, `lock -waits`,
+		`NEAR`, `NEAR(lock waits)`, `lock NEAR waits`, `(lock`, `lock)`, `()`, `lock AND`, `OR`, `NOT lock`,
+		`body:lock`, `{body}:lock`, `^lock`, `lock + waits`, `a:b:c`, `'`, `\`, `%`, "lock\twaits\n",
+	} {
+		if _, err := s.SearchItems(ctx, q, 10); err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+	}
+	for q, want := range map[string]string{`"lock`: "a1", `-lock`: "a1", `lock)`: "a1", `- lock`: "a1", `lock* wa"`: "a1", `*`: "", `NEAR`: ""} {
+		if got := hitIDs(q); got != want {
+			t.Fatalf("search %q = %q, want %q", q, got, want)
+		}
+	}
+
+	// Replay empties the index and fills it again from the log.
+	if _, err := s.db.Exec(`INSERT INTO items_fts(rowid, item_id, thread_id, body) VALUES(999999, 'ghost', 't1', 'lock')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Replay(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := hitIDs("lock"); got != "a1" {
+		t.Fatalf("after replay = %q", got)
+	}
+	if got := hitIDs("sched"); got != "u1" {
+		t.Fatalf("after replay = %q", got)
+	}
+	if n := ftsRows(t, s, "t1"); n != 2 {
+		t.Fatalf("index rows after replay = %d", n)
+	}
+
+	// A deleted thread leaves nothing in the index; other threads stay.
+	if _, err := s.Append(ctx, "t2",
+		domain.ThreadCreated{ID: "t2", ProjectID: "p1", Title: "two", Agent: "claude"},
+		domain.ItemStarted{ID: "u2", Kind: domain.KindUser, Status: domain.ItemDone, Body: "lock order?"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "t1", domain.ThreadDeleted{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := ftsRows(t, s, "t1"); n != 0 {
+		t.Fatalf("index rows after delete = %d", n)
+	}
+	if got := hitIDs("lock"); got != "u2" {
+		t.Fatalf("after delete = %q", got)
+	}
+}
+
+// The migration indexes the items a database already has.
+func TestSearchIndexBackfill(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "b.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/b", Name: "b"})
+	s.Append(ctx, "t1", domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "one", Agent: "claude"},
+		domain.ItemStarted{ID: "u1", Kind: domain.KindUser, Status: domain.ItemDone, Body: "an older prompt"},
+		domain.ItemStarted{ID: "x1", Kind: domain.KindTool, Status: domain.ItemDone, Body: "older tool"},
+	)
+	// Back to the state before the migration: no index, no record of it.
+	if _, err := s.db.Exec(`DROP TABLE items_fts`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM schema_migrations WHERE name LIKE '%014_items_fts.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	hits, err := s.SearchItems(ctx, "older", 10)
+	if err != nil || len(hits) != 1 || hits[0].ItemID != "u1" {
+		t.Fatalf("hits = %+v, %v", hits, err)
+	}
+}
+
+func TestCompactInBatches(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	old := compactBatch
+	compactBatch = 7
+	t.Cleanup(func() { compactBatch = old })
+
+	s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/cb", Name: "cb"})
+	s.Append(ctx, "t1", domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "one", Agent: "claude"})
+	s.Append(ctx, "t2", domain.ThreadCreated{ID: "t2", ProjectID: "p1", Title: "two", Agent: "claude"})
+	// 60 items over two threads. Each streams while the one before it is
+	// still open, so the seq ranges of neighbouring items overlap and a
+	// batch's range holds deltas of items outside it. Every third item has
+	// one delta only and must stay as it is.
+	const items = 60
+	wantRows := 0
+	for i := 0; i < items; i++ {
+		tid := "t1"
+		if i%2 == 1 {
+			tid = "t2"
+		}
+		id := fmt.Sprintf("i%02d", i)
+		s.Append(ctx, tid, domain.ItemStarted{ID: id, Kind: domain.KindAssistant, Status: domain.ItemRunning, Body: id + ":"})
+		if i%3 == 0 {
+			s.Append(ctx, tid, domain.ItemDelta{ID: id, Text: "only"})
+			wantRows++
+		} else {
+			s.Append(ctx, tid,
+				domain.ItemDelta{ID: id, Text: "a"},
+				domain.ItemDelta{ID: id, Field: "output", Text: "1"},
+				domain.ItemDelta{ID: id, Text: "b"},
+			)
+			wantRows += 2
+		}
+		if i >= 2 {
+			prev := fmt.Sprintf("i%02d", i-2)
+			s.Append(ctx, tid,
+				domain.ItemDelta{ID: prev, Text: "z"},
+				domain.ItemDelta{ID: prev, Field: "output", Text: "9"},
+				domain.ItemCompleted{ID: prev, Status: domain.ItemDone},
+			)
+			if (i-2)%3 == 0 {
+				wantRows++ // its first output delta
+			}
+		}
+	}
+	snapshot := func() []Item {
+		t.Helper()
+		var all []Item
+		for _, tid := range []string{"t1", "t2"} {
+			its, err := s.Items(ctx, tid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all = append(all, its...)
+		}
+		return all
+	}
+	before := snapshot()
+	var deltas int
+	s.db.QueryRow(`SELECT count(*) FROM events WHERE type='item.delta'`).Scan(&deltas)
+
+	// One thread first: the other thread's rows are not touched.
+	var t2Before, t2After int
+	s.db.QueryRow(`SELECT count(*) FROM events WHERE thread_id='t2'`).Scan(&t2Before)
+	r1, err := s.Compact(ctx, "t1")
+	if err != nil || r1 == 0 {
+		t.Fatalf("compact t1 = %d, %v", r1, err)
+	}
+	s.db.QueryRow(`SELECT count(*) FROM events WHERE thread_id='t2'`).Scan(&t2After)
+	if t2Before != t2After {
+		t.Fatalf("t2 events %d -> %d", t2Before, t2After)
+	}
+	r2, err := s.Compact(ctx, "")
+	if err != nil || r2 == 0 {
+		t.Fatalf("compact all = %d, %v", r2, err)
+	}
+	var left, multi int
+	s.db.QueryRow(`SELECT count(*) FROM events WHERE type='item.delta'`).Scan(&left)
+	if left != wantRows || r1+r2 != deltas-left {
+		t.Fatalf("delta rows = %d, want %d; removed %d of %d", left, wantRows, r1+r2, deltas)
+	}
+	s.db.QueryRow(`SELECT count(*) FROM (SELECT 1 FROM events WHERE type='item.delta'
+		GROUP BY json_extract(payload,'$.id'), COALESCE(json_extract(payload,'$.field'),'') HAVING count(*) > 1)`).Scan(&multi)
+	if multi != 0 {
+		t.Fatalf("%d groups still have several rows", multi)
+	}
+	if _, err := s.Replay(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after := snapshot()
+	if len(after) != items || len(before) != items {
+		t.Fatalf("items = %d, %d", len(before), len(after))
+	}
+	for i := range before {
+		if before[i].ID != after[i].ID || before[i].Body != after[i].Body || before[i].Output != after[i].Output || before[i].Status != after[i].Status {
+			t.Fatalf("item %d: %+v became %+v", i, before[i], after[i])
+		}
+	}
+	if b := before[1]; b.Body != b.ID+":abz" || b.Output != "19" {
+		t.Fatalf("folded text = %+v", b)
+	}
+	if again, _ := s.Compact(ctx, ""); again != 0 {
+		t.Fatalf("second compact removed %d", again)
 	}
 }

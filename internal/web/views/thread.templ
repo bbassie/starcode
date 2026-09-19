@@ -381,7 +381,7 @@ templ MainHead(d ThreadData) {
 			}
 			if d.Thread.Worktree != "" {
 				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/worktree/thread')" } title={ "Open another thread on " + d.Thread.Worktree }>@Icon("message-square-plus", "ui-icon") <span class="hide-sm">new thread in this worktree</span></button>
-				<button class="btn ghost dim" data-on:click={ "confirm(" + jsq("Remove this thread's worktree and work on the project checkout instead?\n\nThe branch "+d.Thread.WorktreeBranch+" is kept. If the worktree has uncommitted changes, nothing is removed.") + ") && @post('/api/threads/" + d.Thread.ID + "/worktree/remove')" } title={ "Remove the worktree " + d.Thread.Worktree + " and work on the project's checkout" }>@Icon("folder-git-2", "ui-icon") <span class="hide-sm">remove worktree</span></button>
+				<button class="btn ghost dim" data-on:click={ "confirm(" + jsq("Remove this thread's worktree and work on the project checkout instead?\n\nThe branch "+d.Thread.WorktreeBranch+" is kept. If the worktree has uncommitted files, you are asked again before they are lost.") + ") && @post('/api/threads/" + d.Thread.ID + "/worktree/remove')" } title={ "Remove the worktree " + d.Thread.Worktree + " and work on the project's checkout" }>@Icon("folder-git-2", "ui-icon") <span class="hide-sm">remove worktree</span></button>
 			}
 			if d.Thread.Archived {
 				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unarchive')" } title="Bring this thread back into the list">@Icon("archive-restore", "ui-icon") <span class="hide-sm">unsettle</span></button>

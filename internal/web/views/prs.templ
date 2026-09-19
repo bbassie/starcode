@@ -119,7 +119,7 @@ templ prRow(pr gitx.MyPR, d PRsPageData) {
 	{{ threads := d.Threads[store.PR{Repo: pr.Repo, Number: pr.Number}] }}
 	<li>
 		// The row opens the PR here; GitHub is the button at its end.
-		<a class="pr-row" href="#" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @get('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')" }>
+		<a class="pr-row" role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @get('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')" }>
 			<span class={ "pr-mark", prClass(pr.PR) }>@Icon(prIcon(pr.PR), "ui-icon")</span>
 			<span class="pr-text">
 				<span class="ellipsis"><span class="dim">{ pr.Repo }</span> <span class="mono dim">#{ strconv.Itoa(pr.Number) }</span> { pr.Title }</span>

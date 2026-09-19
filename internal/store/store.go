@@ -270,7 +270,7 @@ func (s *Store) Replay(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	for _, t := range []string{"session_rules", "queued_prompts", "approvals", "items", "threads", "projects"} {
+	for _, t := range []string{"items_fts", "session_rules", "queued_prompts", "approvals", "items", "threads", "projects"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+t); err != nil {
 			return 0, err
 		}
@@ -335,6 +335,12 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET title=?, updated_at=? WHERE id=?`, p.Title, ts, ev.ThreadID)
 		return err
 	case domain.ThreadDeleted:
+		// The items go with the thread through the foreign key; the search
+		// index has no such key, so its rows go first, while the items
+		// still say which ones they are.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM items_fts WHERE rowid IN (SELECT seq FROM items WHERE thread_id=?)`, ev.ThreadID); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `DELETE FROM threads WHERE id=?`, ev.ThreadID)
 		return err
 	case domain.ThreadArchived:
@@ -406,10 +412,22 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		if meta == "" {
 			meta = "{}"
 		}
+		// A second start for the same id replaces the row and its seq, so
+		// the index row under the old seq goes first.
+		if err := unindexItem(ctx, tx, p.ID); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO items(id,thread_id,seq,kind,tool_name,status,body,output,meta,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'',?,?,?)`,
 			p.ID, ev.ThreadID, ev.Seq, p.Kind, p.ToolName, p.Status, p.Body, meta, ts, ts)
 		if err != nil {
 			return err
+		}
+		// Prompts arrive whole. A streamed reply is indexed when it
+		// completes, so its tokens do not each rewrite the index.
+		if p.Kind == domain.KindUser || (p.Status != domain.ItemRunning && p.Status != domain.ItemPending) {
+			if err := indexItem(ctx, tx, p.ID); err != nil {
+				return err
+			}
 		}
 		return touch()
 	case domain.ItemDelta:
@@ -436,8 +454,10 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		}
 		q += ` WHERE id=?`
 		args = append(args, p.ID)
-		_, err := tx.ExecContext(ctx, q, args...)
-		return err
+		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+			return err
+		}
+		return indexItem(ctx, tx, p.ID)
 	case domain.ApprovalRequested:
 		in := string(p.Input)
 		if in == "" {
@@ -465,6 +485,27 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		return nil
 	}
 	return fmt.Errorf("no projection for %T", ev.Payload)
+}
+
+// unindexItem removes an item's row from the search index. The index row's
+// rowid is the item's seq, so the delete is a key lookup; item_id is not
+// indexed and a delete by it would read the whole table.
+func unindexItem(ctx context.Context, tx execer, id string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM items_fts WHERE rowid = (SELECT seq FROM items WHERE id=?)`, id)
+	return err
+}
+
+// indexItem writes an item's current body to the search index, replacing
+// the row it had. Only prompts and replies with text are indexed; for any
+// other item this removes nothing and inserts nothing.
+func indexItem(ctx context.Context, tx execer, id string) error {
+	if err := unindexItem(ctx, tx, id); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO items_fts(rowid, item_id, thread_id, body)
+		SELECT seq, id, thread_id, body FROM items
+		WHERE id=? AND kind IN ('user','assistant') AND body != ''`, id)
+	return err
 }
 
 // deref lets apply switch on value types whether the payload was appended
@@ -865,16 +906,38 @@ func (s *Store) SearchThreads(ctx context.Context, q string, limit int) ([]Threa
 	return out, rows.Err()
 }
 
-// SearchItems finds prompts and replies containing q, newest first, with a
-// snippet of text around the first match.
+// ftsQuery turns free text into an FTS5 query that cannot be read as
+// query syntax: every word becomes a quoted string with its quotes
+// doubled, followed by * so it matches as a prefix, and the words are
+// joined with spaces, which FTS5 reads as AND. A word without a letter or
+// digit holds no token for the tokenizer and is dropped, since it would
+// match nothing and take the other words down with it. "" means there is
+// nothing to search for.
+func ftsQuery(q string) string {
+	var terms []string
+	for _, w := range strings.Fields(q) {
+		if strings.IndexFunc(w, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) < 0 {
+			continue
+		}
+		terms = append(terms, `"`+strings.ReplaceAll(w, `"`, `""`)+`"*`)
+	}
+	return strings.Join(terms, " ")
+}
+
+// SearchItems finds finished prompts and replies that hold every word of
+// q, each matched as a word prefix, newest first, with a snippet of text
+// around the first match. It reads the items_fts index; the index rowid
+// is the item's seq, so ordering by it is newest first without a sort
+// over the bodies.
 func (s *Store) SearchItems(ctx context.Context, q string, limit int) ([]SearchHit, error) {
-	if strings.TrimSpace(q) == "" {
+	match := ftsQuery(q)
+	if match == "" {
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.thread_id, i.kind, i.body, i.created_at, t.title, t.project_id
-		FROM items i JOIN threads t ON t.id = i.thread_id
-		WHERE i.kind IN ('user','assistant') AND i.body LIKE ? ESCAPE '\'
-		ORDER BY i.seq DESC LIMIT ?`, likePattern(q), limit)
+		FROM items_fts f JOIN items i ON i.id = f.item_id JOIN threads t ON t.id = i.thread_id
+		WHERE items_fts MATCH ?
+		ORDER BY f.rowid DESC LIMIT ?`, match, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -894,8 +957,11 @@ func (s *Store) SearchItems(ctx context.Context, q string, limit int) ([]SearchH
 }
 
 // snippet returns about width characters of body around the first
-// case-insensitive occurrence of q, on one line. Runes are folded one by
-// one so the index found in the folded text is an index into r.
+// case-insensitive occurrence of q, on one line. The search matches word
+// by word, so when q as a whole is not in the text its words are tried in
+// turn, each trimmed to its letters and digits as the tokenizer does; with
+// none found the snippet is the start of the body. Runes are folded one
+// by one so the index found in the folded text is an index into r.
 func snippet(body, q string, width int) string {
 	text := strings.Join(strings.Fields(body), " ")
 	r := []rune(text)
@@ -906,12 +972,24 @@ func snippet(body, q string, width int) string {
 		}
 		return out
 	}
+	notWord := func(c rune) bool { return !unicode.IsLetter(c) && !unicode.IsDigit(c) }
+	needles := []string{strings.Join(strings.Fields(q), " ")}
+	for _, w := range strings.Fields(q) {
+		if w = strings.TrimFunc(w, notWord); w != "" {
+			needles = append(needles, w)
+		}
+	}
 	start := 0
-	if at := runeIndex(fold(r), fold([]rune(q))); at > 0 {
-		start = at - width/3
-		if start < 0 {
+	folded := fold(r)
+	for _, n := range needles {
+		at := runeIndex(folded, fold([]rune(n)))
+		if at < 0 {
+			continue
+		}
+		if start = at - width/3; start < 0 {
 			start = 0
 		}
+		break
 	}
 	end := start + width
 	if end > len(r) {
@@ -1100,29 +1178,100 @@ func (s *Store) PRStates(ctx context.Context) (map[PR]PRState, error) {
 	return out, rows.Err()
 }
 
+// compactBatch is how many delta groups Compact folds in one transaction.
+// A variable so a test can make a small log span several batches.
+var compactBatch = 200
+
 // Compact folds each item's streamed deltas into one event per field.
 // Streaming writes a row per token; once a turn is over only the sum
 // matters, and replay reads the same projection from one row as from a
 // thousand. threadID "" compacts every thread. Returns the rows removed.
+//
+// A group is the deltas of one item and one field. The first pass lists
+// the groups with more than one row, which costs a few numbers per group
+// and no text. The groups are then folded compactBatch at a time, each
+// batch in its own transaction, so memory holds the text of one batch and
+// the one connection is free for appends between batches.
 func (s *Store) Compact(ctx context.Context, threadID string) (int, error) {
-	q := `SELECT seq, payload FROM events WHERE type='item.delta'`
+	type group struct {
+		key         string
+		first, last int64
+	}
+	q := `SELECT json_extract(payload, '$.id'), COALESCE(json_extract(payload, '$.field'), ''), min(seq), max(seq)
+		FROM events WHERE type='item.delta'`
 	var args []any
 	if threadID != "" {
 		q += ` AND thread_id=?`
 		args = append(args, threadID)
 	}
-	rows, err := s.db.QueryContext(ctx, q+` ORDER BY seq`, args...)
+	rows, err := s.db.QueryContext(ctx, q+` GROUP BY 1, 2 HAVING count(*) > 1 ORDER BY min(seq)`, args...)
 	if err != nil {
 		return 0, err
 	}
-	type group struct {
+	var groups []group
+	for rows.Next() {
+		var id sql.NullString
+		var field string
+		var g group
+		if err := rows.Scan(&id, &field, &g.first, &g.last); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		g.key = id.String + "\x00" + field
+		groups = append(groups, g)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	removed := 0
+	for i := 0; i < len(groups); i += compactBatch {
+		batch := groups[i:min(i+compactBatch, len(groups))]
+		lo, hi := batch[0].first, batch[0].last
+		want := make(map[string]bool, len(batch))
+		for _, g := range batch {
+			lo, hi = min(lo, g.first), max(hi, g.last)
+			want[g.key] = true
+		}
+		n, err := s.compactRange(ctx, threadID, lo, hi, want)
+		removed += n
+		if err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+// compactRange folds the delta groups named in want, in one transaction.
+// It reads the events from seq lo to hi, which the caller set to span the
+// groups; the groups are listed in the order they first appear, so the
+// span of a batch is a stretch of the log and not all of it. Deltas of
+// other groups inside the span are skipped. Reading inside the
+// transaction means no append lands between the read and the write.
+func (s *Store) compactRange(ctx context.Context, threadID string, lo, hi int64, want map[string]bool) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	q := `SELECT seq, payload FROM events WHERE seq BETWEEN ? AND ? AND type='item.delta'`
+	args := []any{lo, hi}
+	if threadID != "" {
+		q += ` AND thread_id=?`
+		args = append(args, threadID)
+	}
+	rows, err := tx.QueryContext(ctx, q+` ORDER BY seq`, args...)
+	if err != nil {
+		return 0, err
+	}
+	type fold struct {
 		first  int64
 		delta  domain.ItemDelta
 		text   strings.Builder
 		others []int64
 	}
-	var order []string
-	groups := map[string]*group{}
+	var order []*fold
+	folds := map[string]*fold{}
 	for rows.Next() {
 		var seq int64
 		var raw string
@@ -1136,55 +1285,51 @@ func (s *Store) Compact(ctx context.Context, threadID string) (int, error) {
 			return 0, err
 		}
 		k := d.ID + "\x00" + d.Field
-		g := groups[k]
-		if g == nil {
-			g = &group{first: seq, delta: d}
-			groups[k] = g
-			order = append(order, k)
-		} else {
-			g.others = append(g.others, seq)
+		if !want[k] {
+			continue
 		}
-		g.text.WriteString(d.Text)
+		f := folds[k]
+		if f == nil {
+			f = &fold{first: seq, delta: d}
+			folds[k] = f
+			order = append(order, f)
+		} else {
+			f.others = append(f.others, seq)
+		}
+		f.text.WriteString(d.Text)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
 	removed := 0
-	for _, k := range order {
-		g := groups[k]
-		if len(g.others) == 0 {
+	for _, f := range order {
+		if len(f.others) == 0 {
 			continue
 		}
-		g.delta.Text = g.text.String()
-		raw, err := json.Marshal(g.delta)
+		f.delta.Text = f.text.String()
+		raw, err := json.Marshal(f.delta)
 		if err != nil {
-			return removed, err
+			return 0, err
 		}
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return removed, err
+		if _, err := tx.ExecContext(ctx, `UPDATE events SET payload=? WHERE seq=?`, string(raw), f.first); err != nil {
+			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE events SET payload=? WHERE seq=?`, string(raw), g.first); err != nil {
-			tx.Rollback()
-			return removed, err
-		}
-		for i := 0; i < len(g.others); i += 500 {
-			end := min(i+500, len(g.others))
-			ph := strings.TrimSuffix(strings.Repeat("?,", end-i), ",")
-			seqs := make([]any, 0, end-i)
-			for _, sq := range g.others[i:end] {
+		for i := 0; i < len(f.others); i += 500 {
+			part := f.others[i:min(i+500, len(f.others))]
+			ph := strings.TrimSuffix(strings.Repeat("?,", len(part)), ",")
+			seqs := make([]any, 0, len(part))
+			for _, sq := range part {
 				seqs = append(seqs, sq)
 			}
 			if _, err := tx.ExecContext(ctx, `DELETE FROM events WHERE seq IN (`+ph+`)`, seqs...); err != nil {
-				tx.Rollback()
-				return removed, err
+				return 0, err
 			}
 		}
-		if err := tx.Commit(); err != nil {
-			return removed, err
-		}
-		removed += len(g.others)
+		removed += len(f.others)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return removed, nil
 }

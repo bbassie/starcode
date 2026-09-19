@@ -55,14 +55,42 @@ func AddWorktree(ctx context.Context, repo, dir, branch, base string) (string, e
 	return name, nil
 }
 
-// RemoveWorktree drops dir from repo when it holds no changes; a dirty
-// worktree stays, since removing it would lose work. The branch is kept
-// either way: it may be pushed, or merged later.
-func RemoveWorktree(ctx context.Context, repo, dir string) error {
-	if st := Read(ctx, dir); st.IsRepo && len(st.Files) > 0 {
+// WorktreeChanges counts the entries `git status --porcelain` lists in
+// dir: modified, staged and untracked files. It is 0 for a clean
+// checkout and for a directory that is not a repository.
+func WorktreeChanges(ctx context.Context, dir string) int {
+	out, err := run(ctx, dir, "status", "--porcelain", "-z")
+	if err != nil {
+		return 0
+	}
+	n := 0
+	recs := strings.Split(out, "\x00")
+	for i := 0; i < len(recs); i++ {
+		rec := recs[i]
+		if len(rec) < 4 {
+			continue
+		}
+		n++
+		if rec[0] == 'R' || rec[0] == 'C' {
+			i++ // with -z a rename or copy puts its old path in the next record
+		}
+	}
+	return n
+}
+
+// RemoveWorktree drops dir from repo. Without force it refuses a
+// worktree that holds changes, since removing it would lose work. With
+// force it runs `git worktree remove --force`, which deletes modified
+// and untracked files too. The branch is kept either way: it may be
+// pushed, or merged later.
+func RemoveWorktree(ctx context.Context, repo, dir string, force bool) error {
+	args := []string{"worktree", "remove", dir}
+	if force {
+		args = []string{"worktree", "remove", "--force", dir}
+	} else if WorktreeChanges(ctx, dir) > 0 {
 		return fmt.Errorf("worktree has uncommitted changes")
 	}
-	if _, err := run(ctx, repo, "worktree", "remove", dir); err != nil {
+	if _, err := run(ctx, repo, args...); err != nil {
 		return err
 	}
 	run(ctx, repo, "worktree", "prune")

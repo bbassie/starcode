@@ -27,16 +27,16 @@ import (
 // claudeCommands are the built-in commands Claude Code takes as a user
 // message over stream-json, one line each.
 var claudeCommands = []views.SlashItem{
+	// Checked over stream-json: these answer. /status and /release-notes
+	// say "isn't available in this environment", /model would change the
+	// model behind the composer's chip, and /clear empties the CLI's
+	// conversation while the transcript here stays, so they are left out.
 	{Cmd: "/compact", Desc: "Fold the conversation so far into a summary and go on from that"},
-	{Cmd: "/clear", Desc: "Forget the conversation and start over"},
-	{Cmd: "/cost", Desc: "Show what this session has cost so far"},
+	{Cmd: "/cost", Desc: "Show the plan's usage so far, the way /usage does"},
 	{Cmd: "/context", Desc: "Show what fills the context window"},
 	{Cmd: "/review", Desc: "Review the working tree's changes"},
 	{Cmd: "/init", Desc: "Write a CLAUDE.md for this project"},
 	{Cmd: "/pr-comments", Desc: "Read the comments on the branch's pull request"},
-	{Cmd: "/release-notes", Desc: "Show what changed in recent Claude Code releases"},
-	{Cmd: "/status", Desc: "Show the account, model and session state"},
-	{Cmd: "/model", Desc: "Show or change the model"},
 }
 
 // Codex has no built-ins here: its app-server takes turn/start text as

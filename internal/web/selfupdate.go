@@ -97,6 +97,18 @@ func NewSelfUpdate(log *slog.Logger) *SelfUpdate {
 	return su
 }
 
+// HomeStamp names the home binary as it is on disk now, so a dismissed
+// "rebuilt" row comes back for the next build.
+func (su *SelfUpdate) HomeStamp() string {
+	if su == nil {
+		return ""
+	}
+	if info, err := os.Stat(su.Home); err == nil {
+		return info.ModTime().UTC().Format(time.RFC3339)
+	}
+	return ""
+}
+
 // Changed reports whether a newer home binary has been seen on disk.
 func (su *SelfUpdate) Changed() bool { return su != nil && su.changed.Load() }
 
@@ -464,7 +476,7 @@ func (s *Server) selfWorktrees(ctx context.Context) []Worktree {
 // on any other thread sharing it), not on every page; the bar for a
 // running branch binary and the home rows show everywhere.
 func (s *Server) bannerData(ctx context.Context, threadID string) views.BannerData {
-	d := views.BannerData{HomeChanged: s.Update.Changed(), Behind: s.Update.Behind()}
+	d := views.BannerData{HomeChanged: s.Update.Changed(), Behind: s.Update.Behind(), HomeKey: s.Update.HomeStamp()}
 	d.PullRunning, d.PullErr, d.PullLog = s.Update.Pull()
 	d.Branch, d.BranchTitle = s.Update.OnBranch(ctx)
 	if builds := s.Update.Builds(); len(builds) > 0 && threadID != "" {

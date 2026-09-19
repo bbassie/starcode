@@ -103,7 +103,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font: var(--font-size)/var(--line) var(--font-ui);
-  height: 100dvh;
+  height: var(--vvh, 100dvh);
   overflow: hidden;
   -webkit-text-size-adjust: 100%;
 }
@@ -1507,3 +1507,17 @@ details.item.agent > summary .tag { display: inline-flex; align-items: center; g
 .in.num { width: 6.5em; min-width: 88px; text-align: right; }
 .update-row.err-row { background: color-mix(in srgb, var(--err) 12%, var(--bg-2)); border-bottom-color: var(--err); }
 .update-log { flex-basis: 100%; margin: 0; max-height: 120px; overflow: auto; font-size: 0.85em; white-space: pre-wrap; }
+.update-row[hidden] { display: none; }
+
+/* Compact sidebar rows (Settings > General): one line, the project's
+   mark in front of the status. */
+.dense-only { display: none; }
+#sidebar.dense .thread-row:not(.compact) a { flex-direction: row; align-items: center; gap: 6px; min-height: 36px; }
+#sidebar.dense .thread-row:not(.compact) .row-top { order: 2; flex: none; min-height: 0; }
+#sidebar.dense .thread-row:not(.compact) .row-top > .proj-init, #sidebar.dense .row-top > .ellipsis, #sidebar.dense .row-top > .spacer, #sidebar.dense .row-branch { display: none; }
+#sidebar.dense .thread-row:not(.compact) .row-main { flex: 1; min-width: 0; }
+#sidebar.dense .dense-only { display: inline-grid; }
+#sidebar.dense .row-actions { top: 50%; transform: translateY(-50%); }
+/* Project cards on the home page: one line per thread. */
+.home-row a { flex-direction: row; min-height: 36px; align-items: center; }
+.home-row .row-main { flex: 1; }
