@@ -127,3 +127,7 @@ Four places, by who the setting belongs to:
 
 A setting every device should share goes in the table; one the server must know before it renders goes in a cookie; the rest stays in the browser.
 
+## Datastar
+
+`internal/web/static/datastar.js` is the vendored bundle (v1.0.4, from `bundles/datastar.js` of the release tag). The page reads with `@query`, not `@get`: the QUERY method carries the signals in the request body, where a GET put them in the URL, the composer's draft among them. Routes the page reads are registered with `Server.read`, which takes GET as well, so links, curl and scripts keep working.
+

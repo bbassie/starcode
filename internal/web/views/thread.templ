@@ -206,7 +206,7 @@ templ Blocks(items []store.Item, aps []store.Approval) {
 // reconnect from cutting the transcript again, and the layout's scroll
 // script (loadEarlier) holds the reader's place while the rows land.
 templ LoadEarlier(threadID string, n int, seq int64) {
-	<button id="load-earlier" type="button" class="btn ghost load-earlier" data-on:click={ "$full = true; loadEarlier(el); @get('/api/threads/" + threadID + "/items?before=" + strconv.FormatInt(seq, 10) + "')" }>@Icon("chevrons-up", "ui-icon") <span>{ strconv.Itoa(n) } earlier { plural(n, "item", "items") }</span></button>
+	<button id="load-earlier" type="button" class="btn ghost load-earlier" data-on:click={ "$full = true; loadEarlier(el); @query('/api/threads/" + threadID + "/items?before=" + strconv.FormatInt(seq, 10) + "')" }>@Icon("chevrons-up", "ui-icon") <span>{ strconv.Itoa(n) } earlier { plural(n, "item", "items") }</span></button>
 }
 
 // Earlier wraps the rows the button fetched in one element, so a prepend
@@ -342,7 +342,7 @@ templ MainHead(d ThreadData) {
 			// repository; a PR elsewhere opens on GitHub. The unlink button
 			// sits next to it since the panel cannot show every PR.
 			if pr.Repo == d.Repo {
-				<button type="button" class="pr-chip-btn" data-on:click={ "$git = true; $panelTab = 'prs'; @get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + "?thread=" + d.Thread.ID + "')" } title={ prChipTitle(pr) + ". Open it in the panel" }>
+				<button type="button" class="pr-chip-btn" data-on:click={ "$git = true; $panelTab = 'prs'; @query('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + "?thread=" + d.Thread.ID + "')" } title={ prChipTitle(pr) + ". Open it in the panel" }>
 					@PRChip(pr, prWord(pr))
 				</button>
 			} else {

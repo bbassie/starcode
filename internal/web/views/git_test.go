@@ -20,7 +20,7 @@ func TestPullRequestsRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := b.String()
-	for _, want := range []string{`@get(&#39;/api/projects/p1/prs/7&#39;)`, "this branch", "#7 · bb · fix", `class="current"`, "draft", `title="Approved"`, `title="Checks failed"`, `title="Checks running"`} {
+	for _, want := range []string{`@query(&#39;/api/projects/p1/prs/7&#39;)`, "this branch", "#7 · bb · fix", `class="current"`, "draft", `title="Approved"`, `title="Checks failed"`, `title="Checks running"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q in\n%s", want, html)
 		}
@@ -82,7 +82,7 @@ func TestPRsPageRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := b.String()
-	for _, want := range []string{"Assigned to you", "Waiting for your review", "Opened by you", "changes requested", "checks failed", `href="/threads/t1"`, "Fix the review", `/api/prs/o/r/3/thread?project=p1`, `@get(&#39;/api/prs/o/r/3&#39;)`, "https://github.com/x/y/pull/5", "none.", `title="4 comments"`} {
+	for _, want := range []string{"Assigned to you", "Waiting for your review", "Opened by you", "changes requested", "checks failed", `href="/threads/t1"`, "Fix the review", `/api/prs/o/r/3/thread?project=p1`, `@query(&#39;/api/prs/o/r/3&#39;)`, "https://github.com/x/y/pull/5", "none.", `title="4 comments"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q", want)
 		}

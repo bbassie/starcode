@@ -14,7 +14,7 @@ import (
 // openFile is the expression that shows path in the side panel's editor:
 // the panel opens on the files tab with the file loaded.
 func openFile(p store.Project, path string) string {
-	return "$git = true; $panelTab = 'files'; $gitPath = " + strconv.Quote(path) + "; $gitEdit = false; @get('/api/git/" + p.ID + "/file?path=" + urlQuery(path) + "')"
+	return "$git = true; $panelTab = 'files'; $gitPath = " + strconv.Quote(path) + "; $gitEdit = false; @query('/api/git/" + p.ID + "/file?path=" + urlQuery(path) + "')"
 }
 
 // Command is one action row in the palette. Action is a Datastar
@@ -62,7 +62,7 @@ templ Palette(p Page) {
 // searchGet is the fetch behind the palette: the page's view and thread
 // ride along so the command list can fit the page.
 func searchGet(p Page) string {
-	return fmt.Sprintf("@get('/api/search?view=%s&id=%s&q=' + encodeURIComponent($pq))", p.View, p.ThreadID)
+	return fmt.Sprintf("@query('/api/search?view=%s&id=%s&q=' + encodeURIComponent($pq))", p.View, p.ThreadID)
 }
 
 // PaletteOpen is the expression a hotkey or button runs to open the

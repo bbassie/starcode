@@ -139,7 +139,10 @@ templ Sidebar(d SidebarData) {
 					// Open on a fresh page; a morph keeps whatever the reader set
 					// by clicking, and a filter opens every project so a match is
 					// never hidden. The count is the threads listed under it.
-					<details id={ "proj-" + p.ID } class="project" open data-preserve-attr="open" data-effect="$q != '' && (el.open = true)">
+					// data-init opens a group the morph built fresh: with rows that
+					// already exist on the page (they carry ids), Datastar makes the
+					// group as an empty shell and leaves the preserved attribute off.
+					<details id={ "proj-" + p.ID } class="project" open data-preserve-attr="open" data-init="el.open = true" data-effect="$q != '' && (el.open = true)">
 						<summary class="project-head">
 							@Icon("chevron-right", "ui-icon project-caret")
 							<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>

@@ -103,19 +103,19 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 
 	s.mux.HandleFunc("GET /{$}", s.home)
 	s.mux.HandleFunc("GET /prs", s.prsPage)
-	s.mux.HandleFunc("GET /api/prs", s.refreshPRs)
-	s.mux.HandleFunc("GET /api/prs/{owner}/{name}/{n}", s.pullRequestPageDetail)
+	s.read("/api/prs", s.refreshPRs)
+	s.read("/api/prs/{owner}/{name}/{n}", s.pullRequestPageDetail)
 	s.mux.HandleFunc("POST /api/prs/{owner}/{name}/{n}/thread", s.pullRequestPageThread)
 	s.mux.HandleFunc("GET /settings", s.settings)
 	s.mux.HandleFunc("GET /settings/appearance", s.appearance)
 	s.mux.HandleFunc("GET /settings/usage", s.usage)
 	s.mux.HandleFunc("GET /settings/providers", s.providersPage)
 	s.mux.HandleFunc("GET /settings/keys", s.keysPage)
-	s.mux.HandleFunc("GET /api/keys", s.keysFragment)
+	s.read("/api/keys", s.keysFragment)
 	s.mux.HandleFunc("POST /api/keys/reset", s.resetKeys)
 	s.mux.HandleFunc("POST /api/keys/{id}", s.setKey)
 	s.mux.HandleFunc("POST /api/keys/{id}/reset", s.resetKey)
-	s.mux.HandleFunc("GET /api/providers/refresh", s.refreshProviders)
+	s.read("/api/providers/refresh", s.refreshProviders)
 	s.mux.HandleFunc("POST /api/providers", s.addProvider)
 	s.mux.HandleFunc("POST /api/providers/interval", s.setCheckInterval)
 	s.mux.HandleFunc("POST /api/providers/{name}", s.saveProvider)
@@ -129,15 +129,15 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/providers/{name}/models/add", s.addModel)
 	s.mux.HandleFunc("POST /api/restart", s.restart)
 	s.mux.HandleFunc("GET /threads/{id}", s.thread)
-	s.mux.HandleFunc("GET /api/threads/{id}/items", s.earlierItems)
-	s.mux.HandleFunc("GET /events", s.events)
-	s.mux.HandleFunc("GET /api/search", s.search)
+	s.read("/api/threads/{id}/items", s.earlierItems)
+	s.read("/events", s.events)
+	s.read("/api/search", s.search)
 
 	s.mux.HandleFunc("POST /api/projects", s.addProject)
 	s.mux.HandleFunc("GET /api/project-paths", s.projectPaths)
-	s.mux.HandleFunc("GET /api/projects/{id}/files", s.projectFiles)
-	s.mux.HandleFunc("GET /api/projects/{id}/prs", s.pullRequests)
-	s.mux.HandleFunc("GET /api/projects/{id}/prs/{n}", s.pullRequest)
+	s.read("/api/projects/{id}/files", s.projectFiles)
+	s.read("/api/projects/{id}/prs", s.pullRequests)
+	s.read("/api/projects/{id}/prs/{n}", s.pullRequest)
 	s.mux.HandleFunc("POST /api/projects/{id}/prs/{n}/draft", s.pullRequestDraft)
 	s.mux.HandleFunc("POST /api/projects/{id}/prs/{n}/thread", s.pullRequestThread)
 	s.mux.HandleFunc("POST /api/projects/{id}/upload", s.uploadFiles)
@@ -173,9 +173,9 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/threads/{id}/settings", s.setThreadSettings)
 	s.mux.HandleFunc("POST /api/threads/{id}/approvals/{aid}/{decision}", s.approve)
 	s.mux.HandleFunc("POST /api/theme", s.setTheme)
-	s.mux.HandleFunc("GET /api/git/{id}/refresh", s.gitRefresh)
-	s.mux.HandleFunc("GET /api/git/{id}/diff", s.gitDiff)
-	s.mux.HandleFunc("GET /api/git/{id}/file", s.gitFile)
+	s.read("/api/git/{id}/refresh", s.gitRefresh)
+	s.read("/api/git/{id}/diff", s.gitDiff)
+	s.read("/api/git/{id}/file", s.gitFile)
 	s.mux.HandleFunc("POST /api/git/{id}/file", s.saveGitFile)
 	s.mux.HandleFunc("GET /api/term/{id}/stream", s.termStream)
 	s.mux.HandleFunc("POST /api/term/{id}/input", s.termInput)
@@ -337,6 +337,15 @@ func (s *Server) sidebarMode(r *http.Request) string {
 func (s *Server) denseMode(r *http.Request) bool {
 	c, err := r.Cookie("dense")
 	return err == nil && c.Value == "1"
+}
+
+// read registers a handler the page calls with Datastar's @query: the
+// QUERY method carries the page's signals in the body, where a GET put
+// them in the URL, the composer's draft among them, on every panel click
+// and every stream reconnect. GET stays for links, curl and old pages.
+func (s *Server) read(pattern string, h http.HandlerFunc) {
+	s.mux.HandleFunc("GET "+pattern, h)
+	s.mux.HandleFunc("QUERY "+pattern, h)
 }
 
 func (s *Server) theme(r *http.Request) string {

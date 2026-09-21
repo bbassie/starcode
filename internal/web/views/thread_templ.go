@@ -327,9 +327,9 @@ func LoadEarlier(threadID string, n int, seq int64) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var4 string
-		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.ResolveAttributeValue("$full = true; loadEarlier(el); @get('/api/threads/" + threadID + "/items?before=" + strconv.FormatInt(seq, 10) + "')")
+		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.ResolveAttributeValue("$full = true; loadEarlier(el); @query('/api/threads/" + threadID + "/items?before=" + strconv.FormatInt(seq, 10) + "')")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 209, Col: 206}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 209, Col: 208}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
 		if templ_7745c5c3_Err != nil {
@@ -350,7 +350,7 @@ func LoadEarlier(threadID string, n int, seq int64) templ.Component {
 		var templ_7745c5c3_Var5 string
 		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(n))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 209, Col: 264}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 209, Col: 266}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 		if templ_7745c5c3_Err != nil {
@@ -363,7 +363,7 @@ func LoadEarlier(threadID string, n int, seq int64) templ.Component {
 		var templ_7745c5c3_Var6 string
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(plural(n, "item", "items"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 209, Col: 303}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 209, Col: 305}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 		if templ_7745c5c3_Err != nil {
@@ -939,9 +939,9 @@ func MainHead(d ThreadData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var33 string
-				templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.ResolveAttributeValue("$git = true; $panelTab = 'prs'; @get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + "?thread=" + d.Thread.ID + "')")
+				templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.ResolveAttributeValue("$git = true; $panelTab = 'prs'; @query('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + "?thread=" + d.Thread.ID + "')")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 345, Col: 201}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 345, Col: 203}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var33)
 				if templ_7745c5c3_Err != nil {
@@ -954,7 +954,7 @@ func MainHead(d ThreadData) templ.Component {
 				var templ_7745c5c3_Var34 string
 				templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.ResolveAttributeValue(prChipTitle(pr) + ". Open it in the panel")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 345, Col: 254}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 345, Col: 256}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var34)
 				if templ_7745c5c3_Err != nil {

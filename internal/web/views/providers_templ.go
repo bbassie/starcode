@@ -119,9 +119,9 @@ func ProvidersPage(d ProvidersData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var3 string
-		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.ResolveAttributeValue("@get('" + refreshURL(d) + "')")
+		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.ResolveAttributeValue("@query('" + refreshURL(d) + "')")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/providers.templ`, Line: 77, Col: 91}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/providers.templ`, Line: 77, Col: 93}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var3)
 		if templ_7745c5c3_Err != nil {

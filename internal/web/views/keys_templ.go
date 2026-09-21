@@ -98,7 +98,7 @@ func KeysSection(d KeysPageData) templ.Component {
 				custom++
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<section id=\"keys\" class=\"settings-section\" data-signals=\"{combo: ''}\"><header><h1>Keyboard shortcuts</h1><p class=\"dim\">Press change, then the new keys. Mod is Ctrl, or Cmd on a Mac. A shortcut without a modifier only fires when no text box has focus; inside the terminal only the ones marked for it work. Pages already open pick up a change when they reload.</p></header><input type=\"text\" class=\"key-combo\" data-bind:combo style=\"display: none\" tabindex=\"-1\" aria-hidden=\"true\"> <button type=\"button\" id=\"keys-refresh\" hidden data-on:click=\"@get('/api/keys')\"></button><div class=\"settings-card\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<section id=\"keys\" class=\"settings-section\" data-signals=\"{combo: ''}\"><header><h1>Keyboard shortcuts</h1><p class=\"dim\">Press change, then the new keys. Mod is Ctrl, or Cmd on a Mac. A shortcut without a modifier only fires when no text box has focus; inside the terminal only the ones marked for it work. Pages already open pick up a change when they reload.</p></header><input type=\"text\" class=\"key-combo\" data-bind:combo style=\"display: none\" tabindex=\"-1\" aria-hidden=\"true\"> <button type=\"button\" id=\"keys-refresh\" hidden data-on:click=\"@query('/api/keys')\"></button><div class=\"settings-card\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

@@ -145,9 +145,9 @@ templ GitHeader(d GitData) {
 	<div id="git-head" class="side-head">
 		if d.Project.ID != "" {
 			<div class="panel-tabs">
-				<button class="panel-tab" data-class:active="$panelTab === 'files'" data-on:click={ "$panelTab = 'files'; @get('/api/projects/" + d.Project.ID + "/files')" }>@Icon("folder", "ui-icon") files</button>
+				<button class="panel-tab" data-class:active="$panelTab === 'files'" data-on:click={ "$panelTab = 'files'; @query('/api/projects/" + d.Project.ID + "/files')" }>@Icon("folder", "ui-icon") files</button>
 				<button class="panel-tab active" data-class:active="$panelTab === 'changes'" data-on:click="$panelTab = 'changes'">@Icon("git-compare-arrows", "ui-icon") changes</button>
-				<button class="panel-tab" data-class:active="$panelTab === 'prs'" data-on:click={ "$panelTab = 'prs'; @get('/api/projects/" + d.Project.ID + "/prs" + prQuery(d.ThreadID) + "')" } title="Pull requests on GitHub">@Icon("git-pull-request", "ui-icon") PRs</button>
+				<button class="panel-tab" data-class:active="$panelTab === 'prs'" data-on:click={ "$panelTab = 'prs'; @query('/api/projects/" + d.Project.ID + "/prs" + prQuery(d.ThreadID) + "')" } title="Pull requests on GitHub">@Icon("git-pull-request", "ui-icon") PRs</button>
 			</div>
 		} else {
 			<span>Project</span>
@@ -160,8 +160,8 @@ templ GitHeader(d GitData) {
 			}
 		}
 		if d.Project.ID != "" {
-			<button class="btn icon ghost tiny" data-show="$panelTab === 'changes'" data-on:click={ "@get('/api/git/" + d.Project.ID + "/refresh')" } title="Refresh">@Icon("refresh-cw", "ui-icon")</button>
-			<button class="btn icon ghost tiny" data-show="$panelTab === 'prs'" data-preserve-attr="style" style="display: none" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/prs?refresh=1" + prAnd(d.ThreadID) + "')" } title="Refresh pull requests">@Icon("refresh-cw", "ui-icon")</button>
+			<button class="btn icon ghost tiny" data-show="$panelTab === 'changes'" data-on:click={ "@query('/api/git/" + d.Project.ID + "/refresh')" } title="Refresh">@Icon("refresh-cw", "ui-icon")</button>
+			<button class="btn icon ghost tiny" data-show="$panelTab === 'prs'" data-preserve-attr="style" style="display: none" data-on:click={ "@query('/api/projects/" + d.Project.ID + "/prs?refresh=1" + prAnd(d.ThreadID) + "')" } title="Refresh pull requests">@Icon("refresh-cw", "ui-icon")</button>
 		}
 		// The choice is kept in localStorage, so the panel opens at the same
 			// width on the next thread; the body's signals read it back.
@@ -182,7 +182,7 @@ templ GitFiles(d GitData) {
 			<ul class="files">
 				for _, f := range d.Status.Files {
 					<li data-class:current={ "$gitPath === " + strconv.Quote(f.Path) }>
-						<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/diff?path=" + urlQuery(f.Path) + "')" }>
+						<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @query('/api/git/" + d.Project.ID + "/diff?path=" + urlQuery(f.Path) + "')" }>
 							<span class={ "code", statusClass(f.Status) }>{ strings.TrimSpace(f.Status) }</span>
 							<span class="ellipsis">{ f.Path }</span>
 						</a>
@@ -209,7 +209,7 @@ templ FileExplorer(d ExplorerData) {
 				// to the folder named by $updir.
 				<button class="btn icon ghost tiny" type="button" title="Upload files into the project root" aria-label="Upload files into the project root" data-on:click="$updir = ''; el.nextElementSibling.click()">@Icon("upload", "ui-icon")</button>
 				<input type="file" multiple data-bind:_upload data-on:click="el.value = ''" style="display: none" data-effect={ "$_upload.length > 0 && @post('/api/projects/" + d.Project.ID + "/upload?path=' + encodeURIComponent($updir), " + onlySignal("_upload") + ")" }/>
-				<button class="btn icon ghost tiny" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/files')" } title="Reload the tree" aria-label="Reload the tree">@Icon("refresh-cw", "ui-icon")</button>
+				<button class="btn icon ghost tiny" data-on:click={ "@query('/api/projects/" + d.Project.ID + "/files')" } title="Reload the tree" aria-label="Reload the tree">@Icon("refresh-cw", "ui-icon")</button>
 			}
 		</div>
 		if len(d.Files) == 0 && d.Project.ID != "" {
@@ -228,7 +228,7 @@ templ TreeChildren(d ExplorerData) {
 			if f.IsDir {
 				<li>
 					<details class="tree-dir" data-path={ f.Path } data-preserve-attr="open" data-init="treeRestore(el)">
-						<summary data-on:click={ "!el.parentElement.open && @get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')" }>
+						<summary data-on:click={ "!el.parentElement.open && @query('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')" }>
 							@Icon("chevron-right", "ui-icon tree-caret")
 							<span class="explorer-kind">@Icon("folder", "ui-icon")</span>
 							<span class={ "ellipsis", templ.KV("dim", strings.HasPrefix(f.Name, ".")) }>{ f.Name }</span>
@@ -237,13 +237,13 @@ templ TreeChildren(d ExplorerData) {
 						<ul id={ treeID(f.Path) } class="files explorer tree" style={ "--depth: " + strconv.Itoa(treeDepth(f.Path)) }>
 							// A morph (an upload, a reload) brings this placeholder
 							// back under a folder that was open; it loads itself then.
-							<li class="dim tiny-text tree-loading" data-init={ "el.closest('details').open && @get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')" }>loading…</li>
+							<li class="dim tiny-text tree-loading" data-init={ "el.closest('details').open && @query('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')" }>loading…</li>
 						</ul>
 					</details>
 				</li>
 			} else {
 				<li data-class:current={ "$gitPath === " + strconv.Quote(f.Path) }>
-					<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title="Open in editor" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')" }>
+					<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title="Open in editor" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @query('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')" }>
 						<span class="explorer-kind">@Icon("file", "ui-icon")</span>
 						<span class={ "ellipsis", templ.KV("dim", strings.HasPrefix(f.Name, ".")) }>{ f.Name }</span>
 					</a>
@@ -301,7 +301,7 @@ templ PullRequests(d PRData) {
 						<li class={ templ.KV("current", pr.Head == d.List.Branch) }>
 							// The row opens the detail in the panel; the GitHub page
 							// is one click further, in the detail's head.
-							<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + prQuery(d.ThreadID) + "')" }>
+							<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @query('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + prQuery(d.ThreadID) + "')" }>
 								<span class={ "pr-mark", prClass(pr) }>@Icon(prIcon(pr), "ui-icon")</span>
 								<span class="pr-text">
 									<span class="ellipsis">{ pr.Title }</span>
@@ -362,7 +362,7 @@ templ PRDetailView(d PRDetailData) {
 						<button class="btn tiny ghost" data-on:click={ "@post('/api/threads/" + d.ThreadID + "/pr/link?repo=" + urlQuery(d.Repo) + "&n=" + strconv.Itoa(d.Detail.Number) + "')" } title="Link this thread to the pull request: the sidebar then shows its number and state">@Icon("link", "ui-icon") <span>link to thread</span></button>
 					}
 				}
-				<button class="btn icon ghost tiny" data-on:click={ "@get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(d.Detail.Number) + "?refresh=1" + prAnd(d.ThreadID) + "')" } title="Refresh" aria-label="Refresh">@Icon("refresh-cw", "ui-icon")</button>
+				<button class="btn icon ghost tiny" data-on:click={ "@query('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(d.Detail.Number) + "?refresh=1" + prAnd(d.ThreadID) + "')" } title="Refresh" aria-label="Refresh">@Icon("refresh-cw", "ui-icon")</button>
 				<a class="btn icon ghost tiny" href={ templ.SafeURL(d.Detail.URL) } target="_blank" rel="noopener" title="Open on GitHub" aria-label="Open on GitHub">@Icon("external-link", "ui-icon")</a>
 			}
 		</div>
@@ -797,7 +797,7 @@ templ GitDetail(d GitData) {
 			<div class="diff-head mono ellipsis">{ d.Selected }</div>
 			<div class="git-detail-actions" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) }>
 				<span class="spacer"></span>
-				<button class="btn tiny" data-on:click={ "@get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
+				<button class="btn tiny" data-on:click={ "@query('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
 			</div>
 			// The editor is a textarea with transparent text over a <pre>
 			// that static/highlight.js colours; the gutter counts lines.

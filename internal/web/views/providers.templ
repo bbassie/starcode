@@ -74,7 +74,7 @@ templ ProvidersPage(d ProvidersData) {
 							</div>
 							<div class="prov-head-actions">
 								<span class="dim tiny-text">Checked { d.CheckedAt.Local().Format("15:04") }</span>
-								<button class="btn icon ghost tiny" data-on:click={ "@get('" + refreshURL(d) + "')" } title="Check versions and sign-in again" aria-label="Check again">@Icon("refresh-cw", "ui-icon")</button>
+								<button class="btn icon ghost tiny" data-on:click={ "@query('" + refreshURL(d) + "')" } title="Check versions and sign-in again" aria-label="Check again">@Icon("refresh-cw", "ui-icon")</button>
 								<a class="btn icon ghost tiny" href="/settings/providers?sel=new" title="Add an instance" aria-label="Add an instance">@Icon("plus", "ui-icon")</a>
 							</div>
 						</header>

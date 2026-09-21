@@ -62,7 +62,7 @@ var runUser = sync.OnceValue(func() string {
 // resolves when the stream ends, which is when streamEnded (layout script)
 // schedules the next one.
 func streamOpen(p Page) string {
-	return fmt.Sprintf("@get('%s', {openWhenHidden: true, retryMaxCount: 1000}).then(() => streamEnded(), () => streamEnded())", p.streamURL())
+	return fmt.Sprintf("@query('%s', {openWhenHidden: true, retryMaxCount: 1000}).then(() => streamEnded(), () => streamEnded())", p.streamURL())
 }
 
 func (p Page) streamURL() string {

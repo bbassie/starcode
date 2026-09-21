@@ -16,7 +16,7 @@ import (
 
 // worktreeRoutes registers the branch list. server.go calls it.
 func (s *Server) worktreeRoutes() {
-	s.mux.HandleFunc("GET /api/projects/{id}/branches", s.projectBranches)
+	s.read("/api/projects/{id}/branches", s.projectBranches)
 }
 
 // projectBranches patches the #wt-base select and sets the wtbase signal

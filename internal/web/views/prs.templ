@@ -38,7 +38,7 @@ templ PRsPage(d PRsPageData) {
 			if !d.At.IsZero() {
 				<span class="dim tiny-text hide-sm" title="When the lists were last read from GitHub">updated <span data-ago={ d.At.UTC().Format(time.RFC3339) }>{ ago(d.At) }</span></span>
 			}
-			<button class="btn ghost" data-on:click="@get('/api/prs')" title="Read the lists again, and the state of every linked pull request">@Icon("refresh-cw", "ui-icon") <span class="hide-sm">refresh</span></button>
+			<button class="btn ghost" data-on:click="@query('/api/prs')" title="Read the lists again, and the state of every linked pull request">@Icon("refresh-cw", "ui-icon") <span class="hide-sm">refresh</span></button>
 		</header>
 		<div class="prs-scroll">
 			<div class="prs-inner">
@@ -83,7 +83,7 @@ templ PRPageDetail(d PRDetailData) {
 						<span class="ellipsis">{ t.Title }</span>
 					</a>
 				}
-				<button class="btn icon ghost tiny" data-on:click={ "@get('" + d.Base + "?refresh=1')" } title="Refresh" aria-label="Refresh">@Icon("refresh-cw", "ui-icon")</button>
+				<button class="btn icon ghost tiny" data-on:click={ "@query('" + d.Base + "?refresh=1')" } title="Refresh" aria-label="Refresh">@Icon("refresh-cw", "ui-icon")</button>
 				if d.Detail.URL != "" {
 					<a class="btn icon ghost tiny" href={ templ.SafeURL(d.Detail.URL) } target="_blank" rel="noopener" title="Open on GitHub" aria-label="Open on GitHub">@Icon("external-link", "ui-icon")</a>
 				}
@@ -119,7 +119,7 @@ templ prRow(pr gitx.MyPR, d PRsPageData) {
 	{{ threads := d.Threads[store.PR{Repo: pr.Repo, Number: pr.Number}] }}
 	<li>
 		// The row opens the PR here; GitHub is the button at its end.
-		<a class="pr-row" role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @get('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')" }>
+		<a class="pr-row" role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @query('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')" }>
 			<span class={ "pr-mark", prClass(pr.PR) }>@Icon(prIcon(pr.PR), "ui-icon")</span>
 			<span class="pr-text">
 				<span class="ellipsis"><span class="dim">{ pr.Repo }</span> <span class="mono dim">#{ strconv.Itoa(pr.Number) }</span> { pr.Title }</span>

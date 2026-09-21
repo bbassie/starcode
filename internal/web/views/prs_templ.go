@@ -130,7 +130,7 @@ func PRsPage(d PRsPageData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<button class=\"btn ghost\" data-on:click=\"@get('/api/prs')\" title=\"Read the lists again, and the state of every linked pull request\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<button class=\"btn ghost\" data-on:click=\"@query('/api/prs')\" title=\"Read the lists again, and the state of every linked pull request\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -389,9 +389,9 @@ func PRPageDetail(d PRDetailData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var15 string
-			templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.ResolveAttributeValue("@get('" + d.Base + "?refresh=1')")
+			templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.ResolveAttributeValue("@query('" + d.Base + "?refresh=1')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/prs.templ`, Line: 86, Col: 90}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/prs.templ`, Line: 86, Col: 92}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var15)
 			if templ_7745c5c3_Err != nil {
@@ -598,9 +598,9 @@ func prRow(pr gitx.MyPR, d PRsPageData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var23 string
-		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); @get('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')")
+		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); @query('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/prs.templ`, Line: 122, Col: 241}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/prs.templ`, Line: 122, Col: 243}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 		if templ_7745c5c3_Err != nil {

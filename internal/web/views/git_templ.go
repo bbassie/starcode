@@ -240,9 +240,9 @@ func GitHeader(d GitData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var5 string
-			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue("$panelTab = 'files'; @get('/api/projects/" + d.Project.ID + "/files')")
+			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue("$panelTab = 'files'; @query('/api/projects/" + d.Project.ID + "/files')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 148, Col: 159}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 148, Col: 161}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
 			if templ_7745c5c3_Err != nil {
@@ -269,9 +269,9 @@ func GitHeader(d GitData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var6 string
-			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.ResolveAttributeValue("$panelTab = 'prs'; @get('/api/projects/" + d.Project.ID + "/prs" + prQuery(d.ThreadID) + "')")
+			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.ResolveAttributeValue("$panelTab = 'prs'; @query('/api/projects/" + d.Project.ID + "/prs" + prQuery(d.ThreadID) + "')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 150, Col: 180}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 150, Col: 182}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var6)
 			if templ_7745c5c3_Err != nil {
@@ -351,9 +351,9 @@ func GitHeader(d GitData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var9 string
-			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue("@get('/api/git/" + d.Project.ID + "/refresh')")
+			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue("@query('/api/git/" + d.Project.ID + "/refresh')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 163, Col: 138}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 163, Col: 140}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 			if templ_7745c5c3_Err != nil {
@@ -372,9 +372,9 @@ func GitHeader(d GitData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var10 string
-			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue("@get('/api/projects/" + d.Project.ID + "/prs?refresh=1" + prAnd(d.ThreadID) + "')")
+			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue("@query('/api/projects/" + d.Project.ID + "/prs?refresh=1" + prAnd(d.ThreadID) + "')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 164, Col: 219}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 164, Col: 221}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 			if templ_7745c5c3_Err != nil {
@@ -494,9 +494,9 @@ func GitFiles(d GitData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var14 string
-				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/diff?path=" + urlQuery(f.Path) + "')")
+				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @query('/api/git/" + d.Project.ID + "/diff?path=" + urlQuery(f.Path) + "')")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 185, Col: 260}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 185, Col: 262}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var14)
 				if templ_7745c5c3_Err != nil {
@@ -665,9 +665,9 @@ func FileExplorer(d ExplorerData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var24 string
-			templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue("@get('/api/projects/" + d.Project.ID + "/files')")
+			templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue("@query('/api/projects/" + d.Project.ID + "/files')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 212, Col: 106}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 212, Col: 108}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var24)
 			if templ_7745c5c3_Err != nil {
@@ -782,9 +782,9 @@ func TreeChildren(d ExplorerData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var29 string
-				templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.ResolveAttributeValue("!el.parentElement.open && @get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')")
+				templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.ResolveAttributeValue("!el.parentElement.open && @query('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 231, Col: 137}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 231, Col: 139}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var29)
 				if templ_7745c5c3_Err != nil {
@@ -906,9 +906,9 @@ func TreeChildren(d ExplorerData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var37 string
-				templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.ResolveAttributeValue("el.closest('details').open && @get('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')")
+				templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.ResolveAttributeValue("el.closest('details').open && @query('/api/projects/" + d.Project.ID + "/files?path=" + urlQuery(f.Path) + "')")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 240, Col: 168}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 240, Col: 170}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var37)
 				if templ_7745c5c3_Err != nil {
@@ -937,9 +937,9 @@ func TreeChildren(d ExplorerData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var39 string
-				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')")
+				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); $gitPath = " + strconv.Quote(f.Path) + "; $gitEdit = false; @query('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(f.Path) + "')")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 246, Col: 282}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 246, Col: 284}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var39)
 				if templ_7745c5c3_Err != nil {
@@ -1192,9 +1192,9 @@ func PullRequests(d PRData) templ.Component {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var51 string
-					templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); @get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + prQuery(d.ThreadID) + "')")
+					templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.ResolveAttributeValue("evt.preventDefault(); @query('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + prQuery(d.ThreadID) + "')")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 304, Col: 267}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 304, Col: 269}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var51)
 					if templ_7745c5c3_Err != nil {
@@ -1561,9 +1561,9 @@ func PRDetailView(d PRDetailData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var65 string
-			templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.ResolveAttributeValue("@get('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(d.Detail.Number) + "?refresh=1" + prAnd(d.ThreadID) + "')")
+			templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.ResolveAttributeValue("@query('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(d.Detail.Number) + "?refresh=1" + prAnd(d.ThreadID) + "')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 365, Col: 177}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 365, Col: 179}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var65)
 			if templ_7745c5c3_Err != nil {
@@ -3546,9 +3546,9 @@ func GitDetail(d GitData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var142 string
-			templ_7745c5c3_Var142, templ_7745c5c3_Err = templ.ResolveAttributeValue("@get('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')")
+			templ_7745c5c3_Var142, templ_7745c5c3_Err = templ.ResolveAttributeValue("@query('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 800, Col: 123}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/git.templ`, Line: 800, Col: 125}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var142)
 			if templ_7745c5c3_Err != nil {

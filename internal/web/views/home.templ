@@ -192,7 +192,7 @@ templ ProjectPick(projects []store.Project, threads []store.Thread) {
 								@Icon("check", "ui-icon opt-check")
 							</button>
 						}
-						<button type="button" class={ "opt", templ.KV("sel", p.Worktrees) } role="option" data-class:sel={ "$wt == 'worktree' || ($wt == '' && " + fmt.Sprint(p.Worktrees) + ")" } data-on:click="$wt = 'worktree'; @get('/api/projects/' + $project + '/branches')">
+						<button type="button" class={ "opt", templ.KV("sel", p.Worktrees) } role="option" data-class:sel={ "$wt == 'worktree' || ($wt == '' && " + fmt.Sprint(p.Worktrees) + ")" } data-on:click="$wt = 'worktree'; @query('/api/projects/' + $project + '/branches')">
 							@Icon("folder-git-2", "ui-icon opt-icon")
 							<span class="opt-text">
 								<span class="opt-name"><span>New worktree</span></span>
