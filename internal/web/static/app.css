@@ -34,6 +34,10 @@
   --add-bg: rgba(117, 169, 141, 0.13);
   --del-bg: rgba(200, 120, 120, 0.13);
   --sel: rgba(132, 151, 189, 0.14);
+  /* Selected text. --sel is the tint of a current row, far too faint for
+     a selection; this one is the accent at a strength text stays readable
+     on. A plain rgba, since xterm takes it too and parses nothing else. */
+  --select: rgba(132, 151, 189, 0.45);
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.48);
   --cursor: var(--accent);
 }
@@ -55,6 +59,7 @@
   --add-bg: rgba(79, 209, 165, 0.14);
   --del-bg: rgba(240, 113, 120, 0.14);
   --sel: rgba(110, 168, 254, 0.16);
+  --select: rgba(110, 168, 254, 0.42);
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
@@ -76,6 +81,7 @@
   --add-bg: rgba(23, 145, 95, 0.12);
   --del-bg: rgba(209, 58, 69, 0.12);
   --sel: rgba(47, 111, 237, 0.12);
+  --select: rgba(47, 111, 237, 0.28);
   --shadow: 0 8px 24px rgba(20, 30, 50, 0.12);
 }
 
@@ -84,14 +90,14 @@
   --fg: #ddd4c2; --fg-dim: #827969; --border: #2a241b;
   --accent: #c49a5a; --accent-fg: #130d05;
   --ok: #7fa88f; --warn: #c49a5a; --err: #c77970; --merged: #b48fb8;
-  --add-bg: rgba(127, 168, 143, 0.12); --del-bg: rgba(199, 121, 112, 0.13); --sel: rgba(196, 154, 90, 0.12);
+  --add-bg: rgba(127, 168, 143, 0.12); --del-bg: rgba(199, 121, 112, 0.13); --sel: rgba(196, 154, 90, 0.12); --select: rgba(196, 154, 90, 0.42);
 }
 [data-theme="green"] {
   --bg: #080c0a; --bg-2: #0d1310; --bg-3: #131b16; --bg-4: #1a251e;
   --fg: #d0dbd3; --fg-dim: #718079; --border: #1d2a22;
   --accent: #74a887; --accent-fg: #07100a;
   --ok: #74a887; --warn: #b29a65; --err: #bd746f; --merged: #9f8fbd;
-  --add-bg: rgba(116, 168, 135, 0.12); --del-bg: rgba(189, 116, 111, 0.13); --sel: rgba(116, 168, 135, 0.12);
+  --add-bg: rgba(116, 168, 135, 0.12); --del-bg: rgba(189, 116, 111, 0.13); --sel: rgba(116, 168, 135, 0.12); --select: rgba(116, 168, 135, 0.42);
 }
 
 /* ---- reset ---- */
@@ -116,7 +122,7 @@ h1.h { font-size: 1.35em; margin: 24px 0 14px; }
 p { margin: 0 0 var(--gap); }
 ul { list-style: none; margin: 0; padding: 0; }
 button, input, select, textarea { font: inherit; color: inherit; }
-::selection { background: var(--sel); }
+::selection { background: var(--select); color: var(--fg); }
 
 .dim { color: var(--fg-dim); }
 .err { color: var(--err); }
@@ -1098,7 +1104,9 @@ body.panel-wide { --gitpanel-w: min(62vw, 960px); }
 .editor-hl, .file-editor { position: absolute; top: 0; left: calc(3.5ch + 7px); right: 0; bottom: 0; margin: 0; padding: var(--pad); font: inherit; line-height: inherit; tab-size: inherit; white-space: pre; word-break: normal; overflow-wrap: normal; }
 .editor-hl { pointer-events: none; color: var(--fg); will-change: transform; overflow: visible; width: max-content; min-width: 100%; height: max-content; min-height: 100%; }
 .file-editor { resize: none; border: 0; outline: none; background: transparent; color: transparent; caret-color: var(--fg); overflow: auto; }
-.file-editor::selection { background: var(--sel); }
+/* The editor's own text is transparent over the highlighted copy; a
+   selection must not paint it, or every selected word shows twice. */
+.file-editor::selection { background: var(--select); color: transparent; }
 .git-editor-actions { display: flex; align-items: center; gap: 6px; padding: 8px var(--pad); border-top: var(--border-w) solid var(--border); }
 .git-editor.dirty .btn.primary { box-shadow: 0 0 0 2px var(--sel); }
 /* highlight.js classes in the theme's colours. */

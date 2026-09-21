@@ -18,7 +18,7 @@
     foreground: cssVar('--fg'),
     cursor: cssVar('--cursor') || cssVar('--accent'),
     cursorAccent: cssVar('--bg'),
-    selectionBackground: cssVar('--sel'),
+    selectionBackground: cssVar('--select') || cssVar('--sel'),
   });
 
   const decode = (b64) => {
