@@ -1,6 +1,10 @@
 package views
 
-import "strings"
+import (
+	"starcode/internal/gitx"
+	"strconv"
+	"strings"
+)
 
 // SlashItem is one row of the composer's slash menu: a built-in command
 // of the agent or a skill found on disk. Cmd is what lands in the
@@ -32,4 +36,31 @@ templ SlashMenu(items []SlashItem) {
 		</button>
 	}
 	<p class="dim pad slash-empty" hidden?={ len(items) > 0 }>no matching command</p>
+}
+
+// PRPickMenu is the composer's "#" menu: the repository's open pull
+// requests, newest activity first as gh lists them. data-link is what a
+// pick inserts; data-k what the typed digits or words match.
+templ PRPickMenu(list gitx.PRList) {
+	<div class="pick-head">Pull requests{ prPickRepo(list.Repo) }</div>
+	if list.Err != "" {
+		<p class="dim pad">{ list.Err }</p>
+	}
+	for _, pr := range list.PRs {
+		<button type="button" class="opt" data-link={ "[#" + strconv.Itoa(pr.Number) + "](" + pr.URL + ")" } data-k={ strings.ToLower(strconv.Itoa(pr.Number) + " " + pr.Title + " " + pr.Head + " " + pr.Author) } data-on:click="prPick(el)">
+			<span class={ "pr-mark", prClass(pr) }>@Icon(prIcon(pr), "ui-icon")</span>
+			<span class="opt-text">
+				<span class="opt-name"><span class="mono dim">#{ strconv.Itoa(pr.Number) }</span> <span class="ellipsis">{ pr.Title }</span></span>
+				<span class="opt-desc">{ pr.Author } · { pr.Head }</span>
+			</span>
+		</button>
+	}
+	<p class="dim pad slash-empty" hidden?={ len(list.PRs) > 0 }>no matching pull request</p>
+}
+
+func prPickRepo(repo string) string {
+	if repo == "" {
+		return ""
+	}
+	return " in " + repo
 }

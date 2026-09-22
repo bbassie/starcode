@@ -42,6 +42,8 @@ var Actions = []Action{
 	{ID: "approve", Label: "Allow", Desc: "Answer the oldest waiting approval with allow", Default: "alt+y", Where: "threads with an approval waiting"},
 	{ID: "approve-session", Label: "Allow for session", Desc: "Allow it and every later request like it in this thread", Default: "alt+shift+y", Where: "threads with an approval waiting"},
 	{ID: "deny", Label: "Deny", Desc: "Answer the oldest waiting approval with deny", Default: "alt+n", Where: "threads with an approval waiting"},
+	{ID: "undo", Label: "Undo", Desc: "Take back the last settle, unpin or snooze while its notice shows", Default: "mod+z", Where: "everywhere, outside text boxes"},
+	{ID: "stash", Label: "Stash the prompt", Desc: "Put the composer's text aside, or bring a stashed prompt back when it is empty", Default: "mod+s", Where: "pages with a composer, outside the file editor"},
 }
 
 // Binding is an action with the combo in force.

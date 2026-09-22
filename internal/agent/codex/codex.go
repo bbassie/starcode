@@ -128,6 +128,12 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 		params["threadId"] = cfg.ResumeID
 		// History already lives in starcode's store, so skip the replay.
 		params["excludeTurns"] = true
+		// A rewind: a new thread that copies this one through the turn
+		// named, leaving the original as it was.
+		if cfg.ForkAt != "" {
+			method = "thread/fork"
+			params["lastTurnId"] = cfg.ForkAt
+		}
 	}
 
 	raw, err := c.call(ctx, method, params)

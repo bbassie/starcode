@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"starcode/internal/agent"
@@ -45,11 +46,23 @@ type App struct {
 	// one directory per project; empty disables worktrees.
 	WorktreeRoot string
 
+	// KeepWorktree, when set, names checkouts the automatic cleanup must
+	// leave alone whatever their state: the one this process runs its
+	// binary from, say.
+	KeepWorktree func(dir string) bool
+
 	// idleTimeout is how long a session may sit between turns before
 	// reapIdle closes its process; stop ends the sweeper.
 	idleTimeout time.Duration
 	stop        chan struct{}
 	stopOnce    sync.Once
+	// closing is set by Shutdown: from then on the pumps drop what the
+	// dying sessions report, so a turn cut off by the shutdown still
+	// reads as running when the next start looks (see Recover).
+	closing atomic.Bool
+	// cutOff are the threads Recover found cut off by a restart and left
+	// for ResumeCutOff.
+	cutOff []string
 }
 
 // idleTimeout is how long a thread's agent process stays alive after its
@@ -62,6 +75,10 @@ type App struct {
 // contenders to the threads actually working; the next prompt resumes the
 // session from its id at the cost of one process start.
 const idleTimeout = 30 * time.Minute
+
+// checkpointTimeout bounds the worktree checkpoint taken as a prompt
+// goes out (see startPromptMeta).
+const checkpointTimeout = 20 * time.Second
 
 // idleSweep is how often reapIdle runs.
 const idleSweep = time.Minute
@@ -82,8 +99,14 @@ func New(st *store.Store, b *bus.Bus, agents map[string]agent.Agent, log *slog.L
 		}
 		b.Publish(msgs...)
 	}
-	go a.reapLoop()
 	return a
+}
+
+// Start runs the sweeps (idle sessions, snoozes, settling, worktree
+// cleanup) until Shutdown. main calls it once everything the sweeps read
+// is set: WorktreeRoot, KeepWorktree.
+func (a *App) Start() {
+	go a.reapLoop()
 }
 
 func (a *App) reapLoop() {
@@ -92,24 +115,27 @@ func (a *App) reapLoop() {
 	settle := time.NewTicker(settleSweep)
 	defer settle.Stop()
 	a.SettleIdle(context.Background())
+	a.CleanWorktrees(context.Background())
 	for {
 		select {
 		case <-a.stop:
 			return
 		case now := <-tick.C:
 			a.reapIdle(now)
+			a.wakeDue(context.Background(), now)
 		case <-settle.C:
 			a.SettleIdle(context.Background())
+			a.CleanWorktrees(context.Background())
 		}
 	}
 }
 
 // SettleIdle archives every thread that has had no activity for the
 // number of days in the settle_idle_days setting, so the sidebar trims
-// itself. Pinned threads, threads mid-turn or waiting on an approval, and
-// threads already archived are left alone; a setting of 0 turns the sweep
-// off. Archiving stamps updated_at, so a thread this settled does not
-// come round again, and any new activity unarchives it (see SendPrompt).
+// itself. Pinned and snoozed threads, threads mid-turn or waiting on an
+// approval, and threads already archived are left alone; a setting of 0
+// turns the sweep off. A thread brought back by hand counts from then
+// (Thread.QuietSince), and any new activity unarchives it (see SendPrompt).
 func (a *App) SettleIdle(ctx context.Context) {
 	a.settleIdle(ctx, time.Now())
 }
@@ -126,7 +152,7 @@ func (a *App) settleIdle(ctx context.Context, now time.Time) {
 		return
 	}
 	for _, t := range ts {
-		if t.Archived || t.Pinned || t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval || !t.UpdatedAt.Before(cutoff) {
+		if t.Archived || t.Pinned || t.Snoozed() || t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval || !t.QuietSince().Before(cutoff) {
 			continue
 		}
 		if err := a.ArchiveThread(ctx, t.ID); err != nil {
@@ -179,23 +205,38 @@ func (a *App) reapIdle(now time.Time) {
 	}
 }
 
+// resumePrompt is what a turn cut off by a restart is resumed with.
+const resumePrompt = "starcode restarted while you were working, which stopped your process in the middle of the turn. Carry on with the task from where you left off. A command or tool call that was running when it stopped did not finish; run it again if you still need its result."
+
 // Recover is called once at startup. No session survives a restart, so any
-// thread the projection still shows as busy is really idle.
+// thread the projection still shows as busy is really idle. A turn the
+// restart cut off is left as it is for ResumeCutOff to pick up (unless
+// the resume_after_restart setting is off, or the thread never had a
+// session to resume). Otherwise the thread goes idle with a note, and its
+// next queued prompt starts, as it would have.
 func (a *App) Recover(ctx context.Context) error {
 	threads, err := a.Store.Threads(ctx)
 	if err != nil {
 		return err
 	}
+	resume := a.Store.ResumeAfterRestart(ctx)
 	for _, t := range threads {
 		queued, err := a.Store.QueuedPrompts(ctx, t.ID)
 		if err != nil {
 			return err
 		}
+		resumed := false
 		if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
 			var evs []any
 			aps, _ := a.Store.PendingApprovals(ctx, t.ID)
 			for _, ap := range aps {
 				evs = append(evs, domain.ApprovalResolved{ID: ap.ID, Decision: domain.DecisionDeny, Auto: true})
+			}
+			_, agentOK := a.Agent(t.Agent)
+			resumed = resume && agentOK && t.ExternalSessionID != ""
+			if resumed {
+				a.cutOff = append(a.cutOff, t.ID)
+				continue
 			}
 			notice := "starcode restarted while this turn was running; send a new prompt to continue"
 			if len(queued) > 0 {
@@ -225,6 +266,45 @@ func (a *App) Recover(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// ResumeCutOff resumes the turns Recover found cut off by a restart: the
+// pending approvals are over, a note says what happened, and the session
+// comes back from its id with a prompt that tells the agent. The queued
+// prompts follow when that turn ends. main calls it once the server
+// listens, so a start that fails early (the port taken) leaves the turns
+// marked running for the next one rather than resuming them every time.
+func (a *App) ResumeCutOff(ctx context.Context) {
+	ids := a.cutOff
+	a.cutOff = nil
+	for _, id := range ids {
+		var evs []any
+		aps, _ := a.Store.PendingApprovals(ctx, id)
+		for _, ap := range aps {
+			evs = append(evs, domain.ApprovalResolved{ID: ap.ID, Decision: domain.DecisionDeny, Auto: true})
+		}
+		evs = append(evs,
+			domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: "starcode restarted while this turn was running; resuming it"},
+			domain.ThreadStatusChanged{Status: domain.StatusIdle})
+		if _, err := a.Store.Append(ctx, id, evs...); err != nil {
+			a.Log.Warn("resume after restart", "thread", id, "err", err)
+			continue
+		}
+		a.promptMu.Lock()
+		t, err := a.Store.Thread(ctx, id)
+		if err == nil {
+			var l *live
+			l, err = a.session(ctx, t)
+			if err == nil {
+				err = a.startPromptMeta(ctx, l, t, "", resumePrompt, map[string]any{"auto": "resume"})
+			}
+		}
+		a.promptMu.Unlock()
+		if err != nil {
+			a.Log.Warn("resume after restart", "thread", id, "err", err)
+			a.note(ctx, id, "Could not resume the turn: "+err.Error())
+		}
+	}
 }
 
 // Agent looks up a registered agent by name.
@@ -302,8 +382,10 @@ func (a *App) retireAgent(name string, old agent.Agent) {
 }
 
 // Shutdown closes every live session and stops agents that run a shared
-// process.
+// process. The pumps stop writing first, so the turns this cuts off stay
+// marked running and Recover resumes them on the next start.
 func (a *App) Shutdown() {
+	a.closing.Store(true)
 	a.stopOnce.Do(func() { close(a.stop) })
 	a.mu.Lock()
 	ls := make([]*live, 0, len(a.sessions))
@@ -570,8 +652,9 @@ func (a *App) SetProjectWorktrees(ctx context.Context, id string, on bool) error
 	if p.Worktrees == on {
 		return nil
 	}
-	_, err = a.Store.Append(ctx, "", domain.ProjectSettingsChanged{ID: id, Worktrees: on})
-	return err
+	ps := settingsOf(p)
+	ps.Worktrees = on
+	return a.SetProjectSettings(ctx, id, ps)
 }
 
 // RemoveWorktree drops a thread's checkout and puts the thread back on
@@ -746,11 +829,14 @@ func (a *App) DeleteThread(ctx context.Context, id string) error {
 	// A clean worktree goes with the thread; a dirty one is left on disk
 	// with its branch, since deleting the thread should not lose work.
 	// So this never forces.
-	if t, err := a.Store.Thread(ctx, id); err == nil && t.Worktree != "" && !a.sharedWorktree(ctx, t) {
+	if t, err := a.Store.Thread(ctx, id); err == nil && t.Worktree != "" {
 		if p, err := a.Store.Project(ctx, t.ProjectID); err == nil {
-			if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree, false); err != nil {
-				a.Log.Info("worktree kept", "thread", id, "dir", t.Worktree, "err", err)
+			if !a.sharedWorktree(ctx, t) {
+				if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree, false); err != nil {
+					a.Log.Info("worktree kept", "thread", id, "dir", t.Worktree, "err", err)
+				}
 			}
+			gitx.DropCheckpoints(ctx, p.Path, id)
 		}
 	}
 	_, err := a.Store.Append(ctx, id, domain.ThreadDeleted{})
@@ -836,6 +922,11 @@ func (a *App) SendPrompt(ctx context.Context, threadID, text string) error {
 			return err
 		}
 	}
+	if t.Snoozed() {
+		if _, err := a.Store.Append(ctx, threadID, domain.ThreadWoken{}); err != nil {
+			return err
+		}
+	}
 	if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
 		if _, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: newID(), Body: text}); err != nil {
 			return err
@@ -879,6 +970,65 @@ func (a *App) CancelQueuedPrompt(ctx context.Context, threadID, promptID string)
 // sends it. promptMu must be held so an arriving HTTP send cannot overtake a
 // turn-completion handoff.
 func (a *App) startPromptLocked(ctx context.Context, l *live, t store.Thread, queuedID, text string) error {
+	return a.startPromptMeta(ctx, l, t, queuedID, text, nil)
+}
+
+// PromptMeta is what a prompt's item records about the moment it went
+// out, for a later rewind to it: the agent session and the point to fork
+// it at to keep everything before the prompt, and the checkpoint of the
+// worktree's files. Auto marks a prompt starcode sent itself ("resume").
+type PromptMeta struct {
+	// Agent is the instance the session belongs to; a rewind across a
+	// switch to another agent could not fork it.
+	Agent      string `json:"agent,omitempty"`
+	Session    string `json:"session,omitempty"`
+	Anchor     string `json:"anchor,omitempty"`
+	Checkpoint string `json:"checkpoint,omitempty"`
+	Auto       string `json:"auto,omitempty"`
+}
+
+// promptMeta reads a prompt item's PromptMeta.
+func promptMeta(it store.Item) PromptMeta {
+	var m PromptMeta
+	json.Unmarshal(it.Meta, &m)
+	return m
+}
+
+// startPromptMeta is startPromptLocked with extra fields for the prompt
+// item's meta.
+func (a *App) startPromptMeta(ctx context.Context, l *live, t store.Thread, queuedID, text string, extra map[string]any) error {
+	meta := map[string]any{}
+	for k, v := range extra {
+		meta[k] = v
+	}
+	if t.ExternalSessionID != "" {
+		meta["agent"] = t.Agent
+		meta["session"] = t.ExternalSessionID
+		if t.Anchor != "" {
+			meta["anchor"] = t.Anchor
+		}
+	}
+	// A worktree of its own gets its files recorded, so a rewind to this
+	// prompt can put them back. A shared one is left out: restoring it
+	// would undo the other thread's work too. promptMu is held here, and
+	// every thread's prompts wait on it, so a checkpoint that takes long
+	// is given up: the prompt goes out without one.
+	if t.Worktree != "" && !a.sharedWorktree(ctx, t) {
+		if _, err := os.Stat(t.Worktree); err == nil {
+			cctx, cancel := context.WithTimeout(ctx, checkpointTimeout)
+			sha, err := gitx.Checkpoint(cctx, t.Worktree, t.ID)
+			cancel()
+			if err == nil {
+				meta["checkpoint"] = sha
+			} else {
+				a.Log.Info("no checkpoint", "thread", t.ID, "err", err)
+			}
+		}
+	}
+	rawMeta, _ := json.Marshal(meta)
+	if len(meta) == 0 {
+		rawMeta = nil
+	}
 	// Serialize the initial fallback with native title notifications. If a
 	// native title won the race, prompt text must not overwrite it.
 	l.mu.Lock()
@@ -886,7 +1036,7 @@ func (a *App) startPromptLocked(ctx context.Context, l *live, t store.Thread, qu
 	if queuedID != "" {
 		evs = append(evs, domain.PromptDequeued{ID: queuedID})
 	}
-	evs = append(evs, domain.ItemStarted{ID: newID(), Kind: domain.KindUser, Body: text, Status: domain.ItemDone})
+	evs = append(evs, domain.ItemStarted{ID: newID(), Kind: domain.KindUser, Body: text, Status: domain.ItemDone, Meta: rawMeta})
 	if t.Title == "new thread" && !l.nativeTitle {
 		evs = append(evs, domain.ThreadRenamed{Title: titleFrom(text)})
 	}
@@ -1111,7 +1261,7 @@ func (a *App) session(ctx context.Context, t store.Thread) (*live, error) {
 		}
 	}
 	// Sessions outlive the request that started them.
-	sess, err := ag.Start(context.Background(), agent.Config{Cwd: t.Dir(p), Model: t.Model, ResumeID: t.ExternalSessionID, PermissionMode: t.PermissionMode, Effort: t.Effort})
+	sess, err := ag.Start(context.Background(), agent.Config{Cwd: t.Dir(p), Model: t.Model, ResumeID: t.ExternalSessionID, ForkAt: t.ForkAt, PermissionMode: t.PermissionMode, Effort: t.Effort})
 	if err != nil {
 		return nil, err
 	}
@@ -1165,6 +1315,12 @@ func (a *App) pump(l *live) {
 	itemID := func(agentID string) string { return tid[:8] + "-" + agentID }
 
 	for e := range l.sess.Events() {
+		if a.closing.Load() {
+			// Shutting down: what a dying session says last (an error, a
+			// closed turn) must not overwrite the running status Recover
+			// resumes from.
+			continue
+		}
 		switch e.Kind {
 		case agent.KindSessionInfo:
 			t, err := a.Store.Thread(ctx, tid)
@@ -1322,7 +1478,7 @@ func (a *App) pump(l *live) {
 			}
 			completed = append(completed,
 				domain.ItemStarted{ID: newID(), Kind: domain.KindResult, Status: tc.Status, Body: body},
-				domain.TurnCompleted{TurnID: tc.TurnID, Status: tc.Status, DurationMS: tc.DurationMS, CostUSD: tc.CostUSD, InputTok: tc.InputTokens, OutputTok: tc.OutputTokens, Error: tc.Error},
+				domain.TurnCompleted{TurnID: tc.TurnID, Anchor: tc.Anchor, Status: tc.Status, DurationMS: tc.DurationMS, CostUSD: tc.CostUSD, InputTok: tc.InputTokens, OutputTok: tc.OutputTokens, Error: tc.Error},
 			)
 			if len(queued) == 0 {
 				completed = append(completed, domain.ThreadStatusChanged{Status: status, Detail: detail})

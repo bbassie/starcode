@@ -438,8 +438,9 @@ func contains(xs []string, x string) bool {
 // UpdateBanner is patched into #update (in the layout, above the page)
 // once a rebuilt starcode binary is on disk, and patched back to empty on
 // every connect so a page that rode through the restart loses it. Threads
-// survive a restart: their sessions resume and queued prompts continue,
-// but a turn that is running when the process goes is lost, hence the
+// survive a restart: their sessions resume and queued prompts continue. A
+// turn that is running when the process goes stops, and picks up again
+// on the next start when Resume is on (Settings > General); hence the
 // count.
 // BannerData is what the update bar shows: the home binary rebuilt,
 // binaries built in the project's worktrees (one row each, by branch),
@@ -447,6 +448,7 @@ func contains(xs []string, x string) bool {
 type BannerData struct {
 	HomeChanged bool
 	Running     int // turns a restart would cut off
+	Resume      bool
 	Branch      string
 	BranchTitle string
 	Builds      []BranchBuild
@@ -502,17 +504,21 @@ templ UpdateBanner(d BannerData) {
 						}
 					</span>
 					<span class="spacer"></span>
-					<button class="btn tiny" data-on:click={ restartClick(d.Running, "") } title="Restart into the main checkout's binary">@Icon("undo-2", "ui-icon") back to main</button>
+					<button class="btn tiny" data-on:click={ restartClick(d, "") } title="Restart into the main checkout's binary">@Icon("undo-2", "ui-icon") back to main</button>
 				</div>
 			}
 			if d.HomeChanged {
 				<div class="update-row" data-dismiss={ "home:" + d.HomeKey }>
 					<span>@Icon("rotate-cw", "ui-icon") starcode was rebuilt. Restart to run the new version.</span>
 					if d.Running > 0 {
-						<span class="dim">{ fmt.Sprintf("%d running %s would be cut off.", d.Running, plural(d.Running, "turn", "turns")) }</span>
+						if d.Resume {
+							<span class="dim">{ fmt.Sprintf("%d running %s stop and pick up again after it.", d.Running, plural(d.Running, "turn", "turns")) }</span>
+						} else {
+							<span class="dim">{ fmt.Sprintf("%d running %s would be cut off.", d.Running, plural(d.Running, "turn", "turns")) }</span>
+						}
 					}
 					<span class="spacer"></span>
-					<button class="btn primary tiny" data-on:click={ restartClick(d.Running, "") }>restart now</button>
+					<button class="btn primary tiny" data-on:click={ restartClick(d, "") }>restart now</button>
 					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
 				</div>
 			}
@@ -525,7 +531,7 @@ templ UpdateBanner(d BannerData) {
 						<span class="dim" data-ago={ b.At.UTC().Format(time.RFC3339) }>{ ago(b.At) }</span>
 					</span>
 					<span class="spacer"></span>
-					<button class="btn primary tiny" data-on:click={ restartClick(d.Running, b.Path) } title={ "Restart into " + b.Path }>restart into it</button>
+					<button class="btn primary tiny" data-on:click={ restartClick(d, b.Path) } title={ "Restart into " + b.Path }>restart into it</button>
 					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
 				</div>
 			}
@@ -536,14 +542,14 @@ templ UpdateBanner(d BannerData) {
 }
 
 // restartClick posts the restart, into a branch build when into is set,
-// after a warning when turns would be cut off.
-func restartClick(running int, into string) string {
+// after a warning when turns would be cut off and not resumed.
+func restartClick(d BannerData, into string) string {
 	url := "/api/restart"
 	if into != "" {
 		url += "?into=" + urlQuery(into)
 	}
-	if running > 0 {
-		return fmt.Sprintf("confirm('%d running %s will be interrupted. Restart now?') && @post('%s')", running, plural(running, "turn", "turns"), url)
+	if d.Running > 0 && !d.Resume {
+		return fmt.Sprintf("confirm('%d running %s will be interrupted. Restart now?') && @post('%s')", d.Running, plural(d.Running, "turn", "turns"), url)
 	}
 	return "@post('" + url + "')"
 }

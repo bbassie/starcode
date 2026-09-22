@@ -26,6 +26,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	threadID := r.URL.Query().Get("id")
 	usageDays, usageMetric := usageParams(r)
 	provSel, provTab := providerParams(r)
+	projSel := r.URL.Query().Get("p")
 	theme := s.theme(r)
 	sidebar := s.sidebarMode(r)
 	dense := s.denseMode(r)
@@ -40,7 +41,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		sse.ExecuteScript("location.reload()")
 		return
 	}
-	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, sidebar: sidebar, dense: dense, rowDirty: map[string]bool{}, usageDays: usageDays, usageMetric: usageMetric, provSel: provSel, provTab: provTab, dirty: map[string]bool{}, tails: map[string]*tail{}}
+	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, sidebar: sidebar, dense: dense, rowDirty: map[string]bool{}, projSel: projSel, usageDays: usageDays, usageMetric: usageMetric, provSel: provSel, provTab: provTab, dirty: map[string]bool{}, tails: map[string]*tail{}}
 	// The page sends its signals with the request; the side panel's open
 	// detail is the one worth keeping across a reconnect, and whether the
 	// reader had loaded the whole transcript.
@@ -151,6 +152,7 @@ type conn struct {
 	usageMetric string
 	provSel     string
 	provTab     string
+	projSel     string
 	// dirty items get re-rendered on the next flush tick so a burst of
 	// changes costs one morph instead of one per event.
 	dirty map[string]bool
@@ -278,7 +280,7 @@ func hashHTML(s string) string {
 }
 
 func (c *conn) page() views.Page {
-	return views.Page{View: c.view, ThreadID: c.threadID, Theme: c.theme, UsageDays: c.usageDays, UsageMetric: c.usageMetric, ProviderSel: c.provSel, ProviderTab: c.provTab, GitPath: c.gitPath, GitEdit: c.gitEdit, PanelTab: c.panelTab, Full: c.full, PairURL: c.pairURL, Sidebar: c.sidebar, Dense: c.dense}
+	return views.Page{View: c.view, ThreadID: c.threadID, Theme: c.theme, UsageDays: c.usageDays, UsageMetric: c.usageMetric, ProviderSel: c.provSel, ProviderTab: c.provTab, ProjectSel: c.projSel, GitPath: c.gitPath, GitEdit: c.gitEdit, PanelTab: c.panelTab, Full: c.full, PairURL: c.pairURL, Sidebar: c.sidebar, Dense: c.dense}
 }
 
 // renderHome redraws the projects overview. The composer in it keeps what
@@ -662,7 +664,16 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		if c.view == "home" {
 			return c.renderAll(ctx)
 		}
-	case domain.ThreadRenamed, domain.ThreadStatusChanged, domain.ThreadSettingsChanged, domain.AgentSessionBound, domain.ThreadArchived, domain.ThreadUnarchived, domain.ThreadPinned, domain.ThreadUnpinned, domain.ThreadWorktreeSet, domain.ThreadPRLinked, domain.ThreadPRUnlinked:
+	case domain.ThreadRewound:
+		c.sideDirty = true
+		c.rowDirty[ev.ThreadID] = true
+		c.homeDirty = c.view == "home"
+		if mine {
+			// Rows left the transcript: the page is drawn again, which is
+			// rare enough to cost a full morph.
+			return c.resync(ctx)
+		}
+	case domain.ThreadRenamed, domain.ThreadStatusChanged, domain.ThreadSettingsChanged, domain.AgentSessionBound, domain.ThreadArchived, domain.ThreadUnarchived, domain.ThreadSnoozed, domain.ThreadWoken, domain.ThreadPinned, domain.ThreadUnpinned, domain.ThreadWorktreeSet, domain.ThreadPRLinked, domain.ThreadPRUnlinked:
 		c.sideDirty = true
 		c.rowDirty[ev.ThreadID] = true
 		// The project cards on the home page show the same glyphs and

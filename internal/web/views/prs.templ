@@ -2,9 +2,11 @@ package views
 
 import (
 	"fmt"
+	"sort"
 	"starcode/internal/gitx"
 	"starcode/internal/store"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -42,6 +44,16 @@ templ PRsPage(d PRsPageData) {
 		</header>
 		<div class="prs-scroll">
 			<div class="prs-inner">
+				// Filters over the rows on the page; a PR open in the detail
+				// hides them with the list.
+				<div class="prs-filter" data-show="!$prsel" data-preserve-attr="style">
+					<label class="pick-search">
+						@Icon("list-filter", "ui-icon")
+						<input type="search" placeholder="Filter by repository, number, title, author or branch" data-bind:prq autocomplete="off" spellcheck="false" autocapitalize="off" enterkeyhint="search"/>
+					</label>
+					<label class="prs-toggle"><input type="checkbox" data-bind:prnodraft/> <span>hide drafts</span></label>
+					<label class="prs-toggle" title="Only the pull requests that wait on you: changes asked for or checks failing on yours, ready to merge, or a review you were asked for"><input type="checkbox" data-bind:prmine/> <span>waiting on me</span></label>
+				</div>
 				@PRsList(d)
 				@PRPageDetail(PRDetailData{Page: true})
 			</div>
@@ -59,9 +71,9 @@ templ PRsList(d PRsPageData) {
 		} else if !d.Loaded {
 			<p class="dim pad">loading…</p>
 		} else {
-			@prGroup("Assigned to you", "user-check", "Open pull requests with you as an assignee.", d.Mine.Assigned, d)
-			@prGroup("Waiting for your review", "eye", "Open pull requests that asked you for a review.", d.Mine.ReviewRequested, d)
-			@prGroup("Opened by you", "git-pull-request-arrow", "Your own open pull requests.", d.Mine.Authored, d)
+			@prGroup("Assigned to you", "user-check", "Open pull requests with you as an assignee. The ones waiting on you come first.", byWaiting(d.Mine.Assigned, false), d, false)
+			@prGroup("Waiting for your review", "eye", "Open pull requests that asked you for a review.", d.Mine.ReviewRequested, d, true)
+			@prGroup("Opened by you", "git-pull-request-arrow", "Your own open pull requests. The ones waiting on you (changes asked for, checks failing, ready to merge) come first.", byWaiting(d.Mine.Authored, false), d, false)
 			<p class="dim tiny-text prs-note">A row opens the pull request here, with its reviews, comments and checks, and a button on each point that opens a thread on just that point. Threads already linked to a PR are listed under it, and every thread that runs `gh pr create` links itself.</p>
 		}
 	</div>
@@ -93,7 +105,30 @@ templ PRPageDetail(d PRDetailData) {
 	</div>
 }
 
-templ prGroup(title, icon, blurb string, prs []gitx.MyPR, d PRsPageData) {
+// waitsOnMe is whether a PR waits on the signed-in user: a review they
+// were asked for, or on one of theirs changes asked for, checks failing,
+// or everything green and nothing left but the merge.
+func waitsOnMe(pr gitx.MyPR, reviewer bool) bool {
+	if reviewer {
+		return true
+	}
+	return pr.Review == "changes_requested" || pr.Checks == "failure" || (!pr.Draft && pr.Review == "approved" && pr.Checks != "pending")
+}
+
+// byWaiting puts the PRs that wait on the user first, keeping the search's
+// order (last updated first) within each part.
+func byWaiting(prs []gitx.MyPR, reviewer bool) []gitx.MyPR {
+	out := append([]gitx.MyPR(nil), prs...)
+	sort.SliceStable(out, func(i, j int) bool { return waitsOnMe(out[i], reviewer) && !waitsOnMe(out[j], reviewer) })
+	return out
+}
+
+// prFilterKey is what the page's filter box matches a row on.
+func prFilterKey(pr gitx.MyPR) string {
+	return strings.ToLower(pr.Repo + " #" + strconv.Itoa(pr.Number) + " " + pr.Title + " " + pr.Author + " " + pr.Head)
+}
+
+templ prGroup(title, icon, blurb string, prs []gitx.MyPR, d PRsPageData, reviewer bool) {
 	<section class="prs-group">
 		<header>
 			<h2>@Icon(icon, "ui-icon") <span>{ title }</span> <span class="dim tiny-text">{ strconv.Itoa(len(prs)) }</span></h2>
@@ -104,7 +139,7 @@ templ prGroup(title, icon, blurb string, prs []gitx.MyPR, d PRsPageData) {
 		} else {
 			<ul class="prs prs-wide">
 				for _, pr := range prs {
-					@prRow(pr, d)
+					@prRow(pr, d, waitsOnMe(pr, reviewer))
 				}
 			</ul>
 		}
@@ -114,10 +149,10 @@ templ prGroup(title, icon, blurb string, prs []gitx.MyPR, d PRsPageData) {
 // prRow is one PR: repository, number, title, who and when, then the
 // review and check badges, then the threads linked to it and a button
 // to open one when the repository is a project here.
-templ prRow(pr gitx.MyPR, d PRsPageData) {
+templ prRow(pr gitx.MyPR, d PRsPageData, mine bool) {
 	{{ p, known := d.Repos[pr.Repo] }}
 	{{ threads := d.Threads[store.PR{Repo: pr.Repo, Number: pr.Number}] }}
-	<li>
+	<li data-k={ prFilterKey(pr) } data-show={ fmt.Sprintf("($prq == '' || el.dataset.k.includes($prq.toLowerCase())) && !($prnodraft && %t) && (!$prmine || %t)", pr.Draft, mine) } data-preserve-attr="style">
 		// The row opens the PR here; GitHub is the button at its end.
 		<a class="pr-row" role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @query('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')" }>
 			<span class={ "pr-mark", prClass(pr.PR) }>@Icon(prIcon(pr.PR), "ui-icon")</span>
@@ -129,6 +164,9 @@ templ prRow(pr gitx.MyPR, d PRsPageData) {
 				</span>
 			</span>
 			<span class="pr-badges">
+				if mine {
+					<span class="pr-badge accent text" title="This one waits on you">your move</span>
+				}
 				if pr.Comments > 0 {
 					<span class="pr-badge text" title={ fmt.Sprintf("%d %s", pr.Comments, plural(pr.Comments, "comment", "comments")) }>@Icon("message-square", "ui-icon") <span>{ strconv.Itoa(pr.Comments) }</span></span>
 				}

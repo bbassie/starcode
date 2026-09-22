@@ -91,6 +91,17 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 		} else {
 			out = append(out, views.Command{Label: "Settle thread", Icon: "archive", Action: "@post('/api/threads/" + t.ID + "/archive')"})
 		}
+		if t.Snoozed() {
+			out = append(out, views.Command{Label: "Wake thread", Icon: "sunrise", Action: "@post('/api/threads/" + t.ID + "/wake')"})
+		}
+		for _, sn := range []struct{ kind, label string }{{"1h", "for an hour"}, {"3h", "for 3 hours"}, {"tomorrow", "until tomorrow 9:00"}, {"week", "until Monday 9:00"}} {
+			out = append(out, views.Command{Label: "Snooze thread " + sn.label, Icon: "alarm-clock", Action: "@post('/api/threads/" + t.ID + "/snooze?until=' + encodeURIComponent(snoozeAt('" + sn.kind + "')))"})
+		}
+		if t.Pinned {
+			out = append(out, views.Command{Label: "Unpin thread", Icon: "pin-off", Action: "@post('/api/threads/" + t.ID + "/unpin')"})
+		} else {
+			out = append(out, views.Command{Label: "Pin thread", Icon: "pin", Action: "@post('/api/threads/" + t.ID + "/pin')"})
+		}
 		out = append(out,
 			views.Command{Label: "Toggle terminal", Icon: "terminal", Action: "$term = !$term", Key: views.Key("terminal")},
 			views.Command{Label: "Toggle changes panel", Icon: "git-compare-arrows", Action: "$git = !$git", Key: views.Key("changes")},
@@ -107,6 +118,7 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 		views.Command{Label: "Settings: usage", Icon: "chart-no-axes-combined", Href: "/settings/usage"},
 		views.Command{Label: "Settings: providers", Icon: "plug", Href: "/settings/providers"},
 		views.Command{Label: "Settings: keys", Icon: "keyboard", Href: "/settings/keys"},
+		views.Command{Label: "Settings: projects", Icon: "folder", Href: "/settings/projects" + projectQuery(t.ProjectID)},
 		views.Command{Label: "Keyboard shortcuts", Icon: "keyboard", Action: "$help = true", Key: views.Key("help")},
 	)
 	for _, th := range Themes {
@@ -116,6 +128,14 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 }
 
 func jsq(s string) string { return views.JSQ(s) }
+
+// projectQuery points Settings > Projects at a project, "" for the first.
+func projectQuery(id string) string {
+	if id == "" {
+		return ""
+	}
+	return "?p=" + id
+}
 
 // projectFileList is gitx.ListFiles behind a short cache: the palette
 // asks on every keystroke.

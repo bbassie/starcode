@@ -6,10 +6,14 @@ I built it because I wanted something like [T3 Code](https://github.com/pingdotg
 
 ## What it does
 
-- Threads per project, with Claude Code and Codex as drivers. Several CLI installs can sit side by side (Settings > Providers), each with its own config dir and colour.
+- Threads per project, with Claude Code and Codex as drivers. Several CLI installs can sit side by side (Settings > Providers), each with its own config dir and colour. A project can name the agent, model and permission mode its new threads start with (Settings > Projects).
+- Settle a thread, pin it or snooze it until later. Each of those shows an undo for a few seconds, and Ctrl+Z takes it.
+- Rewind: drop a prompt and everything after it, and get the prompt back to edit. The agent forgets those turns too, and in a worktree the files can go back with it.
+- A restart does not lose running turns. They resume when starcode comes back, with a prompt that tells the agent what happened.
+- The composer can stash a prompt for later (Ctrl+S), quote a selection from a reply, and link a pull request when you type `#`. A paste of 32 KiB or more goes in as a file.
 - Approvals in the transcript, with "allow for session" rules and shortcuts for the oldest waiting one.
-- Worktrees: a thread can get its own checkout and branch so agents on one project stay out of each other's way.
-- A side panel with the git changes, a file tree and an editor, and a terminal under the transcript that survives reloads.
+- Worktrees: a thread can get its own checkout and branch so agents on one project stay out of each other's way. Checkouts of threads that are done can be removed on their own (Settings > General), never with uncommitted work in them.
+- A side panel with the git changes, a file tree and an editor (HTML, PDF and images open rendered), and a terminal under the transcript that survives reloads.
 - Pull requests: threads link to the PR they open, the header shows its state, and one page lists everything on GitHub that wants your attention.
 - Usage and plan limits per CLI install, read from the CLIs' own transcripts.
 - Works on a phone: swipes for the panels, notifications when a turn ends or an approval waits, and a QR code to sign a phone in.

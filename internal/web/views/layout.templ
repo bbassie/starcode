@@ -3,6 +3,7 @@ package views
 import (
 	"encoding/json"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"os/user"
 	"starcode/internal/store"
@@ -18,6 +19,8 @@ type Page struct {
 	UsageMetric string
 	ProviderSel string
 	ProviderTab string
+	// ProjectSel is the project Settings > Projects shows.
+	ProjectSel string
 	// Draft is the saved composer text for this page (thread or home),
 	// the initial value of the prompt signal.
 	Draft string
@@ -55,9 +58,6 @@ var runUser = sync.OnceValue(func() string {
 	return os.Getenv("USER")
 })
 
-// streamURL carries the asset version the page was served with, so a
-// stream that reconnects to a rebuilt server can tell the page to reload
-// instead of morphing new markup into old CSS.
 // streamOpen is the expression that opens the page's stream. The request
 // resolves when the stream ends, which is when streamEnded (layout script)
 // schedules the next one.
@@ -65,11 +65,17 @@ func streamOpen(p Page) string {
 	return fmt.Sprintf("@query('%s', {openWhenHidden: true, retryMaxCount: 1000}).then(() => streamEnded(), () => streamEnded())", p.streamURL())
 }
 
+// streamURL carries the asset version the page was served with, so a
+// stream that reconnects to a rebuilt server can tell the page to reload
+// instead of morphing new markup into old CSS. The values come from the
+// page's own query string and end up inside a Datastar expression, so
+// every one is escaped: a quote in ?p= would otherwise end the string
+// and run the rest as script.
 func (p Page) streamURL() string {
 	url := "/events?view=home"
 	switch p.View {
 	case "thread":
-		url = fmt.Sprintf("/events?view=thread&id=%s", p.ThreadID)
+		url = "/events?view=thread&id=" + neturl.QueryEscape(p.ThreadID)
 	case "settings":
 		url = "/events?view=settings"
 	case "appearance":
@@ -78,10 +84,12 @@ func (p Page) streamURL() string {
 		url = "/events?view=prs"
 	case "keys":
 		url = "/events?view=keys"
+	case "projects":
+		url = "/events?view=projects&p=" + neturl.QueryEscape(p.ProjectSel)
 	case "providers":
-		url = fmt.Sprintf("/events?view=providers&sel=%s&tab=%s", p.ProviderSel, p.ProviderTab)
+		url = "/events?view=providers&sel=" + neturl.QueryEscape(p.ProviderSel) + "&tab=" + neturl.QueryEscape(p.ProviderTab)
 	case "usage":
-		url = fmt.Sprintf("/events?view=usage&days=%d&metric=%s", p.UsageDays, p.UsageMetric)
+		url = fmt.Sprintf("/events?view=usage&days=%d&metric=%s", p.UsageDays, neturl.QueryEscape(p.UsageMetric))
 	}
 	return url + "&v=" + assetVersion
 }
@@ -128,11 +136,13 @@ templ Layout(title string, p Page, parts Parts) {
 				<script defer src={ asset("/static/xterm.js") }></script>
 				<script defer src={ asset("/static/xterm-addon-fit.js") }></script>
 				<script defer src={ asset("/static/term.js") }></script>
+				<script defer src={ asset("/static/quote.js") }></script>
+				<script defer src={ asset("/static/lightbox.js") }></script>
 				<script defer src={ asset("/static/highlight.js") }></script>
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', pr: 0, prsel: 0, prproject: '', more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, tid: %q, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft), p.ThreadID) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', pr: 0, prsel: 0, prproject: '', prq: '', prnodraft: false, prmine: false, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, tid: %q, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft), p.ThreadID) }
 			data-attr:data-theme="$theme"
 			data-class:nav-collapsed="$navhide"
 			data-class:panel-wide="$wide"
@@ -350,6 +360,12 @@ templ Layout(title string, p Page, parts Parts) {
 						setTimeout(() => btn.classList.remove('copied', 'copy-failed'), 1200);
 					}
 				};
+				// toastClose takes a toast off the page and leaves the empty
+				// #toast the next one is patched into.
+				window.toastClose = (el) => {
+					const t = el.closest('#toast');
+					if (t) t.replaceWith(Object.assign(document.createElement('div'), { id: 'toast' }));
+				};
 				// promptSet replaces the composer text (after a check when
 				// something is already typed) and focuses it.
 				window.promptSet = (text) => {
@@ -396,6 +412,36 @@ templ Layout(title string, p Page, parts Parts) {
 					ta.dispatchEvent(new Event('input', { bubbles: true }));
 					ta.setSelectionRange(ta.value.length, ta.value.length);
 				});
+				// snoozeAt is the time a snooze choice means in this browser's
+				// zone, as the ISO string the snooze endpoint takes: "1h",
+				// "3h", "tomorrow" (9:00), "week" (next Monday 9:00), or "at"
+				// with a datetime-local value.
+				window.snoozeAt = (kind, value) => {
+					const d = new Date();
+					switch (kind) {
+						case '1h': d.setHours(d.getHours() + 1); break;
+						case '3h': d.setHours(d.getHours() + 3); break;
+						case 'tomorrow': d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); break;
+						case 'week': d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7)); d.setHours(9, 0, 0, 0); break;
+						case 'at': return new Date(value).toISOString();
+					}
+					return d.toISOString();
+				};
+				// promptInsert puts text into the composer at the caret (or
+				// the end when the composer does not have the focus), on a
+				// line of its own, and focuses it.
+				window.promptInsert = (text) => {
+					const ta = document.querySelector('form.composer .prompt');
+					if (!ta) return;
+					const at = document.activeElement === ta ? ta.selectionStart : ta.value.length;
+					const before = ta.value.slice(0, at), after = ta.value.slice(at);
+					const lead = before && !before.endsWith('\n\n') ? (before.endsWith('\n') ? '\n' : '\n\n') : '';
+					ta.value = before + lead + text + after;
+					ta.dispatchEvent(new Event('input', { bubbles: true }));
+					ta.focus();
+					const end = (before + lead + text).length;
+					ta.setSelectionRange(end, end);
+				};
 				window.autoGrow = (el) => queueMicrotask(() => {
 					el.style.height = 'auto';
 					el.style.height = el.scrollHeight + 'px';
@@ -456,9 +502,12 @@ templ Layout(title string, p Page, parts Parts) {
 						return parts.join('+');
 					};
 					window.hotkeyCombo = combo;
-					window.runHotkey = (c, inTerm) => {
+					// target is where the key was pressed: a key with data-skip
+					// leaves it alone inside a match (mod+z in a text box).
+					window.runHotkey = (c, inTerm, target) => {
 						const b = document.querySelector(`#hotkeys [data-hotkey="${c}"]`);
 						if (!b || (inTerm && !b.hasAttribute('data-term'))) return false;
+						if (b.dataset.skip && target && target.closest(b.dataset.skip)) return false;
 						b.click();
 						return true;
 					};
@@ -473,7 +522,7 @@ templ Layout(title string, p Page, parts Parts) {
 						// A combo without a modifier (a bound "y") only counts
 						// while no text box has the keys.
 						const typing = !!(t && t.closest('input, textarea, select, [contenteditable]'));
-						if ((e.ctrlKey || e.metaKey || e.altKey || !typing) && !e.repeat && runHotkey(combo(e), inTerm)) {
+						if ((e.ctrlKey || e.metaKey || e.altKey || !typing) && !e.repeat && runHotkey(combo(e), inTerm, t)) {
 							e.preventDefault();
 							e.stopPropagation();
 							return;
@@ -527,6 +576,12 @@ templ Layout(title string, p Page, parts Parts) {
 						const base = t.textContent.replace(/^\(\d+\) /, '');
 						const want = (unread ? `(${unread}) ` : '') + base;
 						if (t.textContent !== want) t.textContent = want;
+						// The same count on the app icon, for starcode added to
+						// a home screen or installed as an app.
+						if (navigator.setAppBadge && unread !== window.badgeCount) {
+							window.badgeCount = unread;
+							(unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
+						}
 					};
 					onDOM(apply);
 					apply();
@@ -553,6 +608,26 @@ templ Layout(title string, p Page, parts Parts) {
 						if (s < 3600) return Math.floor(s / 60) + 'm ' + two(s % 60) + 's';
 						return Math.floor(s / 3600) + 'h ' + two(Math.floor(s / 60) % 60) + 'm ' + two(s % 60) + 's';
 					};
+					// Times the server writes in UTC, put in the reader's zone:
+					// [data-local] as a date ("Tue 22 Sep, 09:00"), [data-ts] as the time
+					// of day (with the date when it is not today) and the full stamp on
+					// hover. Each element is done once.
+					const today = (d) => d.toDateString() === new Date().toDateString();
+					const localize = () => {
+						for (const el of document.querySelectorAll('[data-local]:not([data-done])')) {
+							const d = new Date(el.dataset.local);
+							el.textContent = d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+							el.dataset.done = '1';
+						}
+						for (const el of document.querySelectorAll('[data-ts]:not([data-done])')) {
+							const d = new Date(el.dataset.ts);
+							el.textContent = today(d) ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+							el.title = d.toLocaleString();
+							el.dataset.done = '1';
+						}
+					};
+					onDOM(localize);
+					localize();
 					const words = ['Working', 'Thinking', 'Reading', 'Considering', 'Tinkering', 'Pondering', 'Mulling', 'Wrangling', 'Sifting', 'Brewing', 'Puzzling', 'Poking around'];
 					let tick = 0;
 					setInterval(() => {
@@ -971,9 +1046,24 @@ templ Layout(title string, p Page, parts Parts) {
 						input.dispatchEvent(new Event('change', { bubbles: true }));
 						return true;
 					};
+					// A paste of 32 KiB of text or more becomes a text file in
+					// the attachments, so a log or a dump does not flood the
+					// prompt; the agent reads it from disk. Ctrl+Shift+V (Cmd
+					// on a Mac) keeps it in the composer.
+					const bigPaste = 32 << 10;
+					let keepPaste = false;
+					document.addEventListener('keydown', (e) => {
+						keepPaste = (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v';
+					}, true);
 					document.addEventListener('paste', (e) => {
-						if (e.target instanceof HTMLTextAreaElement && e.target.classList.contains('prompt')
-							&& e.clipboardData && addFiles(e.target, e.clipboardData.files)) e.preventDefault();
+						if (!(e.target instanceof HTMLTextAreaElement) || !e.target.classList.contains('prompt') || !e.clipboardData) return;
+						if (addFiles(e.target, e.clipboardData.files)) { e.preventDefault(); return; }
+						const keep = keepPaste;
+						keepPaste = false;
+						const text = e.clipboardData.getData('text/plain');
+						if (keep || new Blob([text]).size < bigPaste) return;
+						const name = 'pasted-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.txt';
+						if (addFiles(e.target, [new File([text], name, { type: 'text/plain' })])) e.preventDefault();
 					});
 					// The strip above the composer row: one removable item per
 					// picked file, rebuilt from the input on every change

@@ -1088,3 +1088,26 @@ func TestIntegrationSendAfterClose(t *testing.T) {
 		t.Error("Send after Close returned no error")
 	}
 }
+
+// TestAnchorIsTheLastMainLine checks the fork point a turn reports: the
+// uuid of the main conversation's last line, not a subagent's, kept by a
+// turn that adds none, and after a /compact the line that ends it.
+func TestAnchorIsTheLastMainLine(t *testing.T) {
+	st := newState(nil)
+	main := `{"type":"assistant","uuid":"main-1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"hi"}]}}`
+	sub := `{"type":"assistant","uuid":"sub-1","parent_tool_use_id":"toolu_1","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"from the subagent"}]}}`
+	result := `{"type":"result","subtype":"success","duration_ms":5}`
+	ev := one(t, feed(st, main, sub, result), agent.KindTurnCompleted)
+	if got := ev.TurnCompleted.Anchor; got != "main-1" {
+		t.Fatalf("anchor = %q, want main-1", got)
+	}
+	ev = one(t, feed(st, result), agent.KindTurnCompleted)
+	if got := ev.TurnCompleted.Anchor; got != "main-1" {
+		t.Fatalf("anchor after an empty turn = %q, want main-1", got)
+	}
+	summary := `{"type":"user","uuid":"summary-1","message":{"role":"user","content":"This session is being continued"}}`
+	ev = one(t, feed(st, summary, result), agent.KindTurnCompleted)
+	if got := ev.TurnCompleted.Anchor; got != "summary-1" {
+		t.Fatalf("anchor after a compact = %q, want summary-1", got)
+	}
+}

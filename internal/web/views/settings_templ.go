@@ -1390,6 +1390,11 @@ type SettingsPageData struct {
 	SettleDays   int
 	// Dense is this browser's one-line sidebar rows.
 	Dense bool
+	// Resume is whether a turn a restart cut off is resumed; CleanDays
+	// and CleanMerged are the automatic worktree cleanup rules.
+	Resume      bool
+	CleanDays   int
+	CleanMerged bool
 }
 
 // ThemeName is the display name of a theme id.
@@ -1455,9 +1460,9 @@ func SettingsPage(d SettingsPageData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var53 string
-		templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("{sidebar: %q, dense: %t, settleMerged: %t, settleDays: %d}", d.Sidebar, d.Dense, d.SettleMerged, d.SettleDays))
+		templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("{sidebar: %q, dense: %t, settleMerged: %t, settleDays: %d, resume: %t, cleanDays: %d, cleanMerged: %t}", d.Sidebar, d.Dense, d.SettleMerged, d.SettleDays, d.Resume, d.CleanDays, d.CleanMerged))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 541, Col: 190}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 546, Col: 272}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var53)
 		if templ_7745c5c3_Err != nil {
@@ -1483,7 +1488,7 @@ func SettingsPage(d SettingsPageData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, ">By project</option></select></div><div class=\"setting-row\"><div><label for=\"dense-rows\">Compact rows</label><p class=\"dim\">One line per thread in the sidebar instead of two. Saved for this browser.</p></div><input id=\"dense-rows\" type=\"checkbox\" data-bind:dense data-on:change=\"@post('/api/sidebar')\"></div><div class=\"setting-row\"><div><label for=\"settle-merged\">Settle merged threads</label><p class=\"dim\">A thread settles when its pull request merges.</p></div><input id=\"settle-merged\" type=\"checkbox\" data-bind:settle-merged data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"settle-days\">Settle inactive threads after</label><p class=\"dim\">Days without activity before a thread settles on its own; 0 keeps them. Any new activity brings a thread back.</p></div><span class=\"num-unit\"><input id=\"settle-days\" class=\"in num\" type=\"number\" min=\"0\" max=\"365\" step=\"1\" inputmode=\"numeric\" data-bind:settle-days data-on:change__debounce.500ms=\"@post('/api/settle')\"> <span class=\"dim\">days</span></span></div></div></section><section id=\"device\" class=\"settings-section\"><header><h1>This device</h1><p class=\"dim\">Notifications and VS Code on this browser, and signing a phone in.</p></header><div class=\"settings-card\"><div class=\"setting-row\"><div><label for=\"notify-btn\">Notifications</label><p class=\"dim\">A turn that ends or asks for an approval while starcode is out of sight posts a notification on this device. Needs the certificate installed (see the login page) or another secure context.</p></div><button id=\"notify-btn\" class=\"btn\" type=\"button\" data-init=\"el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)\" data-on:click=\"(el.dataset.state === 'on' ? Promise.resolve(notifyDisable()) : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })\">notifications</button></div><div class=\"setting-row\"><div><label for=\"vscode-host\">VS Code SSH host</label><p class=\"dim\">The VS Code button on a thread opens its folder over Remote-SSH on this host, named the way this computer's ssh config knows it (user@host works). Empty means the account starcode runs as at the address in the browser, or a local folder when that address is localhost. Saved for this browser.</p></div><input id=\"vscode-host\" class=\"in\" type=\"text\" autocomplete=\"off\" spellcheck=\"false\" autocapitalize=\"off\" data-init=\"el.value = vscodeHost(); el.placeholder = vscodeLocal() ? 'opens locally' : vscodeDefaultHost()\" data-preserve-attr=\"placeholder\" data-on:input=\"vscodeHostSet(el.value)\"></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, ">By project</option></select></div><div class=\"setting-row\"><div><label for=\"dense-rows\">Compact rows</label><p class=\"dim\">One line per thread in the sidebar instead of two. Saved for this browser.</p></div><input id=\"dense-rows\" type=\"checkbox\" data-bind:dense data-on:change=\"@post('/api/sidebar')\"></div><div class=\"setting-row\"><div><label for=\"settle-merged\">Settle merged threads</label><p class=\"dim\">A thread settles when its pull request merges.</p></div><input id=\"settle-merged\" type=\"checkbox\" data-bind:settle-merged data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"settle-days\">Settle inactive threads after</label><p class=\"dim\">Days without activity before a thread settles on its own; 0 keeps them. Any new activity brings a thread back.</p></div><span class=\"num-unit\"><input id=\"settle-days\" class=\"in num\" type=\"number\" min=\"0\" max=\"365\" step=\"1\" inputmode=\"numeric\" data-bind:settle-days data-on:change__debounce.500ms=\"@post('/api/settle')\"> <span class=\"dim\">days</span></span></div><div class=\"setting-row\"><div><label for=\"resume\">Resume turns after a restart</label><p class=\"dim\">A restart stops every running turn. With this on, each one picks up again when starcode is back: its session resumes and gets a prompt that says what happened.</p></div><input id=\"resume\" type=\"checkbox\" data-bind:resume data-on:change=\"@post('/api/settle')\"></div></div></section><section id=\"worktrees\" class=\"settings-section\"><header><h1>Worktree cleanup</h1><p class=\"dim\">Removes the checkouts of threads that are done with. Only the ones starcode made, and only when nothing would be lost: no changed or untracked files, and no ignored ones besides node_modules. The branch and the thread stay, and the next prompt checks the branch out again. A project can turn this off under Settings > Projects.</p></header><div class=\"settings-card\"><div class=\"setting-row\"><div><label for=\"clean-days\">Remove after</label><p class=\"dim\">Days without activity in the thread; 0 turns this rule off.</p></div><span class=\"num-unit\"><input id=\"clean-days\" class=\"in num\" type=\"number\" min=\"0\" max=\"365\" step=\"1\" inputmode=\"numeric\" data-bind:clean-days data-on:change__debounce.500ms=\"@post('/api/settle')\"> <span class=\"dim\">days</span></span></div><div class=\"setting-row\"><div><label for=\"clean-merged\">Remove once merged</label><p class=\"dim\">When the thread's pull request merges, or when a settled thread's commits are all in the default branch.</p></div><input id=\"clean-merged\" type=\"checkbox\" data-bind:clean-merged data-on:change=\"@post('/api/settle')\"></div></div></section><section id=\"device\" class=\"settings-section\"><header><h1>This device</h1><p class=\"dim\">Notifications and VS Code on this browser, and signing a phone in.</p></header><div class=\"settings-card\"><div class=\"setting-row\"><div><label for=\"notify-btn\">Notifications</label><p class=\"dim\">A turn that ends or asks for an approval while starcode is out of sight posts a notification on this device. Needs the certificate installed (see the login page) or another secure context.</p></div><button id=\"notify-btn\" class=\"btn\" type=\"button\" data-init=\"el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)\" data-on:click=\"(el.dataset.state === 'on' ? Promise.resolve(notifyDisable()) : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })\">notifications</button></div><div class=\"setting-row\"><div><label for=\"vscode-host\">VS Code SSH host</label><p class=\"dim\">The VS Code button on a thread opens its folder over Remote-SSH on this host, named the way this computer's ssh config knows it (user@host works). Empty means the account starcode runs as at the address in the browser, or a local folder when that address is localhost. Saved for this browser.</p></div><input id=\"vscode-host\" class=\"in\" type=\"text\" autocomplete=\"off\" spellcheck=\"false\" autocapitalize=\"off\" data-init=\"el.value = vscodeHost(); el.placeholder = vscodeLocal() ? 'opens locally' : vscodeDefaultHost()\" data-preserve-attr=\"placeholder\" data-on:input=\"vscodeHostSet(el.value)\"></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1495,7 +1500,7 @@ func SettingsPage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var54 string
 			templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.ResolveAttributeValue("copyText(" + jsq(d.PairURL) + ", el)")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 607, Col: 98}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 641, Col: 98}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var54)
 			if templ_7745c5c3_Err != nil {
@@ -1516,7 +1521,7 @@ func SettingsPage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var55 string
 			templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.PairQR)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 609, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 643, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var55)
 			if templ_7745c5c3_Err != nil {
@@ -1585,7 +1590,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var57 string
 			templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.ResolveAttributeValue(theme)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 644, Col: 31}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 678, Col: 31}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var57)
 			if templ_7745c5c3_Err != nil {
@@ -1608,7 +1613,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var58 string
 			templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.JoinStringErrs(themeName(theme))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 644, Col: 83}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 678, Col: 83}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var58))
 			if templ_7745c5c3_Err != nil {
@@ -1788,7 +1793,7 @@ func settingsLinks(current string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var66 = []any{templ.KV("current", current == "usage")}
+		var templ_7745c5c3_Var66 = []any{templ.KV("current", current == "projects")}
 		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var66...)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -1806,19 +1811,19 @@ func settingsLinks(current string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 127, "\" href=\"/settings/usage\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 127, "\" href=\"/settings/projects\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = Icon("chart-no-axes-combined", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = Icon("folder", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 128, "Usage</a> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 128, "Projects</a> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var68 = []any{templ.KV("current", current == "providers")}
+		var templ_7745c5c3_Var68 = []any{templ.KV("current", current == "usage")}
 		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var68...)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -1836,19 +1841,19 @@ func settingsLinks(current string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 130, "\" href=\"/settings/providers\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 130, "\" href=\"/settings/usage\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = Icon("plug", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = Icon("chart-no-axes-combined", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 131, "Providers</a> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 131, "Usage</a> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var70 = []any{templ.KV("current", current == "keys")}
+		var templ_7745c5c3_Var70 = []any{templ.KV("current", current == "providers")}
 		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var70...)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -1866,7 +1871,37 @@ func settingsLinks(current string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 133, "\" href=\"/settings/keys\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 133, "\" href=\"/settings/providers\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = Icon("plug", "ui-icon").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 134, "Providers</a> ")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var72 = []any{templ.KV("current", current == "keys")}
+		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var72...)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 135, "<a class=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var73 string
+		templ_7745c5c3_Var73, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var72).String())
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 1, Col: 0}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var73)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 136, "\" href=\"/settings/keys\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1874,7 +1909,7 @@ func settingsLinks(current string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 134, "Keys</a>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 137, "Keys</a>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1888,7 +1923,7 @@ func settingsSection(view string) string {
 	switch view {
 	case "settings":
 		return "general"
-	case "appearance", "usage", "providers", "keys":
+	case "appearance", "usage", "providers", "keys", "projects":
 		return view
 	}
 	return ""

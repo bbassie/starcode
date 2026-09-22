@@ -251,6 +251,10 @@ type Hotkey struct {
 	// Term is whether the key also works while the terminal has focus.
 	// Most do not: the shell has its own meaning for Ctrl+K and friends.
 	Term bool
+	// Skip is a selector: the key does nothing while the focus is inside
+	// a match and keeps its usual meaning there (Ctrl+Z in a text box,
+	// Ctrl+S in the file editor).
+	Skip string
 }
 
 // keyStore is where combos come from; nil means the defaults. main sets
@@ -301,7 +305,12 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 	hk = append(hk,
 		Hotkey{Combo: Key("prs"), Label: "Pull requests", Action: "location.href = '/prs'"},
 		Hotkey{Combo: Key("settings"), Label: "Settings", Action: "location.href = '/settings'"},
+		// The newest undo toast's button; nothing when none is up.
+		Hotkey{Combo: Key("undo"), Label: "Undo the last settle, unpin or snooze", Action: "document.querySelector('#toast .toast-undo')?.click()", Skip: "input, textarea, select, [contenteditable]"},
 	)
+	if p.View == "thread" || p.View == "home" {
+		hk = append(hk, Hotkey{Combo: Key("stash"), Label: "Stash the prompt, or bring one back", Action: "document.querySelector('form.composer .stash-btn')?.click()", Skip: ".editor, .git-editor"})
+	}
 	return hk
 }
 
@@ -309,7 +318,15 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 templ HotkeyButtons(keys []Hotkey) {
 	<div id="hotkeys" hidden>
 		for _, k := range keys {
-			<button type="button" data-hotkey={ k.Combo } data-term?={ k.Term } data-on:click={ k.Action }>{ k.Label }</button>
+			<button
+				type="button"
+				data-hotkey={ k.Combo }
+				data-term?={ k.Term }
+				if k.Skip != "" {
+					data-skip={ k.Skip }
+				}
+				data-on:click={ k.Action }
+			>{ k.Label }</button>
 		}
 	</div>
 }

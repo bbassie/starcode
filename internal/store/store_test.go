@@ -764,3 +764,93 @@ func TestCompactInBatches(t *testing.T) {
 		t.Fatalf("second compact removed %d", again)
 	}
 }
+
+// TestNewThreadEventsReplay appends settle, snooze, rewind and project
+// settings events and checks the projection, then that a replay of the
+// log gives the same threads, items and project.
+func TestNewThreadEventsReplay(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/p1", Name: "p1"})
+	until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	if _, err := s.Append(ctx, "t1",
+		domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "t", Agent: "claude"},
+		domain.ItemStarted{ID: "u1", Kind: domain.KindUser, Status: domain.ItemDone, Body: "one"},
+		domain.AgentSessionBound{ExternalID: "conv"},
+		domain.TurnCompleted{TurnID: "a", Anchor: "anchor-1", Status: "done"},
+		domain.ItemStarted{ID: "u2", Kind: domain.KindUser, Status: domain.ItemDone, Body: "two"},
+		domain.ItemStarted{ID: "r2", Kind: domain.KindAssistant, Status: domain.ItemDone, Body: "reply two"},
+		domain.TurnCompleted{TurnID: "b", Anchor: "anchor-2", Status: "done"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.Thread(ctx, "t1")
+	if before.Anchor != "anchor-2" {
+		t.Fatalf("anchor = %q", before.Anchor)
+	}
+	if _, err := s.Append(ctx, "t1",
+		domain.ThreadArchived{},
+		domain.ThreadSnoozed{Until: until},
+		domain.ThreadRewound{ItemID: "u2", SessionID: "conv", ForkAt: "anchor-1"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	s.Append(ctx, "", domain.ProjectSettingsChanged{ID: "p1", Worktrees: true, Agent: "claude", Model: "haiku", Mode: "plan", Cleanup: "off"})
+
+	check := func(label string) {
+		t.Helper()
+		th, err := s.Thread(ctx, "t1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if th.Archived || !th.SettledAt.IsZero() || !th.SnoozedUntil.Equal(until) {
+			t.Errorf("%s: archived=%v settled=%v snoozed=%v", label, th.Archived, th.SettledAt, th.SnoozedUntil)
+		}
+		if th.ForkAt != "anchor-1" || th.Anchor != "anchor-1" || th.ExternalSessionID != "conv" {
+			t.Errorf("%s: fork=%q anchor=%q session=%q", label, th.ForkAt, th.Anchor, th.ExternalSessionID)
+		}
+		items, _ := s.Items(ctx, "t1")
+		if len(items) != 1 || items[0].ID != "u1" {
+			t.Errorf("%s: items after rewind = %d", label, len(items))
+		}
+		if n := ftsRows(t, s, "t1"); n != 1 {
+			t.Errorf("%s: search rows = %d, want 1", label, n)
+		}
+		p, _ := s.Project(ctx, "p1")
+		if !p.Worktrees || p.Agent != "claude" || p.Model != "haiku" || p.Mode != "plan" || p.Cleanup != "off" {
+			t.Errorf("%s: project = %+v", label, p)
+		}
+	}
+	check("live")
+	if _, err := s.Replay(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check("replayed")
+
+	// Waking by hand is not activity; the fork point goes once a session
+	// is bound.
+	s.Append(ctx, "t1", domain.ThreadWoken{}, domain.AgentSessionBound{ExternalID: "conv-2"})
+	after, _ := s.Thread(ctx, "t1")
+	if after.Snoozed() || after.HeldAt.IsZero() || after.ForkAt != "" || after.ExternalSessionID != "conv-2" {
+		t.Errorf("after wake and bind: %+v", after)
+	}
+}
+
+func TestStash(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	s.AddStash(ctx, "a", "first", "home")
+	time.Sleep(2 * time.Millisecond)
+	s.AddStash(ctx, "b", "second", "t1")
+	st, _ := s.Stashes(ctx)
+	if len(st) != 2 || st[0].ID != "b" || s.StashCount(ctx) != 2 {
+		t.Fatalf("stashes = %+v", st)
+	}
+	got, err := s.TakeStash(ctx, "a")
+	if err != nil || got.Body != "first" || got.Source != "home" {
+		t.Fatalf("take = %+v, %v", got, err)
+	}
+	if _, err := s.TakeStash(ctx, "a"); err != ErrNotFound {
+		t.Fatalf("second take = %v", err)
+	}
+}

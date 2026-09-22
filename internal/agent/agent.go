@@ -27,6 +27,11 @@ type Config struct {
 	PermissionMode string
 	// Effort is a reasoning effort id from Capabilities; empty means default.
 	Effort string
+	// ForkAt, with ResumeID, starts a new conversation that copies
+	// ResumeID up to and including this point, a TurnCompleted Anchor.
+	// That is how a rewind drops the turns after it. The session then
+	// reports the new id in SessionInfo.
+	ForkAt string
 }
 
 // Agent creates sessions. One Agent value serves every thread that uses it.
@@ -200,7 +205,11 @@ type ContextUsage struct {
 }
 
 type TurnCompleted struct {
-	TurnID       string
+	TurnID string
+	// Anchor is where the conversation can later be forked (Config.ForkAt)
+	// to keep this turn and everything before it; empty when the agent
+	// cannot say.
+	Anchor       string
 	Status       string // "done" | "interrupted" | "error"
 	DurationMS   int64
 	CostUSD      float64

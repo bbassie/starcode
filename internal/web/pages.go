@@ -63,7 +63,11 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 	case "appearance":
 		pt.Main = views.AppearancePage(views.SettingsPageData{Theme: p.Theme, Themes: Themes})
 	case "settings":
-		pt.Main = views.SettingsPage(views.SettingsPageData{Theme: p.Theme, Themes: Themes, PairURL: p.PairURL, PairQR: pairQR(p.PairURL), Sidebar: p.Sidebar, Dense: p.Dense, SettleMerged: s.App.Store.SettleMerged(ctx), SettleDays: s.App.Store.SettleIdleDays(ctx)})
+		st := s.App.Store
+		pt.Main = views.SettingsPage(views.SettingsPageData{Theme: p.Theme, Themes: Themes, PairURL: p.PairURL, PairQR: pairQR(p.PairURL), Sidebar: p.Sidebar, Dense: p.Dense, SettleMerged: st.SettleMerged(ctx), SettleDays: st.SettleIdleDays(ctx),
+			Resume: st.ResumeAfterRestart(ctx), CleanDays: st.WorktreeCleanDays(ctx), CleanMerged: st.WorktreeCleanMerged(ctx)})
+	case "projects":
+		pt.Main = views.ProjectsPage(s.projectsData(ctx, side.Projects, p.ProjectSel))
 	case "providers":
 		pt.Main = views.ProvidersPage(s.providersData(ctx, p.ProviderSel, p.ProviderTab, false))
 	case "keys":
@@ -102,7 +106,18 @@ func pairQR(link string) string {
 // which list the same projects and threads.
 func (s *Server) homeData(ctx context.Context, side views.SidebarData) views.HomeData {
 	caps, capsErrs := s.capabilities(ctx)
-	return views.HomeData{Projects: side.Projects, Threads: side.Threads, Looks: s.agentLooks(), Seen: side.Seen, PRs: side.PRs, Settings: s.homeSettings(caps, capsErrs)}
+	set := s.homeSettings(caps, capsErrs)
+	// The composer starts on the first project; its defaults, when it
+	// has them, are what the chips show (picking another project swaps
+	// them, see views.projectPicked).
+	if len(side.Projects) > 0 {
+		if p := side.Projects[0]; p.HasDefaults() {
+			if _, ok := s.App.Agent(p.Agent); ok {
+				set.Agent, set.Model, set.Effort, set.Mode = p.Agent, p.Model, p.Effort, p.Mode
+			}
+		}
+	}
+	return views.HomeData{Projects: side.Projects, Threads: side.Threads, Looks: s.agentLooks(), Seen: side.Seen, PRs: side.PRs, Settings: set, Stashed: s.App.Store.StashCount(ctx)}
 }
 
 // earlierItems answers the "earlier" button of a cut transcript: the

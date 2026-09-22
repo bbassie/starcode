@@ -80,11 +80,39 @@ type ThreadRenamed struct {
 type ThreadDeleted struct{}
 
 // ThreadArchived moves a thread out of the sidebar and the project cards
-// without deleting it. Sending a prompt to an archived thread unarchives
-// it first.
+// without deleting it (the Settled section). Sending a prompt to an
+// archived thread unarchives it first. Neither is activity: the thread
+// keeps its place and its read state, so an undo puts it back as it was.
 type ThreadArchived struct{}
 
+// ThreadUnarchived brings a settled thread back. It starts the settle
+// clock again, so the idle sweep leaves the thread alone for another
+// settle period even when its last activity is older than that.
 type ThreadUnarchived struct{}
+
+// ThreadSnoozed parks a thread until a time: it leaves the list for the
+// Snoozed shelf and comes back on its own when Until passes.
+type ThreadSnoozed struct {
+	Until time.Time `json:"until"`
+}
+
+// ThreadWoken ends a snooze. Auto is the sweep waking it on time, which
+// counts as activity so the thread comes back on top and unread; a wake
+// by hand does not.
+type ThreadWoken struct {
+	Auto bool `json:"auto,omitempty"`
+}
+
+// ThreadRewound cuts the conversation back to just before item ItemID, a
+// prompt: that item and everything after it leave the transcript. The
+// next agent session forks SessionID at ForkAt (an agent.Config ForkAt),
+// or starts fresh when SessionID is empty, which is how the agent forgets
+// the dropped turns too.
+type ThreadRewound struct {
+	ItemID    string `json:"item_id"`
+	SessionID string `json:"session_id,omitempty"`
+	ForkAt    string `json:"fork_at,omitempty"`
+}
 
 // ThreadWorktreeSet gives a thread a checkout of its own (see gitx
 // worktrees): the agent, the terminal and the panel work in Path from
@@ -95,10 +123,19 @@ type ThreadWorktreeSet struct {
 }
 
 // ProjectSettingsChanged is the per-project default for new threads:
-// whether they start in a worktree.
+// whether they start in a worktree, and the agent, model, effort and
+// permission mode they start with (Agent empty: no default, a new thread
+// takes what the composer holds). Cleanup overrides the instance's
+// automatic worktree cleanup for the project: "" inherits, "off" keeps
+// its worktrees. Every event carries the whole set.
 type ProjectSettingsChanged struct {
 	ID        string `json:"id"`
 	Worktrees bool   `json:"worktrees"`
+	Agent     string `json:"agent,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Effort    string `json:"effort,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Cleanup   string `json:"cleanup,omitempty"`
 }
 
 // ThreadPinned keeps a thread at the top of its project's list; pinning
@@ -234,7 +271,11 @@ type ContextUsed struct {
 }
 
 type TurnCompleted struct {
-	TurnID     string  `json:"turn_id"`
+	TurnID string `json:"turn_id"`
+	// Anchor is where the agent's conversation can be forked to keep this
+	// turn and everything before it (see agent.TurnCompleted); the next
+	// prompt records it so a rewind to that prompt knows where to cut.
+	Anchor     string  `json:"anchor,omitempty"`
 	Status     string  `json:"status"` // "done" | "interrupted" | "error"
 	DurationMS int64   `json:"duration_ms"`
 	CostUSD    float64 `json:"cost_usd,omitempty"`
@@ -287,6 +328,12 @@ func TypeOf(p any) string {
 		return "thread.archived"
 	case ThreadUnarchived, *ThreadUnarchived:
 		return "thread.unarchived"
+	case ThreadSnoozed, *ThreadSnoozed:
+		return "thread.snoozed"
+	case ThreadWoken, *ThreadWoken:
+		return "thread.woken"
+	case ThreadRewound, *ThreadRewound:
+		return "thread.rewound"
 	case ThreadWorktreeSet, *ThreadWorktreeSet:
 		return "thread.worktree_set"
 	case ProjectSettingsChanged, *ProjectSettingsChanged:
@@ -359,6 +406,12 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &ThreadArchived{}
 	case "thread.unarchived":
 		p = &ThreadUnarchived{}
+	case "thread.snoozed":
+		p = &ThreadSnoozed{}
+	case "thread.woken":
+		p = &ThreadWoken{}
+	case "thread.rewound":
+		p = &ThreadRewound{}
 	case "thread.worktree_set":
 		p = &ThreadWorktreeSet{}
 	case "project.settings_changed":

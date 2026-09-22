@@ -1,0 +1,128 @@
+package views
+
+import (
+	"fmt"
+	"starcode/internal/store"
+)
+
+// ProjectsPageData is Settings > Projects for one project, Sel, picked
+// from Projects. Settings feeds the chips: the project's own defaults, or
+// the home composer's when it has none, as a starting point. Setup is
+// the worktree setup script from the project's t3.json ("" for none).
+// CleanDays and CleanMerged are the instance's cleanup rules, for the
+// line that says what "follow" means.
+type ProjectsPageData struct {
+	Projects    []store.Project
+	Sel         store.Project
+	Settings    SettingsData
+	SetupName   string
+	Setup       string
+	CleanDays   int
+	CleanMerged bool
+}
+
+// ProjectsPage is what a project sets for its own threads: the agent,
+// model, effort and mode new threads start with, whether they get a
+// worktree, and whether its worktrees are cleaned up. One project at a
+// time: the chips bind the page-wide agent and model signals.
+templ ProjectsPage(d ProjectsPageData) {
+	<main id="main" class="settings-page">
+		<header id="mainhead" class="mainhead">
+			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
+			<nav class="crumbs"><span>Settings</span><span class="dim">/</span><span class="dim">Projects</span></nav>
+		</header>
+		<div class="settings-scroll">
+			<div class="settings-shell">
+				@SettingsNav("projects")
+				<div class="settings-content">
+					if d.Sel.ID == "" {
+						<section class="settings-section">
+							<header>
+								<h1>Projects</h1>
+								<p class="dim">No projects yet. Add a folder with the button in the sidebar.</p>
+							</header>
+						</section>
+					} else {
+						{{ post := "@post('/api/projects/" + d.Sel.ID + "/settings')" }}
+						<section id="project-settings" class="settings-section" data-signals={ signalsJSON(d.Settings.Agent, d.Settings.Model, d.Settings.Effort, d.Settings.Mode, fmt.Sprintf("pown: %t, pworktrees: %t, pcleanup: %q", d.Sel.HasDefaults(), d.Sel.Worktrees, d.Sel.Cleanup)) }>
+							<header>
+								<h1>Projects</h1>
+								<p class="dim">What new threads in a project start with, and what happens to its worktrees.</p>
+							</header>
+							<div class="settings-card">
+								<div class="setting-row">
+									<div>
+										<label for="project-select">Project</label>
+										<p class="dim mono">{ d.Sel.Path }</p>
+									</div>
+									<select id="project-select" class="in" onchange="location.href = '/settings/projects?p=' + encodeURIComponent(this.value)">
+										for _, p := range d.Projects {
+											<option value={ p.ID } selected?={ p.ID == d.Sel.ID }>{ p.Name }</option>
+										}
+									</select>
+								</div>
+								<div class="setting-row">
+									<div>
+										<label for="project-own">Own agent and model</label>
+										<p class="dim">On: new threads here start with the agent, model, effort and permission mode below, whatever the composer showed. Off: a new thread takes the composer's, which on a thread page is the thread you came from.</p>
+									</div>
+									<input id="project-own" type="checkbox" data-bind:pown data-on:change={ post }/>
+								</div>
+								<div class="setting-row" data-show="$pown" data-preserve-attr="style" style={ hiddenUnless(d.Sel.HasDefaults()) }>
+									<div>
+										<label>Start with</label>
+										<p class="dim">Saved as you pick.</p>
+									</div>
+									<form class="project-chips" data-on:submit="evt.preventDefault()">
+										@Chips(d.Settings, post, false)
+									</form>
+								</div>
+								<div class="setting-row">
+									<div>
+										<label for="project-wt">New threads get a worktree</label>
+										<p class="dim">A checkout of their own on a new branch, so agents on this project stay out of each other's way. The home composer can still pick either for one thread.</p>
+									</div>
+									<input id="project-wt" type="checkbox" data-bind:pworktrees data-on:change={ post }/>
+								</div>
+								<div class="setting-row">
+									<div>
+										<label for="project-clean">Worktree cleanup</label>
+										<p class="dim">{ cleanRules(d.CleanDays, d.CleanMerged) }</p>
+									</div>
+									<select id="project-clean" class="in" data-bind:pcleanup data-on:change={ post }>
+										<option value="" selected?={ d.Sel.Cleanup == "" }>Follow the general rules</option>
+										<option value="off" selected?={ d.Sel.Cleanup == "off" }>Keep this project's worktrees</option>
+									</select>
+								</div>
+								<div class="setting-row">
+									<div>
+										<label>Worktree setup</label>
+										<p class="dim">Runs in every new worktree of this project. It comes from the first script in t3.json at the project root with runOnWorktreeCreate set, the file T3 Code reads too.</p>
+									</div>
+									if d.Setup != "" {
+										<code class="setup-cmd" title={ d.SetupName }>{ d.Setup }</code>
+									} else {
+										<span class="dim">none</span>
+									}
+								</div>
+							</div>
+						</section>
+					}
+				</div>
+			</div>
+		</div>
+	</main>
+}
+
+// cleanRules says what "follow the general rules" does right now.
+func cleanRules(days int, merged bool) string {
+	switch {
+	case days > 0 && merged:
+		return fmt.Sprintf("The general rules (Settings > General) remove a worktree after %d %s without activity, or once its work is merged.", days, plural(days, "day", "days"))
+	case days > 0:
+		return fmt.Sprintf("The general rules (Settings > General) remove a worktree after %d %s without activity.", days, plural(days, "day", "days"))
+	case merged:
+		return "The general rules (Settings > General) remove a worktree once its work is merged."
+	}
+	return "The general rules (Settings > General) are off, so nothing is removed either way."
+}

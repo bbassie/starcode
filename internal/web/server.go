@@ -111,6 +111,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("GET /settings/usage", s.usage)
 	s.mux.HandleFunc("GET /settings/providers", s.providersPage)
 	s.mux.HandleFunc("GET /settings/keys", s.keysPage)
+	s.mux.HandleFunc("GET /settings/projects", s.projectsPage)
 	s.read("/api/keys", s.keysFragment)
 	s.mux.HandleFunc("POST /api/keys/reset", s.resetKeys)
 	s.mux.HandleFunc("POST /api/keys/{id}", s.setKey)
@@ -141,6 +142,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/projects/{id}/prs/{n}/draft", s.pullRequestDraft)
 	s.mux.HandleFunc("POST /api/projects/{id}/prs/{n}/thread", s.pullRequestThread)
 	s.mux.HandleFunc("POST /api/projects/{id}/upload", s.uploadFiles)
+	s.mux.HandleFunc("GET /api/projects/{id}/raw", s.projectRaw)
 	s.mux.HandleFunc("GET /api/attachments/{id}/{name}", s.attachmentFile)
 	s.mux.HandleFunc("POST /api/projects/{id}/remove", s.removeProject)
 	s.mux.HandleFunc("POST /api/projects/{id}/threads", s.newThreadForProject)
@@ -165,6 +167,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.prActionRoutes()
 	s.slashRoutes()
 	s.worktreeRoutes()
+	s.threadCmdRoutes()
 	s.mux.HandleFunc("POST /api/threads/{id}/rename", s.renameThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/link", s.linkPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/unlink", s.unlinkPR)
@@ -183,6 +186,8 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/term/{id}/kill", s.termKill)
 	s.mux.HandleFunc("GET /api/term/{id}/panes", s.termPanes)
 	s.Usage.SetRoots(s.usageRoots())
+	// The cleanup never removes the checkout this process runs from.
+	a.KeepWorktree = s.runsFrom
 	s.warm()
 	return s
 }
@@ -569,6 +574,6 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 			repo = ref.Repo
 		}
 	}
-	return views.ThreadData{Thread: t, Project: p, Items: items, Queued: queued, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent),
+	return views.ThreadData{Thread: t, Project: p, Items: items, Queued: queued, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
 		Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }

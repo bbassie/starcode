@@ -10,6 +10,7 @@ import (
 	"starcode/internal/keys"
 	"starcode/internal/store"
 	"strings"
+	"time"
 )
 
 type toolMeta struct {
@@ -148,14 +149,27 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 	switch it.Kind {
 		case domain.KindUser:
 			{{ text, atts := splitAttachments(it.Body) }}
-			<div id={ "it-" + it.ID } class="item user">
+			{{ pm := promptMetaOf(it) }}
+			<div id={ "it-" + it.ID } class={ "item", "user", templ.KV("auto", pm.Auto != "") }>
 				<div class="user-msg">
+					if pm.Auto == "resume" {
+						<span class="dim tiny-text user-auto">@Icon("rotate-cw", "ui-icon") <span>sent by starcode to resume after a restart</span></span>
+					}
 					if text != "" {
-						// Hover tools: copy the prompt, or put it back in the
-						// composer to send again with changes.
+						// Hover tools: copy the prompt, put it back in the
+						// composer to send again with changes, or rewind the
+						// conversation to before it (with the files, when the
+						// worktree was recorded as it went out).
 						<div class="msg-tools">
+							<span class="dim tiny-text msg-time" data-ts={ it.CreatedAt.UTC().Format(time.RFC3339) }></span>
 							<button type="button" class="btn icon ghost tiny" title="Copy this message" aria-label="Copy this message" onclick="copyText(this.closest('.user-msg').querySelector('.bubble').textContent, this)">@Icon("copy", "ui-icon")</button>
 							<button type="button" class="btn icon ghost tiny" title="Edit and resend: put this message in the composer" aria-label="Edit and resend" onclick="promptSet(this.closest('.user-msg').querySelector('.bubble').textContent)">@Icon("pencil-line", "ui-icon")</button>
+							if pm.rewindable() {
+								<button type="button" class="btn icon ghost tiny" title="Rewind: drop this message and everything after it, and put it back in the composer to edit. The agent forgets those turns; files stay as they are." aria-label="Rewind to before this message" data-on:click={ rewindAction(it, false) }>@Icon("history", "ui-icon")</button>
+								if pm.Checkpoint != "" {
+									<button type="button" class="btn icon ghost tiny" title="Rewind with the files: the same, and the worktree's files go back to how they were when this message was sent" aria-label="Rewind to before this message, files too" data-on:click={ rewindAction(it, true) }>@Icon("rotate-ccw", "ui-icon")</button>
+								}
+							}
 						</div>
 						<pre class="wrap bubble">{ text }</pre>
 					}
@@ -274,6 +288,9 @@ templ Tool(it store.Item) {
 			<span class={ "glyph", "st-" + it.Status }>@ItemIcon(it.Status)</span>
 			<span class="tag">{ it.ToolName }</span>
 			<span class="ellipsis mono">{ toolSummary(it.ToolName, m) }</span>
+			// The time the call started, on hover (the layout's clock
+			// script writes it in the reader's zone).
+			<span class="dim tiny-text row-ts" data-ts={ it.CreatedAt.UTC().Format(time.RFC3339) }></span>
 		</summary>
 		if input != "" {
 			<pre class="block input">{ input }</pre>

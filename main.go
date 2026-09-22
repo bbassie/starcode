@@ -250,6 +250,10 @@ func run() (string, error) {
 		scheme = "https://"
 	}
 	log.Info("listening", "addr", scheme+*addr, "data", *data, "auth", *token != "")
+	// Everything is wired and the port is ours: the sweeps can run, and
+	// the turns the last restart cut off pick up again.
+	a.Start()
+	go a.ResumeCutOff(context.Background())
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return "", err
 	}

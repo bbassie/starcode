@@ -571,6 +571,7 @@ func (s *session) turnCompleted(params json.RawMessage) {
 	s.mu.Unlock()
 	s.emit(agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{
 		TurnID:       turnID,
+		Anchor:       p.Turn.ID,
 		Status:       status,
 		Error:        msg,
 		DurationMS:   dur,

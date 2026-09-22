@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
 
@@ -316,8 +317,17 @@ func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 	s.patchDir(sse, p, r.URL.Query().Get("path"))
 }
 
+// newThreadForProject is the new-thread buttons and hotkey. The page's
+// composer settings ride along, so a new thread carries the model of the
+// one on screen, unless the project names its own (Settings > Projects).
 func (s *Server) newThreadForProject(w http.ResponseWriter, r *http.Request) {
 	sig := s.readSignals(r)
+	if p, err := s.App.Store.Project(r.Context(), r.PathValue("id")); err == nil && p.HasDefaults() {
+		if _, ok := s.App.Agent(p.Agent); ok {
+			mode := p.Mode
+			sig.Agent, sig.Model, sig.Effort, sig.Mode = p.Agent, p.Model, p.Effort, &mode
+		}
+	}
 	s.createThread(w, r, r.PathValue("id"), sig.Agent, sig.Model, sig.Effort, sig.Mode, "", nil, app.ThreadStart{})
 }
 
@@ -478,7 +488,12 @@ func (s *Server) archiveThread(w http.ResponseWriter, r *http.Request) {
 	// Out of sight is out of the process table too: the shells would sit
 	// there until a restart otherwise. Unarchiving starts fresh ones.
 	s.Term.KillPrefix(termPrefix(r.PathValue("id")))
-	s.ok(w, r)
+	if isUndo(r) {
+		s.ok(w, r)
+		return
+	}
+	id := r.PathValue("id")
+	s.undoToast(w, r, "Settled “"+s.threadTitle(r, id)+"”", time.Time{}, "@post('/api/threads/"+id+"/unarchive?undo=1')")
 }
 
 func (s *Server) revokeRule(w http.ResponseWriter, r *http.Request) {
@@ -505,11 +520,17 @@ func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pinThread(w http.ResponseWriter, r *http.Request) {
-	if err := s.App.PinThread(r.Context(), r.PathValue("id"), r.URL.Path[len(r.URL.Path)-4:] == "/pin"); err != nil {
+	id := r.PathValue("id")
+	pin := strings.HasSuffix(r.URL.Path, "/pin")
+	if err := s.App.PinThread(r.Context(), id, pin); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.ok(w, r)
+	if pin || isUndo(r) {
+		s.ok(w, r)
+		return
+	}
+	s.undoToast(w, r, "Unpinned “"+s.threadTitle(r, id)+"”", time.Time{}, "@post('/api/threads/"+id+"/pin?undo=1')")
 }
 
 // setSidebarMode stores the sidebar's list order and its density in two
@@ -558,17 +579,34 @@ func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
 	var sig struct {
 		SettleMerged bool `json:"settleMerged"`
 		SettleDays   int  `json:"settleDays"`
+		Resume       bool `json:"resume"`
+		CleanDays    int  `json:"cleanDays"`
+		CleanMerged  bool `json:"cleanMerged"`
 	}
 	datastar.ReadSignals(r, &sig)
 	days := min(max(sig.SettleDays, 0), 365)
 	ctx := r.Context()
-	merged := "1"
-	if !sig.SettleMerged {
-		merged = "0"
+	flag := func(on bool) string {
+		if on {
+			return "1"
+		}
+		return "0"
 	}
-	if err := s.App.Store.SetSetting(ctx, "settle_merged", merged); err != nil {
-		s.fail(w, r, err)
-		return
+	cleanBefore := fmt.Sprint(s.App.Store.WorktreeCleanDays(ctx), s.App.Store.WorktreeCleanMerged(ctx))
+	for k, v := range map[string]string{
+		"settle_merged":        flag(sig.SettleMerged),
+		"resume_after_restart": flag(sig.Resume),
+		"wt_clean_days":        strconv.Itoa(min(max(sig.CleanDays, 0), 365)),
+		"wt_clean_merged":      flag(sig.CleanMerged),
+	} {
+		if err := s.App.Store.SetSetting(ctx, k, v); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	// New cleanup rules run now, like a new settle period below.
+	if fmt.Sprint(s.App.Store.WorktreeCleanDays(ctx), s.App.Store.WorktreeCleanMerged(ctx)) != cleanBefore {
+		go s.App.CleanWorktrees(context.Background())
 	}
 	before := s.App.Store.SettleIdleDays(ctx)
 	if err := s.App.Store.SetSetting(ctx, "settle_idle_days", strconv.Itoa(days)); err != nil {
@@ -668,6 +706,22 @@ func (s *Server) gitFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := r.URL.Query().Get("path")
+	// Pages, PDFs and pictures open rendered; ?source=1 asks for a page's
+	// markup in the editor instead.
+	if kind := previewKind(path); kind != "" && !(kind == "html" && r.URL.Query().Get("source") == "1") {
+		if _, _, err := projectFile(p.Path, path); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		var sig struct {
+			TID string `json:"tid"`
+		}
+		peekSignals(r, &sig)
+		sse := datastar.NewSSE(w, r)
+		sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "_file": ""})
+		sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Preview: rawURL(p.ID, path, sig.TID), PreviewKind: kind}))
+		return
+	}
 	content, err := readProjectFile(p.Path, path)
 	if err != nil {
 		s.fail(w, r, err)

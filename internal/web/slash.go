@@ -47,6 +47,7 @@ var claudeCommands = []views.SlashItem{
 // slashRoutes registers the menu's endpoint. server.go calls it.
 func (s *Server) slashRoutes() {
 	s.mux.HandleFunc("GET /api/threads/{id}/commands", s.slashCommands)
+	s.mux.HandleFunc("GET /api/threads/{id}/prpick", s.prPick)
 }
 
 // slashCommands answers with the menu's rows as plain HTML; the page
@@ -240,4 +241,27 @@ func (c *slashCache) get(key string, build func() []views.SlashItem) []views.Sla
 	items := build()
 	c.m[key] = slashEntry{items: items, at: time.Now()}
 	return items
+}
+
+// prPick answers the composer's "#" menu: the open pull requests of the
+// thread's repository (the panel's list, cached a minute), as rows the
+// page filters by number and title while the reader types. A pick puts a
+// link to the PR in the prompt (static/slash.js).
+func (s *Server) prPick(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	t, err := s.App.Store.Thread(ctx, r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	p, err := s.App.Store.Project(ctx, t.ProjectID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	p.Path = t.Dir(p)
+	e := s.prList(r, p)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	views.PRPickMenu(e.list).Render(ctx, w)
 }

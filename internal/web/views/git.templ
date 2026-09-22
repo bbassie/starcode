@@ -20,6 +20,10 @@ type GitData struct {
 	// Editing is whether the detail opens in the editor; it matches the
 	// gitEdit signal the same response patches.
 	Editing bool
+	// Preview is the URL of a file shown rendered instead of as text,
+	// PreviewKind what it is: "html", "pdf" or "image".
+	Preview     string
+	PreviewKind string
 	// Tree is the project root's listing and TreeOpen whether the files
 	// tab is the one showing; a stream that reconnects fills both from the
 	// page's signals so the tree does not come back empty.
@@ -209,6 +213,11 @@ templ FileExplorer(d ExplorerData) {
 				// to the folder named by $updir.
 				<button class="btn icon ghost tiny" type="button" title="Upload files into the project root" aria-label="Upload files into the project root" data-on:click="$updir = ''; el.nextElementSibling.click()">@Icon("upload", "ui-icon")</button>
 				<input type="file" multiple data-bind:_upload data-on:click="el.value = ''" style="display: none" data-effect={ "$_upload.length > 0 && @post('/api/projects/" + d.Project.ID + "/upload?path=' + encodeURIComponent($updir), " + onlySignal("_upload") + ")" }/>
+				// Expanding opens the folders on screen, so each press goes one
+				// level deeper (every folder loads on open); collapsing closes
+				// them all.
+				<button class="btn icon ghost tiny" type="button" title="Expand the folders one level" aria-label="Expand the folders one level" onclick="document.querySelectorAll('#file-explorer details.tree-dir:not([open]) > summary').forEach((s) => s.click())">@Icon("chevrons-up-down", "ui-icon")</button>
+				<button class="btn icon ghost tiny" type="button" title="Collapse every folder" aria-label="Collapse every folder" onclick="document.querySelectorAll('#file-explorer details.tree-dir[open]').forEach((d) => { d.open = false })">@Icon("chevrons-down-up", "ui-icon")</button>
 				<button class="btn icon ghost tiny" data-on:click={ "@query('/api/projects/" + d.Project.ID + "/files')" } title="Reload the tree" aria-label="Reload the tree">@Icon("refresh-cw", "ui-icon")</button>
 			}
 		</div>
@@ -794,7 +803,30 @@ func prIcon(pr gitx.PR) string {
 templ GitDetail(d GitData) {
 	<div id="git-detail" data-show="$panelTab !== 'prs'" data-preserve-attr="style">
 		if d.Selected != "" {
-			<div class="diff-head mono ellipsis">{ d.Selected }</div>
+			<div class="diff-head">
+				<span class="mono ellipsis" title={ d.Selected }>{ d.Selected }</span>
+				<button class="btn icon ghost tiny" type="button" title="Copy the path" aria-label="Copy the path" data-on:click={ "copyText(" + jsq(d.Selected) + ", el)" }>@Icon("copy", "ui-icon")</button>
+			</div>
+			if d.Preview != "" {
+				// A page, a PDF or a picture, rendered. A page runs in a
+				// sandbox: no scripts, nothing from this origin.
+				<div class="git-detail-actions">
+					<span class="dim tiny-text">{ previewWord(d.PreviewKind) }</span>
+					<span class="spacer"></span>
+					if d.PreviewKind == "html" {
+						<button class="btn tiny" data-on:click={ "@query('/api/git/" + d.Project.ID + "/file?source=1&path=" + urlQuery(d.Selected) + "')" }>@Icon("code", "ui-icon") source</button>
+					}
+					<a class="btn tiny" href={ templ.SafeURL(d.Preview) } target="_blank" rel="noopener">@Icon("external-link", "ui-icon") open</a>
+				</div>
+				switch d.PreviewKind {
+					case "image":
+						<div class="file-preview image"><img class="attach-thumb" src={ d.Preview } alt={ d.Selected }/></div>
+					case "pdf":
+						<iframe class="file-preview" src={ d.Preview } title={ d.Selected }></iframe>
+					default:
+						<iframe class="file-preview" sandbox="" src={ d.Preview } title={ d.Selected }></iframe>
+				}
+			} else {
 			<div class="git-detail-actions" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) }>
 				<span class="spacer"></span>
 				<button class="btn tiny" data-on:click={ "@query('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
@@ -825,8 +857,19 @@ templ GitDetail(d GitData) {
 			} else {
 				<p class="dim pad" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) }>no diff to show.</p>
 			}
+			}
 		}
 	</div>
+}
+
+func previewWord(kind string) string {
+	switch kind {
+	case "html":
+		return "page preview, scripts off"
+	case "pdf":
+		return "PDF"
+	}
+	return "picture"
 }
 
 // Signals whose name starts with an underscore stay out of requests by

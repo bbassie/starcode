@@ -56,7 +56,8 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 		stop:    make(chan struct{}, 1),
 	}
 	id := cfg.ResumeID
-	if id == "" {
+	if id == "" || cfg.ForkAt != "" {
+		// A new conversation, or a rewind's copy of an old one.
 		id = fmt.Sprintf("fake-%d", time.Now().UnixNano())
 	}
 	s.emit(agent.Event{Kind: agent.KindSessionInfo, SessionInfo: &agent.SessionInfo{ExternalID: id, Model: "fake-1"}})
@@ -131,7 +132,7 @@ func (s *session) run(turnID, prompt string) {
 		// off immediately.
 		markIdle()
 		s.emit(agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{
-			TurnID: turnID, Status: status, DurationMS: time.Since(start).Milliseconds(),
+			TurnID: turnID, Anchor: fmt.Sprintf("%s-%d", turnID, start.UnixNano()), Status: status, DurationMS: time.Since(start).Milliseconds(),
 			CostUSD: 0.0042, InputTokens: 1234, OutputTokens: 321,
 		}})
 	}

@@ -31,6 +31,8 @@ var spriteIcons = []string{
 	"message-square", "message-square-plus", "message-square-x", "palette", "paperclip", "pencil", "pencil-line", "plug", "plus",
 	"refresh-cw", "rotate-ccw", "rotate-cw", "save", "search", "settings", "shield-check", "square", "square-pen", "square-x", "star",
 	"terminal", "trash-2", "triangle-alert", "undo-2", "unfold-horizontal", "unlink", "upload", "user", "x",
+	"alarm-clock", "sun", "sunrise", "calendar", "calendar-clock", "history", "text-quote", "bookmark", "bookmark-plus",
+	"zoom-in", "zoom-out", "chevrons-down-up", "chevrons-up-down", "list-filter", "file-text", "image", "maximize-2", "code",
 }
 
 // brandPaths are the brand marks as sprite symbols. The drivers' are

@@ -351,6 +351,11 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 	}
 	if cfg.ResumeID != "" {
 		args = append(args, "--resume", cfg.ResumeID)
+		// A rewind: a copy of the conversation that ends at the anchor,
+		// under a new id, so the original stays as it was on disk.
+		if cfg.ForkAt != "" {
+			args = append(args, "--resume-session-at", cfg.ForkAt, "--fork-session")
+		}
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -900,6 +905,10 @@ type state struct {
 
 	// turnID is the id Send generated for the turn in flight.
 	turnID string
+	// anchor is the uuid of the main conversation's last line (see mark),
+	// the TurnCompleted Anchor. It outlives the turn: a turn that ends
+	// without a reply still leaves the conversation cut where it was.
+	anchor string
 	// interrupted records that we asked the CLI to stop this turn.
 	interrupted bool
 
@@ -955,6 +964,18 @@ func newState(log *slog.Logger) *state {
 	}
 }
 
+// mark records a line of the main conversation as the point a later
+// fork can cut it at (Config.ForkAt). A turn usually ends on an assistant
+// line; a /compact ends on user lines (the summary, the command's
+// output), and cutting there keeps the compacted conversation rather than
+// the long one before it. A subagent's lines live on a side chain and do
+// not count.
+func (st *state) mark(out *outLine) {
+	if out.ParentToolUseID == "" && out.UUID != "" {
+		st.anchor = out.UUID
+	}
+}
+
 func (st *state) takeOutbox() [][]byte {
 	out := st.outbox
 	st.outbox = nil
@@ -999,6 +1020,8 @@ type outLine struct {
 	// ParentToolUseID is set on everything a subagent does: the Task
 	// tool call it runs under. The transcript nests it there.
 	ParentToolUseID string `json:"parent_tool_use_id"`
+	// UUID names the line in the CLI's own transcript.
+	UUID string `json:"uuid"`
 
 	// system/init
 	SessionID string `json:"session_id"`
@@ -1163,8 +1186,10 @@ func parseOut(out *outLine, line []byte, st *state) []agent.Event {
 	case "stream_event":
 		return parseStreamEvent(out, st)
 	case "assistant":
+		st.mark(out)
 		return parseAssistant(out, st)
 	case "user":
+		st.mark(out)
 		return parseUser(out, st)
 	case "control_request":
 		return parseControlRequest(out, st)
@@ -1470,6 +1495,7 @@ func parseRateLimit(out *outLine, st *state) []agent.Event {
 func parseResult(out *outLine, st *state) []agent.Event {
 	done := &agent.TurnCompleted{
 		TurnID:     st.turnID,
+		Anchor:     st.anchor,
 		Status:     "done",
 		DurationMS: out.DurationMS,
 		CostUSD:    out.CostUSD,

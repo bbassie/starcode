@@ -13,6 +13,8 @@ type HomeData struct {
 	Seen     map[string]time.Time
 	Settings SettingsData
 	PRs      map[store.PR]store.PRState
+	// Stashed is how many prompts the stash holds.
+	Stashed int
 }
 
 // Home is the projects overview: a composer that starts a thread with its
@@ -31,21 +33,24 @@ templ Home(d HomeData) {
 					<h1 class="h">What should we work on?</h1>
 					<form
 						class="composer start"
-						data-signals={ signalsJSON(d.Settings.Agent, "", "", d.Settings.Mode, fmt.Sprintf("project: %q, wt: '', wtbase: '', wtfrom: ''", d.Projects[0].ID)) }
+						data-signals={ signalsJSON(d.Settings.Agent, d.Settings.Model, d.Settings.Effort, d.Settings.Mode, fmt.Sprintf("project: %q, wt: '', wtbase: '', wtfrom: ''", d.Projects[0].ID)) }
 						data-on:submit={ "evt.preventDefault(); @post('/api/threads', " + withSignal("_attach") + ")" }
 					>
-						<textarea
-							class="prompt"
-							rows="1"
-							placeholder="Describe the task, or send nothing to just open a thread."
-							data-bind:prompt
-							data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads', " + withSignal("_attach") + "))" }
-							data-on:input__debounce.600ms={ draftPost("home") }
-							data-effect="$prompt; autoGrow(el)"
-							autocomplete="off"
-							autocapitalize="sentences"
-							enterkeyhint="enter"
-						></textarea>
+						<div class="prompt-box">
+							<textarea
+								class="prompt"
+								rows="1"
+								placeholder="Describe the task, or send nothing to just open a thread."
+								data-bind:prompt
+								data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads', " + withSignal("_attach") + "))" }
+								data-on:input__debounce.600ms={ draftPost("home") }
+								data-effect="$prompt; autoGrow(el)"
+								autocomplete="off"
+								autocapitalize="sentences"
+								enterkeyhint="enter"
+							></textarea>
+							@StashPick("home", d.Stashed)
+						</div>
 						@AttachStrip()
 						<div class="composer-row">
 							@AttachButton()
@@ -130,6 +135,18 @@ templ HomeRow(t store.Thread, look AgentLook, isUnread bool, pr store.PRState) {
 	</li>
 }
 
+// projectPicked is what picking a project in the home composer does
+// besides naming it: the "Start in" choice goes back to the project's
+// default, and a project with defaults of its own (Settings > Projects)
+// sets the chips to them.
+func projectPicked(p store.Project) string {
+	expr := "$wt = ''; $wtbase = ''; $wtfrom = ''"
+	if p.HasDefaults() {
+		expr += "; $agent = " + jsq(p.Agent) + "; $model = " + jsq(p.Model) + "; $effort = " + jsq(p.Effort) + "; $mode = " + jsq(p.Mode)
+	}
+	return expr
+}
+
 func worktreesTitle(on bool) string {
 	if on {
 		return "New threads start in a worktree of their own (a checkout on a new branch). Click to turn off."
@@ -158,7 +175,7 @@ templ ProjectPick(projects []store.Project, threads []store.Thread) {
 				for i, p := range projects {
 					// Switching projects drops the "Start in" choice: the previous
 					// worktree belongs to the old project and the default differs.
-					<button type="button" class={ "opt", templ.KV("sel", i == 0) } role="option" data-value={ p.ID } data-class:sel={ "$project == " + jsq(p.ID) } data-on:click={ pickSet("project", p.ID, "$wt = ''; $wtbase = ''; $wtfrom = ''") }>
+					<button type="button" class={ "opt", templ.KV("sel", i == 0) } role="option" data-value={ p.ID } data-class:sel={ "$project == " + jsq(p.ID) } data-on:click={ pickSet("project", p.ID, projectPicked(p)) }>
 						<span class="opt-text">
 							<span class="opt-name"><span class="ellipsis">{ p.Name }</span>
 								if p.Worktrees {

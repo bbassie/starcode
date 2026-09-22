@@ -93,11 +93,24 @@ func active(t store.Thread) bool {
 	return t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval
 }
 
-// listed is whether a thread belongs in its project's list: archived
-// threads move to the Archived section unless a turn is still running,
-// which keeps them under Running until it ends.
+// listed is whether a thread belongs in its project's list: settled and
+// snoozed threads move to their shelves unless a turn is still running,
+// which keeps them in the list until it ends.
 func listed(t store.Thread) bool {
-	return !t.Archived || active(t)
+	return (!t.Archived && !t.Snoozed()) || active(t)
+}
+
+// snoozedThreads are the snoozed threads with no turn running, the one
+// that wakes first on top.
+func snoozedThreads(ts []store.Thread) []store.Thread {
+	var out []store.Thread
+	for _, t := range ts {
+		if t.Snoozed() && !active(t) {
+			out = append(out, t)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].SnoozedUntil.Before(out[j].SnoozedUntil) })
+	return out
 }
 
 func searchKey(t store.Thread, p store.Project) string {
@@ -172,6 +185,23 @@ templ Sidebar(d SidebarData) {
 			}
 			if len(d.Projects) == 0 {
 				<p class="dim pad">No projects yet. Add a folder with the button above.</p>
+			}
+			if snoozed := snoozedThreads(d.Threads); len(snoozed) > 0 {
+				// Folded by default; a filter or a snoozed thread on screen
+				// opens it, the same rules as Settled below.
+				<details id="snoozed" class="project settled snoozed" open?={ currentIn(d, snoozed) } data-preserve-attr="open" data-effect="$q != '' && (el.open = true)">
+					<summary class="project-head">
+						<span class="ellipsis">Snoozed</span>
+						<span class="dim tiny-text project-count">{ fmt.Sprintf("%d", len(snoozed)) }</span>
+						<span class="spacer"></span>
+						@Icon("chevron-down", "ui-icon project-caret")
+					</summary>
+					<ul class="threads compact">
+						for _, t := range snoozed {
+							@SnoozedRow(t, byID[t.ProjectID], t.ID == d.Current)
+						}
+					</ul>
+				</details>
 			}
 			{{ settled := settledThreads(d.Threads) }}
 			if len(settled) > 0 {
@@ -249,6 +279,10 @@ func SidebarOrder(d SidebarData) string {
 		}
 	}
 	b.WriteString("|")
+	for _, t := range snoozedThreads(d.Threads) {
+		b.WriteString("," + t.ID)
+	}
+	b.WriteString("|")
 	for _, t := range settledThreads(d.Threads) {
 		b.WriteString("," + t.ID)
 	}
@@ -265,6 +299,11 @@ func SidebarRow(d SidebarData, id string) templ.Component {
 	for i, t := range settledThreads(d.Threads) {
 		if t.ID == id {
 			return SettledRow(t, byID[t.ProjectID], t.ID == d.Current, prOf(t, d.PRs), i >= settledShown)
+		}
+	}
+	for _, t := range snoozedThreads(d.Threads) {
+		if t.ID == id {
+			return SnoozedRow(t, byID[t.ProjectID], t.ID == d.Current)
 		}
 	}
 	for _, t := range d.Threads {
@@ -312,8 +351,8 @@ func inboxOrder(ts []store.Thread) []store.Thread {
 	return out
 }
 
-// settledThreads are the archived threads whose turn is over, last
-// activity first.
+// settledThreads are the archived threads whose turn is over, the last
+// one settled first.
 func settledThreads(ts []store.Thread) []store.Thread {
 	var out []store.Thread
 	for _, t := range ts {
@@ -321,7 +360,13 @@ func settledThreads(ts []store.Thread) []store.Thread {
 			out = append(out, t)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	at := func(t store.Thread) time.Time {
+		if t.SettledAt.IsZero() {
+			return t.UpdatedAt
+		}
+		return t.SettledAt
+	}
+	sort.SliceStable(out, func(i, j int) bool { return at(out[i]).After(at(out[j])) })
 	return out
 }
 
@@ -462,6 +507,27 @@ templ SettledRow(t store.Thread, p store.Project, current bool, pr store.PRState
 	</li>
 }
 
+// SnoozedRow is a row of the Snoozed shelf: project mark, title and when
+// it wakes, with a button that wakes it now.
+templ SnoozedRow(t store.Thread, p store.Project, current bool) {
+	<li
+		id={ "row-" + t.ID }
+		class={ "thread-row", "compact", templ.KV("current", current) }
+		data-id={ t.ID }
+		data-k={ searchKey(t, p) }
+		data-show="$q == '' || el.dataset.k.includes($q.toLowerCase())"
+	>
+		<a href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$nav = false" title={ p.Name + ": " + t.Title }>
+			<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>
+			<span class="ellipsis">{ t.Title }</span>
+			<span class="dim tiny-text row-age" title="Wakes then">@Icon("alarm-clock", "ui-icon") <time data-local={ t.SnoozedUntil.UTC().Format(time.RFC3339) }>{ t.SnoozedUntil.UTC().Format("Jan 2 15:04") }</time></span>
+		</a>
+		<span class="row-actions">
+			<button type="button" class="row-act" title="Wake: back into the list now" data-on:click={ "@post('/api/threads/" + t.ID + "/wake')" }>@Icon("sunrise", "ui-icon") <span>Wake</span></button>
+		</span>
+	</li>
+}
+
 // PRChip is the number of a linked pull request coloured by its state:
 // open, draft, merged, closed, open with changes requested (the one that
 // wants the thread back) and open with a re-review requested (waiting on
@@ -577,6 +643,16 @@ func providersTitle(updates, signedOut int) string {
 		return "Providers"
 	}
 	return "Providers: " + strings.Join(parts, ", ")
+}
+
+// currentIn is whether the thread on screen is one of ts.
+func currentIn(d SidebarData, ts []store.Thread) bool {
+	for _, t := range ts {
+		if t.ID == d.Current {
+			return true
+		}
+	}
+	return false
 }
 
 // currentArchived is whether the thread on screen is in the Archived

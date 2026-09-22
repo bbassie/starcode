@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"starcode/internal/agent"
 	"starcode/internal/domain"
+	"starcode/internal/keys"
 	"starcode/internal/store"
 	"strconv"
 	"strings"
@@ -28,6 +29,8 @@ type ThreadData struct {
 	// Limits is the thread's instance's plan windows, for the context
 	// card; empty until the first read.
 	Limits []agent.LimitWindow
+	// Stashed is how many prompts the stash holds, for the stash button.
+	Stashed int
 	// Full renders every item. Otherwise the transcript starts at its
 	// last stretch (see SplitTail) with a button that loads the rest, so
 	// a long thread does not cost its whole history on every open and
@@ -323,6 +326,9 @@ templ MainHead(d ThreadData) {
 		if d.Thread.Archived {
 			<span class="status-pill st-idle" title="Settled: sending a message brings the thread back">@Icon("archive", "ui-icon") <span>settled</span></span>
 		}
+		if d.Thread.Snoozed() {
+			<button type="button" class="status-pill st-idle" title="Snoozed: it comes back into the list then. Click to wake it now." data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/wake')" }>@Icon("alarm-clock", "ui-icon") <span class="hide-sm">until </span><time data-local={ d.Thread.SnoozedUntil.UTC().Format(time.RFC3339) }>{ d.Thread.SnoozedUntil.UTC().Format("Jan 2 15:04") }</time></button>
+		}
 		// With a reason behind the status (an error, what the agent is
 		// waiting on) the pill is a button that shows it under the header;
 		// a title attribute alone never shows on a phone.
@@ -353,14 +359,21 @@ templ MainHead(d ThreadData) {
 			<button class="btn icon ghost tiny dim pr-unlink" data-on:click={ "confirm('Unlink pull request #" + strconv.Itoa(pr.Number) + " from this thread?') && @post('/api/threads/" + d.Thread.ID + "/pr/unlink')" } title="Unlink the pull request from this thread" aria-label="Unlink the pull request">@Icon("unlink", "ui-icon")</button>
 		}
 		<span class="spacer"></span>
-		if d.Branch != "" {
+		if d.Thread.Worktree != "" && !worktreeOnDisk(d.Thread) {
+			// The cleanup (or someone) removed the checkout; the branch
+			// stays and the next prompt checks it out again.
+			<span class="dim tiny-text hide-sm" title={ "The worktree " + d.Thread.Worktree + " was removed. The branch " + d.Thread.WorktreeBranch + " is kept, and the next prompt checks it out there again." }>
+				@Icon("folder-git-2", "ui-icon")
+				<span>{ MidTrunc(d.Thread.WorktreeBranch, 36) } · removed</span>
+			</span>
+		} else if d.Branch != "" {
 			<span class="dim tiny-text hide-sm" title={ branchTitle(d) }>
 				if d.Thread.Worktree != "" {
 					@Icon("folder-git-2", "ui-icon")
 				} else {
 					@Icon("git-branch", "ui-icon")
 				}
-				<span>{ d.Branch }</span>
+				<span>{ MidTrunc(d.Branch, 36) }</span>
 			</span>
 		}
 		// The thread's folder in VS Code on the reader's machine; the
@@ -373,7 +386,24 @@ templ MainHead(d ThreadData) {
 		// Pin, the worktree actions, settle and delete live behind this
 		// button on every screen; terminal and changes stay in the row.
 		<button class="btn icon ghost more-toggle" type="button" data-on:click="$more = !$more" title="More" aria-label="More actions">@Icon("ellipsis-vertical", "ui-icon")</button>
-		<div class="head-more" data-class:open="$more" data-on:click__outside="$more && !evt.target.closest('.more-toggle') && ($more = false)" data-on:click="$more = false">
+		<div class="head-more" data-class:open="$more" data-on:click__outside="$more && !evt.target.closest('.more-toggle') && ($more = false)" data-on:click="evt.target.closest('.snooze-at') || ($more = false)">
+			if d.Thread.Snoozed() {
+				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/wake')" } title="Bring the thread back into the list now">@Icon("sunrise", "ui-icon") <span class="hide-sm">wake</span></button>
+			}
+			// Snooze: the browser works the time out, in its own zone.
+			<div class="head-more-group">
+				<span class="dim tiny-text head-more-label">@Icon("alarm-clock", "ui-icon") <span>snooze until</span></span>
+				<div class="snooze-opts">
+					@snoozeButton(d.Thread.ID, "1h", "in 1 hour")
+					@snoozeButton(d.Thread.ID, "3h", "in 3 hours")
+					@snoozeButton(d.Thread.ID, "tomorrow", "tomorrow 9:00")
+					@snoozeButton(d.Thread.ID, "week", "Monday 9:00")
+				</div>
+				<label class="snooze-at dim tiny-text">
+					<span>or at</span>
+					<input class="in" type="datetime-local" data-on:change={ "el.value && (@post('/api/threads/" + d.Thread.ID + "/snooze?until=' + encodeURIComponent(snoozeAt('at', el.value))), $more = false)" }/>
+				</label>
+			</div>
 			if d.Thread.Pinned {
 				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unpin')" } title="Unpin: back into date order">@Icon("pin-off", "ui-icon") <span class="hide-sm">unpin</span></button>
 			} else {
@@ -459,6 +489,7 @@ templ WorkSummary(items []store.Item, aps []store.Approval) {
 		if steps > 0 {
 			<span class="dim">· { fmt.Sprintf("%d %s", steps, plural(steps, "step", "steps")) }</span>
 		}
+		<span class="dim tiny-text row-ts" data-ts={ items[0].CreatedAt.UTC().Format(time.RFC3339) }></span>
 	</summary>
 }
 
@@ -537,6 +568,63 @@ templ AttachStrip() {
 	<div class="attachments" data-show="$_attach.length > 0" data-preserve-attr="style" style="display: none">
 		<div class="attach-thumbs"></div>
 	</div>
+}
+
+// StashPick is the stash button and its menu, in the composer's top right
+// corner. With text in the composer the button puts it aside; in an empty
+// one it lists what is stashed, to bring one back. It only shows when it
+// has one of those to do: n is how many prompts are stashed, kept in the
+// stashn signal by the stash endpoints. key is the composer's draft key.
+// The stash hotkey presses the button, shown or not.
+templ StashPick(key string, n int) {
+	<div class="pick pick-stash" data-signals:stashn={ strconv.Itoa(n) } data-show="$prompt.trim() != '' || $stashn > 0" data-preserve-attr="style" style={ hiddenUnless(n > 0) } data-on:click__outside="$pick == 'stash' && !evt.target.closest('.pick') && ($pick = '')" data-on:keydown="pickKey(evt, el) && ($pick = '')">
+		<button type="button" class="btn icon ghost stash-btn" title={ "Stash: put the prompt aside, or bring a stashed one back (" + keys.Display(Key("stash")) + ")" } aria-label="Stash" data-on:click={ stashClick(key) } data-class:open="$pick == 'stash'">@Icon("bookmark", "ui-icon")</button>
+		<div class="pick-menu pick-stash-menu" data-show="$pick == 'stash'" data-preserve-attr="style" style="display: none">
+			<div class="pick-head">Stashed prompts</div>
+			<div id="stash-list" class="stash-list"><p class="dim tiny-text pad">loading…</p></div>
+		</div>
+	</div>
+}
+
+// stashClick stashes the text, or opens the menu over an empty composer.
+// Only the prompt travels; the attachments stay and the count says so.
+func stashClick(key string) string {
+	return "$prompt.trim() ? @post('/api/stash?key=" + key + "&att=' + $_attach.length, {filterSignals: {include: /^prompt$/}}) : ($pick = $pick == 'stash' ? '' : 'stash', $pick && @query('/api/stash?key=" + key + "'))"
+}
+
+// nudgeTokens and nudgeIdle are when the composer suggests compacting: a
+// conversation this big, left this long, has lost the prompt cache, and
+// the next prompt pays to read all of it again.
+const (
+	nudgeTokens = 120_000
+	nudgeIdle   = time.Hour
+)
+
+// CompactNudge suggests compacting a big conversation that has sat idle,
+// above the composer. It hides while a turn runs, and a dismissal is kept
+// in this browser for that size of conversation.
+templ CompactNudge(d ThreadData) {
+	{{ t := d.Thread }}
+	if t.ContextTokens >= nudgeTokens && time.Since(t.UpdatedAt) >= nudgeIdle && !busy(t) {
+		{{ key := fmt.Sprintf("nudge:%s:%d", t.ID, t.ContextTokens/10_000) }}
+		<div class="compact-nudge" data-show={ "!$locked && !localStorage.getItem(" + jsq(key) + ")" } data-preserve-attr="style">
+			@Icon("fold-vertical", "ui-icon")
+			<span class="nudge-text"><strong>{ fmt.Sprintf("%dK tokens", (t.ContextTokens+500)/1000) }</strong>{ fmt.Sprintf(", idle for %s. The next prompt re-reads all of it uncached.", idleWords(time.Since(t.UpdatedAt))) }</span>
+			<button type="button" class="btn tiny nudge-compact" data-on:click={ "@post('/api/threads/" + t.ID + "/compact')" } title="Fold the conversation so far into a summary first">Compact</button>
+			<button type="button" class="btn icon ghost tiny" title="Not now" aria-label="Dismiss" data-on:click={ "localStorage.setItem(" + jsq(key) + ", '1'); el.closest('.compact-nudge').remove()" }>@Icon("x", "ui-icon")</button>
+		</div>
+	}
+}
+
+// idleWords is a rough "3 hours", "2 days".
+func idleWords(d time.Duration) string {
+	switch {
+	case d < 2*time.Hour:
+		return "an hour"
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%d hours", int(d.Hours()))
+	}
+	return fmt.Sprintf("%d days", int(d.Hours()/24))
 }
 
 // ContextMeter is the gauge next to the setting chips: a ring showing how
@@ -715,22 +803,27 @@ templ Composer(d ThreadData) {
 		data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + t.ID + "/send', " + withSignal("_attach") + ")" }
 	>
 		@SessionRules(d)
+		@CompactNudge(d)
 		@PromptQueue(d)
 		// The slash command menu (static/slash.js) fills this above the prompt.
 		<div class="slash-menu"></div>
-		<textarea
-			class="prompt"
-			rows="1"
-			placeholder={ promptPlaceholder(d) }
-			data-attr:placeholder="$placeholder"
-			data-bind:prompt
-			data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send', " + withSignal("_attach") + "))" }
-			data-on:input__debounce.600ms={ draftPost(t.ID) }
-			data-effect="$prompt; autoGrow(el)"
-			autocomplete="off"
-			autocapitalize="sentences"
-			enterkeyhint="enter"
-		></textarea>
+		// The box holds the stash button in its corner, over the prompt.
+		<div class="prompt-box">
+			<textarea
+				class="prompt"
+				rows="1"
+				placeholder={ promptPlaceholder(d) }
+				data-attr:placeholder="$placeholder"
+				data-bind:prompt
+				data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send', " + withSignal("_attach") + "))" }
+				data-on:input__debounce.600ms={ draftPost(t.ID) }
+				data-effect="$prompt; autoGrow(el)"
+				autocomplete="off"
+				autocapitalize="sentences"
+				enterkeyhint="enter"
+			></textarea>
+			@StashPick(t.ID, d.Stashed)
+		</div>
 		@AttachStrip()
 		<div class="composer-row">
 			@AttachButton()
@@ -823,4 +916,10 @@ func promptPreview(body string) string {
 		return string(r[:277]) + "…"
 	}
 	return text
+}
+
+// snoozeButton is one of the header menu's snooze times; kind is what
+// the layout's snoozeAt turns into a time.
+templ snoozeButton(threadID, kind, label string) {
+	<button class="btn ghost dim tiny" type="button" data-on:click={ "@post('/api/threads/" + threadID + "/snooze?until=' + encodeURIComponent(snoozeAt('" + kind + "')))" }>{ label }</button>
 }

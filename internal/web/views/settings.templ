@@ -505,6 +505,11 @@ type SettingsPageData struct {
 	SettleDays   int
 	// Dense is this browser's one-line sidebar rows.
 	Dense bool
+	// Resume is whether a turn a restart cut off is resumed; CleanDays
+	// and CleanMerged are the automatic worktree cleanup rules.
+	Resume      bool
+	CleanDays   int
+	CleanMerged bool
 }
 
 // ThemeName is the display name of a theme id.
@@ -538,7 +543,7 @@ templ SettingsPage(d SettingsPageData) {
 			<div class="settings-shell">
 				@SettingsNav("general")
 				<div class="settings-content">
-					<section id="threads" class="settings-section" data-signals={ fmt.Sprintf("{sidebar: %q, dense: %t, settleMerged: %t, settleDays: %d}", d.Sidebar, d.Dense, d.SettleMerged, d.SettleDays) }>
+					<section id="threads" class="settings-section" data-signals={ fmt.Sprintf("{sidebar: %q, dense: %t, settleMerged: %t, settleDays: %d, resume: %t, cleanDays: %d, cleanMerged: %t}", d.Sidebar, d.Dense, d.SettleMerged, d.SettleDays, d.Resume, d.CleanDays, d.CleanMerged) }>
 						<header>
 							<h1>Threads</h1>
 							<p class="dim">How the sidebar lists threads and when they settle.</p>
@@ -574,6 +579,35 @@ templ SettingsPage(d SettingsPageData) {
 									<p class="dim">Days without activity before a thread settles on its own; 0 keeps them. Any new activity brings a thread back.</p>
 								</div>
 								<span class="num-unit"><input id="settle-days" class="in num" type="number" min="0" max="365" step="1" inputmode="numeric" data-bind:settle-days data-on:change__debounce.500ms="@post('/api/settle')"/> <span class="dim">days</span></span>
+							</div>
+							<div class="setting-row">
+								<div>
+									<label for="resume">Resume turns after a restart</label>
+									<p class="dim">A restart stops every running turn. With this on, each one picks up again when starcode is back: its session resumes and gets a prompt that says what happened.</p>
+								</div>
+								<input id="resume" type="checkbox" data-bind:resume data-on:change="@post('/api/settle')"/>
+							</div>
+						</div>
+					</section>
+					<section id="worktrees" class="settings-section">
+						<header>
+							<h1>Worktree cleanup</h1>
+							<p class="dim">Removes the checkouts of threads that are done with. Only the ones starcode made, and only when nothing would be lost: no changed or untracked files, and no ignored ones besides node_modules. The branch and the thread stay, and the next prompt checks the branch out again. A project can turn this off under Settings > Projects.</p>
+						</header>
+						<div class="settings-card">
+							<div class="setting-row">
+								<div>
+									<label for="clean-days">Remove after</label>
+									<p class="dim">Days without activity in the thread; 0 turns this rule off.</p>
+								</div>
+								<span class="num-unit"><input id="clean-days" class="in num" type="number" min="0" max="365" step="1" inputmode="numeric" data-bind:clean-days data-on:change__debounce.500ms="@post('/api/settle')"/> <span class="dim">days</span></span>
+							</div>
+							<div class="setting-row">
+								<div>
+									<label for="clean-merged">Remove once merged</label>
+									<p class="dim">When the thread's pull request merges, or when a settled thread's commits are all in the default branch.</p>
+								</div>
+								<input id="clean-merged" type="checkbox" data-bind:clean-merged data-on:change="@post('/api/settle')"/>
 							</div>
 						</div>
 					</section>
@@ -689,6 +723,7 @@ templ SettingsNav(current string) {
 templ settingsLinks(current string) {
 	<a class={ templ.KV("current", current == "general") } href="/settings">@Icon("settings", "ui-icon") General</a>
 	<a class={ templ.KV("current", current == "appearance") } href="/settings/appearance">@Icon("palette", "ui-icon") Appearance</a>
+	<a class={ templ.KV("current", current == "projects") } href="/settings/projects">@Icon("folder", "ui-icon") Projects</a>
 	<a class={ templ.KV("current", current == "usage") } href="/settings/usage">@Icon("chart-no-axes-combined", "ui-icon") Usage</a>
 	<a class={ templ.KV("current", current == "providers") } href="/settings/providers">@Icon("plug", "ui-icon") Providers</a>
 	<a class={ templ.KV("current", current == "keys") } href="/settings/keys">@Icon("keyboard", "ui-icon") Keys</a>
@@ -700,7 +735,7 @@ func settingsSection(view string) string {
 	switch view {
 	case "settings":
 		return "general"
-	case "appearance", "usage", "providers", "keys":
+	case "appearance", "usage", "providers", "keys", "projects":
 		return view
 	}
 	return ""

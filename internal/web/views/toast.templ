@@ -2,13 +2,57 @@ package views
 
 import "fmt"
 import "time"
+import "starcode/internal/store"
+import "starcode/internal/keys"
 
 // Toast shows a transient error. The key attribute changes per render so
-// the CSS fade animation restarts even when the message repeats.
+// the CSS fade animation restarts even when the message repeats. Closing
+// one leaves an empty #toast behind (toastClose in the layout), since the
+// next toast is patched in by that id.
 templ Toast(msg string) {
 	<div id="toast" class="toast" data-key={ fmt.Sprint(time.Now().UnixNano()) }>
 		<span class="tag err">error</span>
 		<span>{ msg }</span>
-		<button class="btn tiny" data-on:click="el.parentElement.remove()" aria-label="Dismiss">@Icon("x", "ui-icon")</button>
+		<button class="btn tiny" data-on:click="toastClose(el)" aria-label="Dismiss">@Icon("x", "ui-icon")</button>
+	</div>
+}
+
+// UndoToast says what a command did and offers to take it back for a few
+// seconds; undo is the expression that does. The undo hotkey presses the
+// button while the toast is up (the toast leaves the page when its
+// animation ends). at, when set, is a time in the message, written out in
+// the reader's time zone by the layout's clock script.
+templ UndoToast(msg string, at time.Time, undo string) {
+	<div id="toast" class="toast note" data-key={ fmt.Sprint(time.Now().UnixNano()) } data-on:animationend="toastClose(el)">
+		<span>
+			{ msg }
+			if !at.IsZero() {
+				{ " " }<time data-local={ at.UTC().Format(time.RFC3339) }>{ at.UTC().Format("Jan 2 15:04 UTC") }</time>
+			}
+		</span>
+		<button class="btn tiny toast-undo" type="button" data-on:click={ undo + "; toastClose(el)" } title={ "Undo (" + keys.Display(Key("undo")) + ")" }>@Icon("undo-2", "ui-icon") <span>Undo</span></button>
+		<button class="btn icon tiny ghost" type="button" data-on:click="toastClose(el)" aria-label="Dismiss">@Icon("x", "ui-icon")</button>
+	</div>
+}
+
+// StashList is the stash menu's body: the prompts put aside with the
+// stash key, newest first. A pick asks before replacing what the
+// composer holds; key is the composer's draft key.
+templ StashList(st []store.Stash, key string) {
+	<div id="stash-list" class="stash-list">
+		if len(st) == 0 {
+			<p class="dim tiny-text pad">Nothing stashed. { keys.Display(Key("stash")) } in a composer with text puts it here.</p>
+		}
+		for _, s := range st {
+			<div class="stash-row">
+				<button type="button" class="opt" data-on:click={ "(!$prompt.trim() || confirm('Replace what is in the composer?')) && @post('/api/stash/" + s.ID + "/restore?key=" + key + "')" } title="Put it back in the composer">
+					<span class="opt-text">
+						<span class="opt-name"><span class="ellipsis">{ promptSummary(s.Body) }</span></span>
+						<span class="opt-desc"><span data-ago={ s.CreatedAt.UTC().Format(time.RFC3339) }>{ ago(s.CreatedAt) }</span> ago</span>
+					</span>
+				</button>
+				<button type="button" class="btn icon ghost tiny" title="Drop it" aria-label="Drop it" data-on:click={ "@post('/api/stash/" + s.ID + "/delete?key=" + key + "')" }>@Icon("trash-2", "ui-icon")</button>
+			</div>
+		}
 	</div>
 }

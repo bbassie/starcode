@@ -35,7 +35,17 @@ type Project struct {
 	CreatedAt time.Time
 	// Worktrees is whether new threads start in a worktree of their own.
 	Worktrees bool
+	// Agent, Model, Effort and Mode are what new threads in the project
+	// start with; Agent empty means the project sets nothing and a new
+	// thread takes the composer's choice. Cleanup is the automatic
+	// worktree cleanup override: "" follows the instance, "off" keeps
+	// the project's worktrees.
+	Agent, Model, Effort, Mode string
+	Cleanup                    string
 }
+
+// HasDefaults is whether the project names what its new threads run on.
+func (p Project) HasDefaults() bool { return p.Agent != "" }
 
 type Thread struct {
 	ID                string
@@ -69,6 +79,30 @@ type Thread struct {
 	PRURL     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// SettledAt is when the thread was settled, zero while it is not;
+	// HeldAt when it was last brought back by hand (unsettled, woken),
+	// which the idle sweep counts like activity. SnoozedUntil is when a
+	// snoozed thread comes back, zero when it is not snoozed.
+	SettledAt    time.Time
+	HeldAt       time.Time
+	SnoozedUntil time.Time
+	// Anchor is where the agent's conversation can be forked to keep all
+	// of it (the last turn's), and ForkAt the point a rewind cut it back
+	// to, which the next session start forks at; empty when there is none.
+	Anchor string
+	ForkAt string
+}
+
+// Snoozed is whether the thread waits on the Snoozed shelf.
+func (t Thread) Snoozed() bool { return !t.SnoozedUntil.IsZero() }
+
+// QuietSince is the time the idle settle sweep measures from: the last
+// activity, or the last time the reader brought the thread back.
+func (t Thread) QuietSince() time.Time {
+	if t.HeldAt.After(t.UpdatedAt) {
+		return t.HeldAt
+	}
+	return t.UpdatedAt
 }
 
 // PR names a pull request across repositories.
@@ -344,16 +378,40 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		_, err := tx.ExecContext(ctx, `DELETE FROM threads WHERE id=?`, ev.ThreadID)
 		return err
 	case domain.ThreadArchived:
-		_, err := tx.ExecContext(ctx, `UPDATE threads SET archived=1, updated_at=? WHERE id=?`, ts, ev.ThreadID)
+		// Settling is not activity: the thread keeps its updated_at, so
+		// an undo puts it back in its place and it does not go unread.
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET archived=1, settled_at=?, snoozed_until='' WHERE id=?`, ts, ev.ThreadID)
 		return err
 	case domain.ThreadUnarchived:
-		_, err := tx.ExecContext(ctx, `UPDATE threads SET archived=0, updated_at=? WHERE id=?`, ts, ev.ThreadID)
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET archived=0, settled_at='', held_at=? WHERE id=?`, ts, ev.ThreadID)
+		return err
+	case domain.ThreadSnoozed:
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET snoozed_until=?, archived=0, settled_at='' WHERE id=?`, p.Until.UTC().Format(timeFmt), ev.ThreadID)
+		return err
+	case domain.ThreadWoken:
+		if p.Auto {
+			_, err := tx.ExecContext(ctx, `UPDATE threads SET snoozed_until='', held_at=?, updated_at=? WHERE id=?`, ts, ts, ev.ThreadID)
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET snoozed_until='', held_at=? WHERE id=?`, ts, ev.ThreadID)
+		return err
+	case domain.ThreadRewound:
+		// Everything from the prompt on leaves the transcript, its search
+		// rows first (they are found through the items).
+		cut := `(SELECT seq FROM items WHERE id=?)`
+		if _, err := tx.ExecContext(ctx, `DELETE FROM items_fts WHERE rowid IN (SELECT seq FROM items WHERE thread_id=? AND seq >= `+cut+`)`, ev.ThreadID, p.ItemID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM items WHERE thread_id=? AND seq >= `+cut, ev.ThreadID, p.ItemID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET external_session_id=?, fork_at=?, anchor=?, context_tokens=0, updated_at=? WHERE id=?`, p.SessionID, p.ForkAt, p.ForkAt, ts, ev.ThreadID)
 		return err
 	case domain.ThreadWorktreeSet:
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET worktree=?, worktree_branch=? WHERE id=?`, p.Path, p.Branch, ev.ThreadID)
 		return err
 	case domain.ProjectSettingsChanged:
-		_, err := tx.ExecContext(ctx, `UPDATE projects SET worktrees=? WHERE id=?`, p.Worktrees, p.ID)
+		_, err := tx.ExecContext(ctx, `UPDATE projects SET worktrees=?, agent=?, model=?, effort=?, mode=?, cleanup=? WHERE id=?`, p.Worktrees, p.Agent, p.Model, p.Effort, p.Mode, p.Cleanup, p.ID)
 		return err
 	case domain.ThreadPinned:
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET pinned=1 WHERE id=?`, ev.ThreadID)
@@ -374,11 +432,13 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		// model has another window, so the one the old model reported is
 		// dropped and the catalog answers until the next turn; the count
 		// stays, because the conversation is the same one.
-		_, err := tx.ExecContext(ctx, `UPDATE threads SET model=?, effort=?, permission_mode=?, external_session_id=CASE WHEN agent=? THEN external_session_id ELSE '' END, context_window=CASE WHEN model=? THEN context_window ELSE 0 END, agent=?, updated_at=? WHERE id=?`,
-			p.Model, p.Effort, p.PermissionMode, p.Agent, p.Model, p.Agent, ts, ev.ThreadID)
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET model=?, effort=?, permission_mode=?, external_session_id=CASE WHEN agent=? THEN external_session_id ELSE '' END, anchor=CASE WHEN agent=? THEN anchor ELSE '' END, fork_at=CASE WHEN agent=? THEN fork_at ELSE '' END, context_window=CASE WHEN model=? THEN context_window ELSE 0 END, agent=?, updated_at=? WHERE id=?`,
+			p.Model, p.Effort, p.PermissionMode, p.Agent, p.Agent, p.Agent, p.Model, p.Agent, ts, ev.ThreadID)
 		return err
 	case domain.AgentSessionBound:
-		_, err := tx.ExecContext(ctx, `UPDATE threads SET external_session_id=?, resolved_model=CASE WHEN ?='' THEN resolved_model ELSE ? END, updated_at=? WHERE id=?`,
+		// A bound session is the fork a rewind asked for, if there was
+		// one, so the cut is done with.
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET external_session_id=?, fork_at='', resolved_model=CASE WHEN ?='' THEN resolved_model ELSE ? END, updated_at=? WHERE id=?`,
 			p.ExternalID, p.Model, p.Model, ts, ev.ThreadID)
 		return err
 	case domain.ThreadStatusChanged:
@@ -387,6 +447,11 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 	case domain.TurnStarted:
 		return touch()
 	case domain.TurnCompleted:
+		if p.Anchor != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE threads SET anchor=? WHERE id=?`, p.Anchor, ev.ThreadID); err != nil {
+				return err
+			}
+		}
 		return touch()
 	case domain.ContextUsed:
 		// Only the newest reading matters, and it is not activity: no touch,
@@ -526,6 +591,12 @@ func deref(p any) any {
 		return *v
 	case *domain.ThreadUnarchived:
 		return *v
+	case *domain.ThreadSnoozed:
+		return *v
+	case *domain.ThreadWoken:
+		return *v
+	case *domain.ThreadRewound:
+		return *v
 	case *domain.ThreadWorktreeSet:
 		return *v
 	case *domain.ProjectSettingsChanged:
@@ -602,44 +673,61 @@ func nullIfEmpty(s string) any {
 // ---- readers ----
 
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,path,name,created_at,worktrees FROM projects ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+projectCols+` FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []Project
 	for rows.Next() {
-		var p Project
-		var ts string
-		if err := rows.Scan(&p.ID, &p.Path, &p.Name, &ts, &p.Worktrees); err != nil {
+		p, err := scanProject(rows)
+		if err != nil {
 			return nil, err
 		}
-		p.CreatedAt, _ = time.Parse(timeFmt, ts)
 		out = append(out, p)
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) Project(ctx context.Context, id string) (Project, error) {
-	var p Project
-	var ts string
-	err := s.db.QueryRowContext(ctx, `SELECT id,path,name,created_at,worktrees FROM projects WHERE id=?`, id).Scan(&p.ID, &p.Path, &p.Name, &ts, &p.Worktrees)
+	p, err := scanProject(s.db.QueryRowContext(ctx, `SELECT `+projectCols+` FROM projects WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
+	return p, err
+}
+
+const projectCols = `id,path,name,created_at,worktrees,agent,model,effort,mode,cleanup`
+
+func scanProject(sc interface{ Scan(...any) error }) (Project, error) {
+	var p Project
+	var ts string
+	err := sc.Scan(&p.ID, &p.Path, &p.Name, &ts, &p.Worktrees, &p.Agent, &p.Model, &p.Effort, &p.Mode, &p.Cleanup)
 	p.CreatedAt, _ = time.Parse(timeFmt, ts)
 	return p, err
 }
 
-const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,pinned,worktree,worktree_branch,context_tokens,context_window,pr_repo,pr_number,pr_url,created_at,updated_at`
+const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,pinned,worktree,worktree_branch,context_tokens,context_window,pr_repo,pr_number,pr_url,created_at,updated_at,settled_at,held_at,snoozed_until,anchor,fork_at`
 
 func scanThread(sc interface{ Scan(...any) error }) (Thread, error) {
 	var t Thread
-	var c, u string
-	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.Pinned, &t.Worktree, &t.WorktreeBranch, &t.ContextTokens, &t.ContextWindow, &t.PRRepo, &t.PRNumber, &t.PRURL, &c, &u)
+	var c, u, settled, held, snoozed string
+	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.Pinned, &t.Worktree, &t.WorktreeBranch, &t.ContextTokens, &t.ContextWindow, &t.PRRepo, &t.PRNumber, &t.PRURL, &c, &u, &settled, &held, &snoozed, &t.Anchor, &t.ForkAt)
 	t.CreatedAt, _ = time.Parse(timeFmt, c)
 	t.UpdatedAt, _ = time.Parse(timeFmt, u)
+	t.SettledAt = parseTime(settled)
+	t.HeldAt = parseTime(held)
+	t.SnoozedUntil = parseTime(snoozed)
 	return t, err
+}
+
+// parseTime reads an optional timestamp column; empty is the zero time.
+func parseTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, _ := time.Parse(timeFmt, s)
+	return t
 }
 
 // Threads lists every thread, newest activity first.
@@ -1055,6 +1143,60 @@ func (s *Store) Draft(ctx context.Context, key string) (string, error) {
 	return body, err
 }
 
+// Stash is a prompt put aside from a composer: Source is the draft key it
+// came from (a thread id, or "home").
+type Stash struct {
+	ID        string
+	Body      string
+	Source    string
+	CreatedAt time.Time
+}
+
+// AddStash keeps body under a new id and returns it.
+func (s *Store) AddStash(ctx context.Context, id, body, source string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO stash(id, body, source, created_at) VALUES(?,?,?,?)`, id, body, source, time.Now().UTC().Format(timeFmt))
+	return err
+}
+
+// Stashes lists the stash, newest first.
+func (s *Store) Stashes(ctx context.Context) ([]Stash, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, body, source, created_at FROM stash ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Stash
+	for rows.Next() {
+		var st Stash
+		var c string
+		if err := rows.Scan(&st.ID, &st.Body, &st.Source, &c); err != nil {
+			return nil, err
+		}
+		st.CreatedAt = parseTime(c)
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
+// StashCount is how many prompts are stashed.
+func (s *Store) StashCount(ctx context.Context) int {
+	var n int
+	s.db.QueryRowContext(ctx, `SELECT count(*) FROM stash`).Scan(&n)
+	return n
+}
+
+// TakeStash removes a stashed prompt and returns it.
+func (s *Store) TakeStash(ctx context.Context, id string) (Stash, error) {
+	var st Stash
+	var c string
+	err := s.db.QueryRowContext(ctx, `DELETE FROM stash WHERE id=? RETURNING id, body, source, created_at`, id).Scan(&st.ID, &st.Body, &st.Source, &c)
+	if errors.Is(err, sql.ErrNoRows) {
+		return st, ErrNotFound
+	}
+	st.CreatedAt = parseTime(c)
+	return st, err
+}
+
 // MarkSeen records that threadID was on screen at t. Never moves back.
 // changed reports whether the mark took an unread row (an idle thread
 // with activity since the last look) to read, so the caller knows when
@@ -1137,6 +1279,28 @@ func (s *Store) SettleIdleDays(ctx context.Context) int {
 		return 3
 	}
 	return n
+}
+
+// ResumeAfterRestart is whether a turn a restart cut off is resumed on
+// the next start (setting resume_after_restart, on by default).
+func (s *Store) ResumeAfterRestart(ctx context.Context) bool {
+	return s.Setting(ctx, "resume_after_restart", "1") != "0"
+}
+
+// WorktreeCleanDays is how many days without activity remove a thread's
+// worktree (setting wt_clean_days, 0 by default: never).
+func (s *Store) WorktreeCleanDays(ctx context.Context) int {
+	n, err := strconv.Atoi(s.Setting(ctx, "wt_clean_days", "0"))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// WorktreeCleanMerged is whether a worktree whose work has landed is
+// removed (setting wt_clean_merged, off by default).
+func (s *Store) WorktreeCleanMerged(ctx context.Context) bool {
+	return s.Setting(ctx, "wt_clean_merged", "0") == "1"
 }
 
 // ---- compaction ----

@@ -490,6 +490,7 @@ func (s *Server) bannerData(ctx context.Context, threadID string) views.BannerDa
 	}
 	if d.HomeChanged || d.Branch != "" || len(d.Builds) > 0 || d.Behind > 0 {
 		d.Running = s.runningThreads(ctx)
+		d.Resume = s.App.Store.ResumeAfterRestart(ctx)
 	}
 	return d
 }

@@ -1529,3 +1529,102 @@ details.item.agent > summary .tag { display: inline-flex; align-items: center; g
 /* Project cards on the home page: one line per thread. */
 .home-row a { flex-direction: row; min-height: 36px; align-items: center; }
 .home-row .row-main { flex: 1; }
+
+/* ---- undo, snooze, stash, rewind, quote, previews ---- */
+
+/* A notice with an undo button: quieter than an error, and gone sooner,
+   since the undo only makes sense while the reader remembers the click. */
+.toast.note { border-color: var(--border); animation: toast-out 6s forwards; }
+.toast-undo .ui-icon { margin-right: 2px; }
+
+/* The header menu's snooze choices. */
+.head-more-group { display: flex; flex-direction: column; gap: 4px; padding: 4px 6px 8px; border-bottom: var(--border-w) solid var(--border); margin-bottom: 2px; }
+.head-more-label { display: inline-flex; align-items: center; gap: 4px; }
+.snooze-opts { display: flex; flex-wrap: wrap; gap: 4px; }
+.head-more .snooze-opts .btn { min-height: 28px; justify-content: center; }
+.snooze-at { display: flex; align-items: center; gap: 6px; }
+.snooze-at input { flex: 1; min-width: 0; padding: 3px 6px; }
+
+/* Prompts starcode sent itself, and the rewind tools beside each prompt. */
+.user-auto { display: inline-flex; align-items: center; gap: 4px; }
+.item.user.auto .bubble { opacity: 0.75; }
+.item.user .msg-tools { left: auto; right: calc(100% + 6px); align-items: center; }
+.msg-time { white-space: nowrap; padding: 0 4px; }
+
+/* When a tool call or a stretch of work started, on hover. */
+.row-ts { display: none; margin-left: auto; padding-left: 8px; white-space: nowrap; }
+.item.tool > summary:hover .row-ts, .work-head:hover .row-ts { display: inline; }
+.work-head { display: flex; align-items: center; gap: 4px; }
+
+/* The stash menu. */
+.pick-stash { position: relative; display: inline-flex; }
+.stash-btn.open { color: var(--accent); }
+.pick-stash-menu { width: 340px; }
+.stash-list { max-height: min(320px, 50dvh); overflow-y: auto; padding: 4px 6px 6px; display: flex; flex-direction: column; gap: 1px; }
+.stash-row { display: flex; align-items: center; gap: 4px; }
+.stash-row .opt { flex: 1; min-width: 0; }
+
+/* The suggestion to compact a big conversation that sat for a while. */
+/* A strip at the top of the composer card, like the queue and the
+   session rules: no box of its own, a warm tint and a divider. */
+.compact-nudge { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px; border-bottom: var(--border-w) solid var(--border); background: color-mix(in srgb, var(--warn) 7%, transparent); font-size: 0.82em; line-height: 1.35; color: var(--fg-dim); }
+#session-rules:empty + .compact-nudge { border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0; }
+.compact-nudge > .ui-icon { color: var(--warn); flex: none; }
+.compact-nudge strong { color: var(--fg); font-weight: 600; }
+.nudge-text { flex: 1; min-width: 0; }
+.compact-nudge .btn { flex: none; }
+.nudge-compact { border-color: var(--warn); color: var(--warn); background: transparent; }
+
+/* The floating button that quotes a selection into the composer. */
+.quote-btn { position: fixed; z-index: 30; box-shadow: var(--shadow); background: var(--bg-3); }
+.quote-btn[hidden] { display: none; }
+
+/* The panel's path row and rendered previews. */
+.diff-head { display: flex; align-items: center; gap: 6px; }
+.diff-head .ellipsis { flex: 1; min-width: 0; }
+.file-preview { flex: 1; min-height: 60vh; width: 100%; border: 0; background: #fff; }
+.file-preview.image { display: flex; align-items: flex-start; justify-content: center; padding: var(--pad); background: var(--bg-2); overflow: auto; }
+.file-preview.image img { max-width: 100%; height: auto; cursor: zoom-in; }
+
+/* The image viewer. */
+.lightbox { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: rgba(8, 9, 11, 0.92); --fg: #e8e8ea; --fg-dim: #a0a0a8; color: var(--fg); }
+.lightbox[hidden] { display: none; }
+.lightbox-bar { display: flex; align-items: center; gap: 4px; padding: 6px 10px; padding-top: max(6px, env(safe-area-inset-top)); }
+.lightbox-name { font-size: 0.85em; color: var(--fg-dim); min-width: 0; }
+.lightbox-pct { min-width: 58px; justify-content: center; font-variant-numeric: tabular-nums; }
+.lightbox-stage { position: relative; flex: 1; overflow: hidden; touch-action: none; }
+.lightbox-stage img { position: absolute; left: 0; top: 0; max-width: none; transform-origin: 0 0; cursor: grab; user-select: none; -webkit-user-drag: none; }
+.lightbox-stage img.dragging { cursor: grabbing; }
+.attach-thumb, .item.assistant.md img { cursor: zoom-in; }
+
+/* Settings > Projects: the chips open downward on a settings page. */
+.project-chips .pick-menu { bottom: auto; top: calc(100% + 8px); left: auto; right: 0; }
+.project-chips .chips { justify-content: flex-end; }
+.setup-cmd { font-size: 0.85em; padding: 4px 8px; background: var(--bg-3); border-radius: var(--radius-sm); max-width: 50%; overflow-wrap: anywhere; }
+
+/* The pull requests page's filter row. */
+.prs-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 12px; }
+.prs-filter .pick-search { flex: 1 1 260px; border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-2); }
+.prs-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9em; color: var(--fg-dim); cursor: pointer; }
+.pr-badge.accent { color: var(--accent); border-color: var(--accent); }
+
+/* The stash button sits in the composer's top right corner, so it takes
+   no room from the chips; the prompt leaves space for it. */
+.prompt-box { position: relative; }
+.prompt-box > .pick-stash { position: absolute; top: 6px; right: 8px; z-index: 3; }
+.prompt-box > .pick-stash .stash-btn { min-height: 28px; min-width: 28px; padding: 0; color: var(--fg-dim); }
+.prompt-box > .pick-stash .pick-menu { left: auto; right: 0; }
+form.composer.start .prompt-box > .pick-stash .pick-menu { top: calc(100% + 4px); bottom: auto; }
+form.composer .prompt { padding-right: 36px; }
+
+/* The header's pills keep their icon and text on one line. */
+.status-pill { display: inline-flex; align-items: center; flex: none; }
+
+/* A toast centred with left: 50% only has half the screen to size
+   itself in, so it would wrap early; it takes its own width instead. On
+   a phone it sits under the header, clear of the composer and the
+   keyboard. */
+.toast { width: max-content; }
+@media (max-width: 900px) {
+  .toast { top: calc(env(safe-area-inset-top) + 58px); bottom: auto; }
+}
