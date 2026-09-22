@@ -32,6 +32,22 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	dense := s.denseMode(r)
 	ctx := r.Context()
 
+	// The page sends its signals with the request; the side panel's open
+	// detail is the one worth keeping across a reconnect, and whether the
+	// reader had loaded the whole transcript. They are read before the
+	// response starts: a QUERY carries them in its body, and once the
+	// SSE headers are out the server no longer lets the handler read it,
+	// so every reconnect came in with none.
+	var sig struct {
+		GitPath  string `json:"gitPath"`
+		GitEdit  bool   `json:"gitEdit"`
+		PanelTab string `json:"panelTab"`
+		Full     bool   `json:"full"`
+		MainV    string `json:"mainv"`
+		SideV    string `json:"sidev"`
+	}
+	datastar.ReadSignals(r, &sig)
+
 	// Subscribe before the initial render so nothing slips between them.
 	ch := s.App.Bus.Subscribe(ctx)
 	sse := datastar.NewSSE(w, r)
@@ -42,18 +58,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, sidebar: sidebar, dense: dense, rowDirty: map[string]bool{}, projSel: projSel, usageDays: usageDays, usageMetric: usageMetric, provSel: provSel, provTab: provTab, dirty: map[string]bool{}, tails: map[string]*tail{}}
-	// The page sends its signals with the request; the side panel's open
-	// detail is the one worth keeping across a reconnect, and whether the
-	// reader had loaded the whole transcript.
-	var sig struct {
-		GitPath  string `json:"gitPath"`
-		GitEdit  bool   `json:"gitEdit"`
-		PanelTab string `json:"panelTab"`
-		Full     bool   `json:"full"`
-		MainV    string `json:"mainv"`
-		SideV    string `json:"sidev"`
-	}
-	datastar.ReadSignals(r, &sig)
 	c.gitPath, c.gitEdit, c.panelTab, c.full = sig.GitPath, sig.GitEdit, sig.PanelTab, sig.Full
 	c.mainV, c.sideV = sig.MainV, sig.SideV
 	c.pairURL = s.pairURL(r)
