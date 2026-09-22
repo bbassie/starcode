@@ -67,9 +67,10 @@ make run              # templ generate + go run . -fake -debug
 make dev              # templ --watch + air, restarts on every save
 go test -short ./...  # skips the tests that call the real claude and codex
 go vet ./...
+go test -tags e2e ./e2e/...  # drives the pages in headless Chromium
 ```
 
-The integration tests for the adapters talk to the real CLIs and cost a few cents; plain `make test` runs them. Generated `*_templ.go` files are committed, so regenerate after every `.templ` change and commit both.
+The integration tests for the adapters talk to the real CLIs and cost a few cents; plain `make test` runs them. The e2e tests use [Rod](https://go-rod.github.io) and the scripted fake agent against a server built inside the test; they need a Chrome or Chromium on the machine (`STARCODE_E2E_BROWSER` names one), or Rod downloads its own on the first run. Generated `*_templ.go` files are committed, so regenerate after every `.templ` change and commit both.
 
 ```
 main.go                     flags, wiring, replay and compact
@@ -90,6 +91,7 @@ internal/usage              cost and token scanning of the CLIs' transcripts
 internal/web                router, auth, SSE read side, command endpoints
 internal/web/views          templ components
 internal/web/static         app.css and the vendored JS (datastar, xterm, highlight.js)
+e2e                         browser tests with Rod (build tag e2e)
 ```
 
 Every user action is a `POST /api/...` and every page has one SSE stream. New state goes through `internal/app` commands and domain events, never from a handler into the store.

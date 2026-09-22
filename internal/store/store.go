@@ -494,6 +494,9 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 				return err
 			}
 		}
+		if p.Quiet {
+			return nil
+		}
 		return touch()
 	case domain.ItemDelta:
 		col := "body"

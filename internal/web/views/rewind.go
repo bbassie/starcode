@@ -15,6 +15,7 @@ type promptMeta struct {
 	Anchor     string `json:"anchor"`
 	Checkpoint string `json:"checkpoint"`
 	Auto       string `json:"auto"`
+	Fresh      bool   `json:"fresh"`
 }
 
 func promptMetaOf(it store.Item) promptMeta {
@@ -24,11 +25,10 @@ func promptMetaOf(it store.Item) promptMeta {
 }
 
 // rewindable is whether the transcript offers a rewind to the prompt: it
-// has the fork point, or no session at all, which is the thread's first
-// prompt (and the prompts from before starcode recorded these, which the
-// server then turns down with a reason).
+// began the conversation, or it has the fork point. Prompts from before
+// starcode recorded either get no button.
 func (m promptMeta) rewindable() bool {
-	return m.Anchor != "" || m.Session == ""
+	return m.Fresh || m.Anchor != ""
 }
 
 // rewindAction asks, then posts the rewind to before prompt it.

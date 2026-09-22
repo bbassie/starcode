@@ -105,10 +105,9 @@ func (a *App) CleanWorktrees(ctx context.Context) {
 			a.Log.Info("worktree cleanup", "thread", t.ID, "dir", t.Worktree, "err", err)
 			continue
 		}
-		// No note in the transcript: a line there is activity, which
-		// would bring a settled thread back to the top as unread. The
-		// header says the checkout is gone (views.MainHead).
+		// A quiet note: a settled thread stays where it is and read.
 		a.Log.Info("removed worktree", "thread", t.ID, "dir", t.Worktree, "branch", t.WorktreeBranch, "why", reason)
+		a.note(ctx, t.ID, "Removed the worktree "+reason+". The branch "+t.WorktreeBranch+" stays, and the next prompt checks it out there again.")
 	}
 }
 

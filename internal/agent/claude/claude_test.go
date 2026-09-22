@@ -1111,3 +1111,61 @@ func TestAnchorIsTheLastMainLine(t *testing.T) {
 		t.Fatalf("anchor after a compact = %q, want summary-1", got)
 	}
 }
+
+// replyText sends prompt and returns the assistant's text for the turn and
+// the turn's completion.
+func replyText(t *testing.T, s *session, prompt string) (string, *agent.TurnCompleted) {
+	t.Helper()
+	var seen []agent.Event
+	if err := s.Send(t.Context(), prompt); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	done := waitFor(t, s, &seen, "turn completion", isKind(agent.KindTurnCompleted)).TurnCompleted
+	var text string
+	for _, ev := range seen {
+		if ev.Kind == agent.KindTextDelta {
+			text += ev.TextDelta.Text
+		}
+	}
+	return text, done
+}
+
+// TestIntegrationRewindFork checks what a rewind relies on: a session
+// started with ForkAt (the hidden --resume-session-at flag, with
+// --fork-session) continues the conversation as it was at that turn's
+// anchor, under a new id. A CLI update that drops or changes the flag
+// fails here instead of quietly forking the whole conversation.
+func TestIntegrationRewindFork(t *testing.T) {
+	dir := t.TempDir()
+	s := startIntegration(t, dir)
+	_, first := replyText(t, s, "Reply with just the word APPLE.")
+	if first.Anchor == "" {
+		t.Fatal("the first turn reported no anchor")
+	}
+	replyText(t, s, "Now reply with just the word BANANA.")
+	s.mu.Lock()
+	conv := s.st.sessionID
+	s.mu.Unlock()
+	s.Close()
+
+	fork := startIntegrationCfg(t, agent.Config{Cwd: dir, Model: "haiku", ResumeID: conv, ForkAt: first.Anchor})
+	var seen []agent.Event
+	if err := fork.Send(t.Context(), "List every word I asked you to reply with in this conversation, comma separated, nothing else."); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	info := waitFor(t, fork, &seen, "session info", isKind(agent.KindSessionInfo))
+	if info.SessionInfo.ExternalID == conv {
+		t.Errorf("the fork kept the original id %s", conv)
+	}
+	waitFor(t, fork, &seen, "turn completion", isKind(agent.KindTurnCompleted))
+	var text string
+	for _, ev := range seen {
+		if ev.Kind == agent.KindTextDelta {
+			text += ev.TextDelta.Text
+		}
+	}
+	up := strings.ToUpper(text)
+	if !strings.Contains(up, "APPLE") || strings.Contains(up, "BANANA") {
+		t.Errorf("after the fork the model said %q; want APPLE and not BANANA", text)
+	}
+}

@@ -200,7 +200,11 @@ type PromptDequeued struct {
 // ItemStarted opens a new item in the transcript. Body may be empty and be
 // filled by ItemDelta events (assistant text, thinking, tool output).
 type ItemStarted struct {
-	ID       string          `json:"id"`
+	ID string `json:"id"`
+	// Quiet is a line starcode writes for the record (a setup script
+	// finished, a worktree was cleaned up) that is not activity: the
+	// thread keeps its place and does not go unread over it.
+	Quiet    bool            `json:"quiet,omitempty"`
 	Kind     string          `json:"kind"`
 	ToolName string          `json:"tool_name,omitempty"`
 	Status   string          `json:"status,omitempty"`

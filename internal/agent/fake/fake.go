@@ -1,6 +1,6 @@
 // Package fake is a scripted agent used for UI development and tests. Every
 // Send replays the same little scenario: some thinking, a tool call that
-// needs approval, streamed prose, a result.
+// needs approval (except in the yolo mode), streamed prose, a result.
 package fake
 
 import (
@@ -164,16 +164,19 @@ func (s *session) run(turnID, prompt string) {
 	t2 := turnID + "-t2"
 	in2, _ := json.Marshal(map[string]any{"command": "go test ./...", "description": "Run the test suite"})
 	s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: t2, Name: "Bash", Input: in2, Summary: "go test ./..."}})
-	s.emit(agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{ID: turnID + "-a1", ToolID: t2, ToolName: "Bash", Description: "Run the test suite", Input: in2}})
-	var d agent.Decision
-	select {
-	case d = <-s.decided:
-	case <-s.stop:
-		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t2, Status: "declined", Output: "interrupted"}})
-		finish("interrupted")
-		return
-	case <-s.ctx.Done():
-		return
+	// yolo is the fake's never-ask mode, as bypassPermissions is Claude's.
+	d := agent.Allow
+	if s.cfg.PermissionMode != "yolo" {
+		s.emit(agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{ID: turnID + "-a1", ToolID: t2, ToolName: "Bash", Description: "Run the test suite", Input: in2}})
+		select {
+		case d = <-s.decided:
+		case <-s.stop:
+			s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t2, Status: "declined", Output: "interrupted"}})
+			finish("interrupted")
+			return
+		case <-s.ctx.Done():
+			return
+		}
 	}
 	if d == agent.Deny {
 		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t2, Status: "declined", Output: "User denied this action", IsError: true}})

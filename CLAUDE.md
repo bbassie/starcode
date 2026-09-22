@@ -42,7 +42,14 @@ instance. So:
 make build            # templ generate + static binary
 go test -short ./...  # skips the integration tests that call claude and codex
 go vet ./...
+go test -tags e2e ./e2e/...  # the pages in headless Chromium, fake agent only
 ```
+
+The e2e tests (Rod, no Node) build the server in-process on a temp data
+dir, so they need no scratch instance and cannot reach a paid agent. Run
+them after changing a template, a script in `static/` or the stream; a
+page-level bug (a morph, a signal, the phone layout) shows up there and
+nowhere else.
 
 Templates compile with `templ generate` (part of `make build`). The
 generated `*_templ.go` files are committed; regenerate after every `.templ`

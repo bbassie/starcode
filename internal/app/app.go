@@ -302,7 +302,7 @@ func (a *App) ResumeCutOff(ctx context.Context) {
 		a.promptMu.Unlock()
 		if err != nil {
 			a.Log.Warn("resume after restart", "thread", id, "err", err)
-			a.note(ctx, id, "Could not resume the turn: "+err.Error())
+			a.warn(ctx, id, "Could not resume the turn: "+err.Error())
 		}
 	}
 }
@@ -546,8 +546,15 @@ func (a *App) CreateThreadIn(ctx context.Context, from, agentName, model string)
 	return a.CreateThread(ctx, src.ProjectID, agentName, model, ThreadStart{Mode: "reuse", ReuseFrom: from})
 }
 
-// note puts a line in the transcript that is not from the agent.
+// note puts a line in the transcript that is not from the agent, for the
+// record: it does not count as activity (domain.ItemStarted Quiet).
 func (a *App) note(ctx context.Context, id, text string) {
+	a.Store.Append(ctx, id, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Body: text, Quiet: true})
+}
+
+// warn is a note that wants the reader: something failed that they may
+// have to act on, so the thread counts as active and goes unread.
+func (a *App) warn(ctx context.Context, id, text string) {
 	a.Store.Append(ctx, id, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Body: text})
 }
 
@@ -587,7 +594,11 @@ func (a *App) addWorktree(ctx context.Context, id string, p store.Project, base 
 			if out != "" {
 				msg += "\n" + out
 			}
-			a.note(context.Background(), id, msg)
+			if err != nil {
+				a.warn(context.Background(), id, msg)
+			} else {
+				a.note(context.Background(), id, msg)
+			}
 		}
 		a.note(ctx, id, "Running the setup script from t3.json in "+dir+": "+sc.Command)
 		if sc.Async {
@@ -906,6 +917,14 @@ func (a *App) SendPrompt(ctx context.Context, threadID, text string) error {
 	if text == "" {
 		return errors.New("prompt is empty")
 	}
+	// The worktree checkpoint is taken before promptMu, which every
+	// thread's sends wait on; git on a big tree should not hold them up.
+	// A thread that turns out busy under the lock queues the prompt and
+	// the checkpoint goes unused.
+	var extra map[string]any
+	if pre, err := a.Store.Thread(ctx, threadID); err == nil && pre.Status != domain.StatusRunning && pre.Status != domain.StatusAwaitingApproval {
+		extra = map[string]any{"checkpoint": a.checkpoint(ctx, pre)}
+	}
 	a.promptMu.Lock()
 	defer a.promptMu.Unlock()
 	t, err := a.Store.Thread(ctx, threadID)
@@ -944,9 +963,9 @@ func (a *App) SendPrompt(ctx context.Context, threadID, text string) error {
 		if _, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: newID(), Body: text}); err != nil {
 			return err
 		}
-		return a.startPromptLocked(ctx, l, t, queued[0].ID, queued[0].Body)
+		return a.startPromptMeta(ctx, l, t, queued[0].ID, queued[0].Body, extra)
 	}
-	return a.startPromptLocked(ctx, l, t, "", text)
+	return a.startPromptMeta(ctx, l, t, "", text, extra)
 }
 
 // CancelQueuedPrompt removes a follow-up which has not started yet.
@@ -985,6 +1004,9 @@ type PromptMeta struct {
 	Anchor     string `json:"anchor,omitempty"`
 	Checkpoint string `json:"checkpoint,omitempty"`
 	Auto       string `json:"auto,omitempty"`
+	// Fresh is a prompt that began a conversation (no session yet): a
+	// rewind to it starts a fresh one again.
+	Fresh bool `json:"fresh,omitempty"`
 }
 
 // promptMeta reads a prompt item's PromptMeta.
@@ -992,6 +1014,29 @@ func promptMeta(it store.Item) PromptMeta {
 	var m PromptMeta
 	json.Unmarshal(it.Meta, &m)
 	return m
+}
+
+// checkpoint records the files of a worktree of t's own, so a rewind to
+// the prompt about to go out can put them back, and returns the commit or
+// "" for none. A shared worktree is left out: restoring it would undo the
+// other thread's work too. The callers may hold promptMu, which every
+// thread's prompts wait on, so a checkpoint that takes long is given up
+// and the prompt goes out without one.
+func (a *App) checkpoint(ctx context.Context, t store.Thread) string {
+	if t.Worktree == "" || a.sharedWorktree(ctx, t) {
+		return ""
+	}
+	if _, err := os.Stat(t.Worktree); err != nil {
+		return ""
+	}
+	cctx, cancel := context.WithTimeout(ctx, checkpointTimeout)
+	defer cancel()
+	sha, err := gitx.Checkpoint(cctx, t.Worktree, t.ID)
+	if err != nil {
+		a.Log.Info("no checkpoint", "thread", t.ID, "err", err)
+		return ""
+	}
+	return sha
 }
 
 // startPromptMeta is startPromptLocked with extra fields for the prompt
@@ -1007,23 +1052,16 @@ func (a *App) startPromptMeta(ctx context.Context, l *live, t store.Thread, queu
 		if t.Anchor != "" {
 			meta["anchor"] = t.Anchor
 		}
+	} else {
+		meta["fresh"] = true
 	}
-	// A worktree of its own gets its files recorded, so a rewind to this
-	// prompt can put them back. A shared one is left out: restoring it
-	// would undo the other thread's work too. promptMu is held here, and
-	// every thread's prompts wait on it, so a checkpoint that takes long
-	// is given up: the prompt goes out without one.
-	if t.Worktree != "" && !a.sharedWorktree(ctx, t) {
-		if _, err := os.Stat(t.Worktree); err == nil {
-			cctx, cancel := context.WithTimeout(ctx, checkpointTimeout)
-			sha, err := gitx.Checkpoint(cctx, t.Worktree, t.ID)
-			cancel()
-			if err == nil {
-				meta["checkpoint"] = sha
-			} else {
-				a.Log.Info("no checkpoint", "thread", t.ID, "err", err)
-			}
-		}
+	// The worktree's files, unless the caller recorded them already
+	// ("checkpoint" in extra, "" when there was nothing to record).
+	if _, done := extra["checkpoint"]; !done {
+		meta["checkpoint"] = a.checkpoint(ctx, t)
+	}
+	if meta["checkpoint"] == "" {
+		delete(meta, "checkpoint")
 	}
 	rawMeta, _ := json.Marshal(meta)
 	if len(meta) == 0 {

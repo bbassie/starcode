@@ -83,11 +83,16 @@ func TestSessionExit(t *testing.T) {
 		select {
 		case _, ok := <-ch:
 			if !ok {
-				if !s.Exited() {
-					t.Fatal("channel closed but session not marked exited")
-				}
-				if m.Live("t2") != nil {
-					t.Fatal("dead session still reported live")
+				// The channel also closes when this subscriber falls behind
+				// a burst of output, and the manager forgets the session
+				// only after the shell has been reaped, so both are waited
+				// for rather than read at once.
+				for !s.Exited() || m.Live("t2") != nil {
+					select {
+					case <-deadline:
+						t.Fatalf("channel closed; exited %v, still live %v", s.Exited(), m.Live("t2") != nil)
+					case <-time.After(10 * time.Millisecond):
+					}
 				}
 				// The next Session call starts a fresh shell.
 				fresh, err := m.Session("t2", t.TempDir(), 80, 24)

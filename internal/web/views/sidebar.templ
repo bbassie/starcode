@@ -446,6 +446,9 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 				<button type="button" class="row-act" title="Pin to the top" aria-label="Pin" data-on:click={ "@post('/api/threads/" + t.ID + "/pin')" }>@Icon("pin", "ui-icon")</button>
 			}
 			if !active(t) {
+				// One click, one time: the header menu has the other choices,
+				// and the toast has the undo.
+				<button type="button" class="row-act" title="Snooze until tomorrow 9:00 (the thread's menu has other times)" aria-label="Snooze until tomorrow" data-on:click={ "@post('/api/threads/" + t.ID + "/snooze?until=' + encodeURIComponent(snoozeAt('tomorrow')))" }>@Icon("alarm-clock", "ui-icon")</button>
 				<button type="button" class="row-act" title="Settle: move to the Settled section" data-on:click={ "@post('/api/threads/" + t.ID + "/archive')" }>@Icon("circle-check", "ui-icon") <span>Settle</span></button>
 			}
 		</span>

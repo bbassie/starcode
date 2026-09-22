@@ -29,7 +29,7 @@ func CanRewind(t store.Thread, it store.Item, first bool, shared bool) RewindInf
 		return RewindInfo{}
 	}
 	m := promptMeta(it)
-	ok := first || (m.Anchor != "" && (m.Agent == "" || m.Agent == t.Agent))
+	ok := first || m.Fresh || (m.Anchor != "" && (m.Agent == "" || m.Agent == t.Agent))
 	return RewindInfo{OK: ok, Files: ok && m.Checkpoint != "" && t.Worktree != "" && !shared}
 }
 
@@ -92,7 +92,7 @@ func (a *App) Rewind(ctx context.Context, threadID, itemID string, files bool) (
 		}
 	}
 	ev := domain.ThreadRewound{ItemID: itemID}
-	if !first {
+	if !first && !m.Fresh {
 		ev.SessionID, ev.ForkAt = m.Session, m.Anchor
 	}
 	note := "Rewound to before this prompt; the files were left as they are."
