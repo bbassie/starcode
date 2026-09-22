@@ -1353,10 +1353,16 @@ func parseAssistant(out *outLine, st *state) []agent.Event {
 	}
 	// Every assistant message states what its request cost, which is the
 	// only place the size of the conversation shows up while a turn runs.
-	if msg.Model != "" {
-		st.model = msg.Model
+	// A subagent's messages say it too, for a context of its own and
+	// often on a smaller model; counted, they dropped the gauge to the
+	// subagent's size and measured it against that model's window.
+	var events []agent.Event
+	if out.ParentToolUseID == "" {
+		if msg.Model != "" {
+			st.model = msg.Model
+		}
+		events = st.contextEvent(msg.Usage.context())
 	}
-	events := st.contextEvent(msg.Usage.context())
 	for _, blk := range blocks {
 		switch blk.Type {
 		case "text":

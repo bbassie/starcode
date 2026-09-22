@@ -594,10 +594,12 @@ func stashClick(key string) string {
 
 // nudgeTokens and nudgeIdle are when the composer suggests compacting: a
 // conversation this big, left this long, has lost the prompt cache, and
-// the next prompt pays to read all of it again.
+// the next prompt pays to read all of it again. They are Claude Code's
+// own: its terminal offers a summary on resuming a conversation of 100K
+// tokens or more that sat for 70 minutes, and T3 Code uses the same.
 const (
-	nudgeTokens = 120_000
-	nudgeIdle   = time.Hour
+	nudgeTokens = 100_000
+	nudgeIdle   = 70 * time.Minute
 )
 
 // CompactNudge suggests compacting a big conversation that has sat idle,
@@ -620,7 +622,7 @@ templ CompactNudge(d ThreadData) {
 func idleWords(d time.Duration) string {
 	switch {
 	case d < 2*time.Hour:
-		return "an hour"
+		return "over an hour"
 	case d < 48*time.Hour:
 		return fmt.Sprintf("%d hours", int(d.Hours()))
 	}

@@ -1169,3 +1169,23 @@ func TestIntegrationRewindFork(t *testing.T) {
 		t.Errorf("after the fork the model said %q; want APPLE and not BANANA", text)
 	}
 }
+
+// TestContextIgnoresSubagents checks the window gauge follows the main
+// conversation only: a subagent's request has its own, smaller context
+// and may run on another model, and neither says how full the main
+// conversation is.
+func TestContextIgnoresSubagents(t *testing.T) {
+	st := newState(nil)
+	main := `{"type":"assistant","uuid":"m1","message":{"id":"a1","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"cache_read_input_tokens":150000,"output_tokens":90},"content":[{"type":"text","text":"working"}]}}`
+	sub := `{"type":"assistant","uuid":"s1","parent_tool_use_id":"toolu_1","message":{"id":"a2","role":"assistant","model":"claude-haiku-4-5","usage":{"input_tokens":5,"cache_read_input_tokens":20000,"output_tokens":50},"content":[{"type":"text","text":"exploring"}]}}`
+	evs := feed(st, main)
+	if got := one(t, evs, agent.KindContextUsage).ContextUsage.Tokens; got != 150100 {
+		t.Fatalf("main context = %d", got)
+	}
+	if got := only(t, feed(st, sub), agent.KindContextUsage); len(got) != 0 {
+		t.Fatalf("a subagent's request moved the gauge to %d", got[0].ContextUsage.Tokens)
+	}
+	if st.model != "claude-opus-5" {
+		t.Fatalf("a subagent's model became the conversation's: %q", st.model)
+	}
+}
