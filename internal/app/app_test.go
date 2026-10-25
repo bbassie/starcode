@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -85,7 +86,7 @@ func TestSendPromptQueuesAndDispatchesInOrder(t *testing.T) {
 	sess := newQueueSession()
 	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer a.Shutdown()
-	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestCompactContextRunsAsATurn(t *testing.T) {
 	sess := newQueueSession()
 	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer a.Shutdown()
-	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +226,7 @@ func TestSendPromptUnarchives(t *testing.T) {
 	sess := newQueueSession()
 	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer a.Shutdown()
-	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func TestSessionRuleSurvivesRestartAndRevoke(t *testing.T) {
 	}
 	sess := newQueueSession()
 	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +417,7 @@ func newRestartApp(t *testing.T, ag *restartAgent) (*App, *store.Store, string) 
 	}
 	a := New(st, bus.New(64), map[string]agent.Agent{"restart-test": ag}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(a.Shutdown)
-	threadID, err := a.CreateThread(ctx, "p1", "restart-test", "", ThreadStart{})
+	threadID, err := a.CreateThread(ctx, "p1", "restart-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -588,7 +589,7 @@ func TestReapIdleClosesSessionAndNextPromptResumes(t *testing.T) {
 	ag := &freshAgent{}
 	a := New(st, bus.New(64), map[string]agent.Agent{"fresh-test": ag}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer a.Shutdown()
-	threadID, err := a.CreateThread(ctx, "p1", "fresh-test", "", ThreadStart{})
+	threadID, err := a.CreateThread(ctx, "p1", "fresh-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,6 +654,109 @@ func TestReapIdleClosesSessionAndNextPromptResumes(t *testing.T) {
 	}
 }
 
+// A background subagent goes on after the main turn ends. Its approval
+// must stay open with the thread waiting on it, and the idle sweep must
+// not close the process under it; both used to happen, and the subagent
+// hung until the sweep killed it.
+func TestBackgroundSubagentOutlivesTurn(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "bg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	sess := newQueueSession()
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendPrompt(ctx, threadID, "explore"); err != nil {
+		t.Fatal(err)
+	}
+	receivePrompt(t, sess.sent)
+	sess.events <- agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: "task", Name: "Agent"}}
+	sess.events <- agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: "task"}}
+	sess.events <- agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: "sub-bash", Name: "Bash", Parent: "task"}}
+	sess.events <- agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{ID: "ap-sub", ToolID: "sub-bash", ToolName: "Bash", Input: json.RawMessage(`{"command":"wc -l"}`)}}
+	sess.events <- agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{Status: "done"}}
+	waitFor(t, func() bool {
+		th, _ := st.Thread(ctx, threadID)
+		items, _ := st.Items(ctx, threadID)
+		return th.Status == domain.StatusAwaitingApproval && len(items) > 0 && items[len(items)-1].Kind == domain.KindResult
+	})
+	if aps, _ := st.PendingApprovals(ctx, threadID); len(aps) != 1 {
+		t.Fatalf("pending approvals after the turn = %d, want 1", len(aps))
+	}
+
+	// Answering it lets the subagent run; no turn is live, so the thread
+	// is idle, not running.
+	if err := a.ResolveApproval(ctx, threadID, "ap-sub", domain.DecisionAllow); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, st, threadID, domain.StatusIdle)
+
+	// While its tool runs the sweep leaves the session alone.
+	a.reapIdle(time.Now().Add(a.idleTimeout))
+	a.mu.Lock()
+	kept := a.sessions[threadID] != nil
+	a.mu.Unlock()
+	if !kept {
+		t.Fatal("session with a busy subagent was reaped")
+	}
+	sess.events <- agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: "sub-bash"}}
+	waitFor(t, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		l := a.sessions[threadID]
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return len(l.subTools) == 0
+	})
+	a.reapIdle(time.Now().Add(a.idleTimeout))
+	a.mu.Lock()
+	kept = a.sessions[threadID] != nil
+	a.mu.Unlock()
+	if kept {
+		t.Fatal("idle session not reaped once the subagent finished")
+	}
+}
+
+// A main-thread approval still ends with its turn.
+func TestTurnEndDeniesMainApproval(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "main.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	sess := newQueueSession()
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendPrompt(ctx, threadID, "go"); err != nil {
+		t.Fatal(err)
+	}
+	receivePrompt(t, sess.sent)
+	sess.events <- agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: "bash", Name: "Bash"}}
+	sess.events <- agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{ID: "ap", ToolID: "bash", ToolName: "Bash", Input: json.RawMessage(`{"command":"ls"}`)}}
+	sess.events <- agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{Status: "done"}}
+	waitStatus(t, st, threadID, domain.StatusIdle)
+	if aps, _ := st.PendingApprovals(ctx, threadID); len(aps) != 0 {
+		t.Fatalf("pending approvals = %d, want 0", len(aps))
+	}
+}
+
 func TestSettleIdleArchivesOldThreads(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "settle.db"))
@@ -666,7 +770,7 @@ func TestSettleIdleArchivesOldThreads(t *testing.T) {
 	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: newQueueSession()}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer a.Shutdown()
 	mk := func() string {
-		id, err := a.CreateThread(ctx, "p1", "queue-test", "", ThreadStart{})
+		id, err := a.CreateThread(ctx, "p1", "queue-test", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -715,5 +819,61 @@ func TestSettleIdleArchivesOldThreads(t *testing.T) {
 	}
 	if archived(idle) {
 		t.Fatal("still archived after a prompt")
+	}
+}
+
+// Queued prompts can be edited and moved, a steered prompt goes first,
+// and the queue drains in the new order.
+func TestQueueEditMoveSteer(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "queue.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"})
+	sess := newQueueSession()
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	id, _ := a.CreateThread(ctx, "p1", "queue-test", "")
+	a.SendPrompt(ctx, id, "running")
+	receivePrompt(t, sess.sent)
+	for _, p := range []string{"a", "b", "c"} {
+		a.SendPrompt(ctx, id, p)
+	}
+	order := func() string {
+		q, _ := st.QueuedPrompts(ctx, id)
+		var s []string
+		for _, x := range q {
+			s = append(s, x.Body)
+		}
+		return strings.Join(s, ",")
+	}
+	q, _ := st.QueuedPrompts(ctx, id)
+	if err := a.EditQueuedPrompt(ctx, id, q[1].ID, "B"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.MoveQueuedPrompt(ctx, id, q[2].ID, -2); err != nil {
+		t.Fatal(err)
+	}
+	if got := order(); got != "c,a,B" {
+		t.Fatalf("order %s", got)
+	}
+	a.SendPrompt(ctx, id, "d")
+	if err := a.Steer(ctx, id, "now!"); err != nil {
+		t.Fatal(err)
+	}
+	if got := order(); got != "now!,c,a,B,d" {
+		t.Fatalf("order after steer %s", got)
+	}
+	if n, err := st.Replay(ctx); err != nil || n == 0 {
+		t.Fatal(err)
+	}
+	if got := order(); got != "now!,c,a,B,d" {
+		t.Fatalf("order after replay %s", got)
+	}
+	sess.events <- agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{TurnID: "t", Status: "interrupted"}}
+	if got := receivePrompt(t, sess.sent); got != "now!" {
+		t.Fatalf("next sent %q", got)
 	}
 }

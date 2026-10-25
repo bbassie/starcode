@@ -255,6 +255,9 @@ type Hotkey struct {
 	// a match and keeps its usual meaning there (Ctrl+Z in a text box,
 	// Ctrl+S in the file editor).
 	Skip string
+	// When is a selector: the key only counts while an element matching
+	// it is on screen, and keeps the browser's meaning otherwise.
+	When string
 }
 
 // keyStore is where combos come from; nil means the defaults. main sets
@@ -288,10 +291,9 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 			Hotkey{Combo: Key("thread-new"), Label: "New thread in " + t.Project.Name, Action: "@post('/api/projects/" + t.Project.ID + "/threads')"},
 			Hotkey{Combo: Key("terminal"), Label: "Toggle terminal", Action: "$term = !$term", Term: true},
 			Hotkey{Combo: Key("changes"), Label: "Toggle changes panel", Action: "$git = !$git", Term: true},
+			Hotkey{Combo: Key("find-changes"), Label: "Find in changes", Action: "const f = document.getElementById('git-find-in'); f.focus(); f.select()", When: "#gitpanel.open #git-find-in"},
 			Hotkey{Combo: Key("prompt"), Label: "Focus the prompt", Action: "promptFocus()", Term: true},
-			// The header's button, which the stream redraws when the
-			// thread gets or loses a worktree; the page's copy of these
-			// keys is not redrawn.
+			// The header's button, which holds the thread's folder.
 			Hotkey{Combo: Key("vscode"), Label: "Open in VS Code", Action: "document.querySelector('#mainhead .vscode-open')?.click()"},
 			Hotkey{Combo: Key("approve"), Label: "Allow the waiting approval", Action: approveFirst(domain.DecisionAllow)},
 			Hotkey{Combo: Key("approve-session"), Label: "Allow it for the session", Action: approveFirst(domain.DecisionAllowSession)},
@@ -324,6 +326,9 @@ templ HotkeyButtons(keys []Hotkey) {
 				data-term?={ k.Term }
 				if k.Skip != "" {
 					data-skip={ k.Skip }
+				}
+				if k.When != "" {
+					data-when={ k.When }
 				}
 				data-on:click={ k.Action }
 			>{ k.Label }</button>

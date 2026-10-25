@@ -60,9 +60,12 @@ var runUser = sync.OnceValue(func() string {
 
 // streamOpen is the expression that opens the page's stream. The request
 // resolves when the stream ends, which is when streamEnded (layout script)
-// schedules the next one.
+// schedules the next one. The page owns the request's AbortController
+// (streamStart) and hands it to streamEnded: a stream cut short because a
+// newer one replaced it must not schedule another, or every reopen starts
+// a loop that cuts each new stream a second after it connects.
 func streamOpen(p Page) string {
-	return fmt.Sprintf("@query('%s', {openWhenHidden: true, retryMaxCount: 1000}).then(() => streamEnded(), () => streamEnded())", p.streamURL())
+	return fmt.Sprintf("(c => @query('%s', {openWhenHidden: true, retryMaxCount: 1000, requestCancellation: c}).then(() => streamEnded(c), () => streamEnded(c)))(streamStart())", p.streamURL())
 }
 
 // streamURL carries the asset version the page was served with, so a
@@ -80,6 +83,8 @@ func (p Page) streamURL() string {
 		url = "/events?view=settings"
 	case "appearance":
 		url = "/events?view=appearance"
+	case "schedules":
+		url = "/events?view=schedules"
 	case "prs":
 		url = "/events?view=prs"
 	case "keys":
@@ -126,7 +131,18 @@ templ Layout(title string, p Page, parts Parts) {
 			<link rel="manifest" href={ asset("/static/manifest.webmanifest") }/>
 			@PageTitle(title)
 			<link rel="icon" href={ asset("/static/favicon.svg") } type="image/svg+xml"/>
+			// iOS takes the home screen icon from this PNG only; without it
+			// the icon is a shrunken screenshot of the page.
+			<link rel="apple-touch-icon" href={ asset("/static/apple-touch-icon.png") }/>
 			<link rel="stylesheet" href={ asset("/static/app.css") }/>
+			// pageID names this page load for presence: the server pushes
+			// nothing about the thread a page in view shows. presence
+			// reports a change of visibility; the stream carries the state
+			// it opens with.
+			<script>
+				window.pageID = () => window._pid ||= (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now());
+				window.presence = (pid, visible) => fetch('/api/presence?pid=' + encodeURIComponent(pid) + '&visible=' + (visible ? 1 : 0) + '&tz=' + encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || ''), { method: 'POST', keepalive: true }).catch(() => {});
+			</script>
 			<script type="module" src={ asset("/static/datastar.js") }></script>
 			// Copying out of a rendered reply or PR body yields markdown.
 			<script defer src={ asset("/static/mdcopy.js") }></script>
@@ -139,16 +155,18 @@ templ Layout(title string, p Page, parts Parts) {
 				<script defer src={ asset("/static/quote.js") }></script>
 				<script defer src={ asset("/static/lightbox.js") }></script>
 				<script defer src={ asset("/static/highlight.js") }></script>
+				<script defer src={ asset("/static/diagrams.js") } data-mermaid={ asset("/static/mermaid.js") }></script>
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', pr: 0, prsel: 0, prproject: '', prq: '', prnodraft: false, prmine: false, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, tid: %q, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft), p.ThreadID) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', gfind: '', pr: 0, prsel: 0, prproject: '', prq: '', prnodraft: false, prmine: false, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, qedit: '', qbody: '', tid: %q, pid: pageID(), vis: !document.hidden, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft), p.ThreadID) }
 			data-attr:data-theme="$theme"
 			data-class:nav-collapsed="$navhide"
 			data-class:panel-wide="$wide"
 			data-init={ streamOpen(p) }
 			data-on:stream__window={ streamOpen(p) }
 			data-effect="$_hb; streamAlive()"
+			data-on:visibilitychange__window="$vis = !document.hidden; presence($pid, $vis)"
 		>
 			// The icon sprite first, so every <use> below finds its symbol
 			// as the page paints.
@@ -189,6 +207,8 @@ templ Layout(title string, p Page, parts Parts) {
 				}
 			</div>
 			<div id="toast"></div>
+			// Shown while the page stream is down; see the keepalive script.
+			<div class="stream-pill" role="status">@Icon("loader-circle", "ui-icon spin-icon") reconnecting…</div>
 			// The sidebar rows' hover card (see views.rowTip), one for the page.
 			<div id="hovertip" class="hovertip" hidden></div>
 			<datalist id="project-paths"></datalist>
@@ -201,13 +221,42 @@ templ Layout(title string, p Page, parts Parts) {
 			// is Chrome's), so a page sized with dvh keeps its composer under
 			// the keys. The body takes --vvh instead, and the page is held at
 			// the top, since iOS also scrolls it to bring the field into view.
+			// A swipe can move the page too (one that starts on the composer,
+			// say), and putting it back on every scroll event while the
+			// finger still moves made it shake. So nothing moves while a
+			// finger is down (touchDown, which the transcript's follow also
+			// reads); after the release the page slides back once its
+			// momentum has run out. A scroll iOS makes on its own, for the
+			// keyboard, is undone at once as before.
 			<script>
 				(() => {
+					let down = false;
+					let released = 0;
+					window.touchDown = () => down;
+					document.addEventListener('touchstart', () => { down = true; }, { passive: true, capture: true });
 					const vv = window.visualViewport;
 					if (!vv) return;
+					const moved = () => vv.offsetTop > 0 || window.scrollY > 0;
+					let timer = 0;
+					const settle = () => {
+						clearTimeout(timer);
+						timer = setTimeout(() => {
+							if (!down && moved()) window.scrollTo({ top: 0, behavior: 'smooth' });
+						}, 150);
+					};
+					const up = () => {
+						down = false;
+						released = Date.now();
+						if (moved()) settle();
+					};
+					document.addEventListener('touchend', up, { passive: true, capture: true });
+					document.addEventListener('touchcancel', up, { passive: true, capture: true });
 					const apply = () => {
 						document.documentElement.style.setProperty('--vvh', Math.round(vv.height) + 'px');
-						if (vv.offsetTop > 0) window.scrollTo(0, 0);
+						if (!moved() || down) return;
+						// Still gliding from a swipe: wait for it to stop.
+						if (Date.now() - released < 1000) settle();
+						else window.scrollTo(0, 0);
 					};
 					vv.addEventListener('resize', apply);
 					vv.addEventListener('scroll', apply);
@@ -234,6 +283,24 @@ templ Layout(title string, p Page, parts Parts) {
 					return (f) => fns.push(f);
 				})();
 			</script>
+			// Loading feedback. Datastar announces each request it starts and
+			// finishes with the element that sent it. A button (or a form's
+			// submit buttons) gets .pending until its answer is in; app.css
+			// draws it. The page stream is sent from <body>, so it never
+			// matches.
+			<script>
+				document.addEventListener('datastar-fetch', (e) => {
+					const { type, el } = e.detail || {};
+					if (!(el instanceof Element) || (type !== 'started' && type !== 'finished')) return;
+					const btns = el.matches('form')
+						? el.querySelectorAll('button[type=submit], button:not([type])')
+						: [el.closest('button, .btn')].filter(Boolean);
+					for (const b of btns) {
+						b.classList.toggle('pending', type === 'started');
+						b.toggleAttribute('aria-busy', type === 'started');
+					}
+				});
+			</script>
 			// Stream keepalive. Datastar retries a stream that fails, but one
 			// that ends cleanly (starcode restarted, a proxy timed out, a
 			// phone came back from the background) just stops, and the page
@@ -241,27 +308,76 @@ templ Layout(title string, p Page, parts Parts) {
 			// the watchdog reopens it when heartbeats (_hb, every 20s) stop
 			// or the tab becomes visible after a long gap. Reopening fires
 			// the "stream" event handled on <body>.
+			//
+			// While the stream is down the page shows a "reconnecting" pill
+			// (.stream-down on <html>, drawn in app.css). It goes up 1.5s
+			// after the stream is lost, so a phone coming back from the
+			// background or a quick reopen does not flash it, and comes down
+			// with the first heartbeat, which the server sends on connect.
 			<script>
 				(() => {
 					let last = Date.now();
 					let wait = 1000;
 					let timer;
+					let downTimer = 0;
+					const down = () => {
+						if (downTimer) return;
+						downTimer = setTimeout(() => document.documentElement.classList.add('stream-down'), 1500);
+					};
 					const reopen = () => {
+						down();
 						clearTimeout(timer);
 						timer = setTimeout(() => window.dispatchEvent(new Event('stream')), wait);
 					};
 					window.streamAlive = () => {
 						last = Date.now();
 						wait = 1000;
+						clearTimeout(downTimer);
+						downTimer = 0;
+						document.documentElement.classList.remove('stream-down');
 					};
-					window.streamEnded = () => {
+					// Datastar retries a stream that fails on its own, without
+					// going through streamEnded; it announces each retry.
+					document.addEventListener('datastar-fetch', (e) => {
+						const { type, el } = e.detail || {};
+						if (el === document.body && (type === 'retrying' || type === 'retries-failed')) down();
+					});
+					window.addEventListener('offline', down);
+					// For half a minute after a restart the stream is retried
+					// every 300ms instead of backing off: the new process
+					// listens within a second, and the page should notice.
+					let restartAt = 0;
+					// The stream's AbortController. Opening a new stream aborts
+					// the old one, whose end streamEnded then ignores.
+					let current = null;
+					window.streamStart = () => {
+						current?.abort();
+						current = new AbortController();
+						return current;
+					};
+					window.streamEnded = (c) => {
+						if (c !== current) return;
+						if (Date.now() - restartAt < 30000) wait = 300;
 						reopen();
 						wait = Math.min(wait * 2, 15000);
 					};
+					window.restartStarted = (btn) => {
+						restartAt = Date.now();
+						if (!btn) return;
+						btn.disabled = true;
+						btn.textContent = 'restarting…';
+						btn.closest('.update-row')?.classList.add('restarting');
+					};
 					const stale = (ms) => Date.now() - last > ms;
 					setInterval(() => { if (stale(45000)) { last = Date.now(); reopen(); } }, 5000);
+					// A phone drops the connection soon after the app goes to
+					// the background, without the page hearing of it. Coming
+					// back after more than a few seconds reopens it at once,
+					// so the page is current by the time anyone reads it.
+					let hiddenAt = 0;
 					document.addEventListener('visibilitychange', () => {
-						if (document.visibilityState === 'visible' && stale(25000)) { last = Date.now(); wait = 1000; reopen(); }
+						if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+						if ((hiddenAt && Date.now() - hiddenAt > 3000) || stale(25000)) { last = Date.now(); wait = 0; reopen(); wait = 1000; }
 					});
 					window.addEventListener('online', () => { wait = 1000; reopen(); });
 				})();
@@ -319,7 +435,9 @@ templ Layout(title string, p Page, parts Parts) {
 							anchor = null;
 						}
 						if (wantRow && document.getElementById(wantRow)) { jumpToHash(); return; }
-						if (stick) m.scrollTop = m.scrollHeight;
+						// A finger on the screen may be starting to scroll up;
+						// pulling the transcript down under it would fight it.
+						if (stick && !touchDown()) m.scrollTop = m.scrollHeight;
 						else document.body.classList.toggle('scrolled-up', !near(m));
 					});
 				})();
@@ -336,6 +454,27 @@ templ Layout(title string, p Page, parts Parts) {
 			<script>
 				window.sendKey = (evt) => evt.key === 'Enter' && !evt.isComposing
 					&& (evt.ctrlKey || evt.metaKey || (!evt.shiftKey && !matchMedia('(pointer: coarse)').matches));
+				// sendQuery asks the send to compact first while the compact
+				// nudge is on screen with its chip on (views.CompactNudge).
+				// While a turn runs, a send queues or steers (stops the turn
+				// and goes first), as this browser chose under Settings > This
+				// device; Ctrl/Cmd+Enter does the other one.
+				window.sendQuery = (evt) => {
+					if (document.querySelector('form.composer.busy')) {
+						const steer = (localStorage.getItem('busy-send') === 'steer') !== !!(evt && (evt.ctrlKey || evt.metaKey));
+						if (steer) return '?steer=1';
+					}
+					const n = document.querySelector('.compact-nudge');
+					return n && n.offsetParent && !n.classList.contains('off') ? '?compact=1' : '';
+				};
+				// compactToggle flips the nudge's chip; off is kept in this
+				// browser for that size of conversation.
+				window.compactToggle = (btn) => {
+					const n = btn.closest('.compact-nudge');
+					const off = n.classList.toggle('off');
+					btn.setAttribute('aria-pressed', off ? 'false' : 'true');
+					off ? localStorage.setItem(n.dataset.key, '1') : localStorage.removeItem(n.dataset.key);
+				};
 				// copyText puts text on the clipboard and flashes the button
 				// that asked. The clipboard API needs a secure context; the
 				// selection-based fallback covers plain http on a LAN.
@@ -508,6 +647,10 @@ templ Layout(title string, p Page, parts Parts) {
 						const b = document.querySelector(`#hotkeys [data-hotkey="${c}"]`);
 						if (!b || (inTerm && !b.hasAttribute('data-term'))) return false;
 						if (b.dataset.skip && target && target.closest(b.dataset.skip)) return false;
+						if (b.dataset.when) {
+							const w = document.querySelector(b.dataset.when);
+							if (!w || !w.offsetParent) return false;
+						}
 						b.click();
 						return true;
 					};
@@ -684,7 +827,7 @@ templ Layout(title string, p Page, parts Parts) {
 					};
 				})();
 			</script>
-			// Notifications. Once allowed (Settings > Appearance) a thread
+			// Notifications. Once allowed (Settings > This device) a thread
 			// that ends a turn or asks for an approval while this page is
 			// hidden posts a system notification, which is what a phone in a
 			// pocket needs. The signals are what the server already renders:
@@ -711,9 +854,49 @@ templ Layout(title string, p Page, parts Parts) {
 						const r = await reg();
 						if (!r) return 'no-worker';
 						localStorage.setItem(key, '1');
+						await subscribe();
 						return 'on';
 					};
-					window.notifyDisable = () => { localStorage.removeItem(key); return 'off'; };
+					window.notifyDisable = async () => {
+						localStorage.removeItem(key);
+						localStorage.removeItem(pushKey);
+						const r = 'serviceWorker' in navigator && await navigator.serviceWorker.getRegistration('/');
+						const sub = r && r.pushManager && await r.pushManager.getSubscription();
+						if (sub) {
+							await fetch('/api/push/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub) }).catch(() => {});
+							await sub.unsubscribe().catch(() => {});
+						}
+						return 'off';
+					};
+					// Web Push: the server sends to this device even with
+					// starcode closed. The subscription is made with the
+					// server's key, renewed when the key changed, and sent
+					// again on every load so a server that lost it learns it
+					// back. Without push (no push service, or it failed) the
+					// page's own watcher below covers an open tab.
+					const pushKey = 'notify-push';
+					const b64 = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+					const same = (a, b) => a && b && a.byteLength === b.byteLength && new Uint8Array(a).every((x, i) => x === b[i]);
+					const subscribe = async () => {
+						try {
+							const r = await navigator.serviceWorker.ready;
+							if (!r.pushManager) return;
+							const res = await fetch('/api/push/key');
+							if (!res.ok) return;
+							const key = b64((await res.json()).key);
+							let sub = await r.pushManager.getSubscription();
+							if (sub && !same(sub.options?.applicationServerKey, key)) {
+								await sub.unsubscribe();
+								sub = null;
+							}
+							sub ||= await r.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+							const ok = await fetch('/api/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub) });
+							if (ok.ok) localStorage.setItem(pushKey, '1');
+						} catch (e) {
+							localStorage.removeItem(pushKey);
+						}
+					};
+					if (window.notifyWanted()) subscribe();
 					window.notifyWord = (st) => ({
 						on: 'on for this device (turn off)',
 						off: 'turn on for this device',
@@ -733,7 +916,8 @@ templ Layout(title string, p Page, parts Parts) {
 						return window.notifyWanted() ? 'on' : 'off';
 					};
 					const post = async (title, body, url, tag) => {
-						if (!window.notifyWanted() || !document.hidden) return;
+						// A device with push hears from the server instead.
+						if (!window.notifyWanted() || !document.hidden || localStorage.getItem(pushKey) === '1') return;
 						const r = await navigator.serviceWorker.getRegistration('/');
 						if (!r) return;
 						r.showNotification(title, { body, tag, data: { url }, icon: '/static/icon-maskable.svg' }).catch(() => {});
@@ -1004,7 +1188,8 @@ templ Layout(title string, p Page, parts Parts) {
 				// pickOf finds the picker of a kind for an agent in the form
 				// around el, for the rows in the model sheet that show the
 				// effort and mode chips' labels while those chips are hidden.
-				window.pickOf = (el, kind, agent) => [...el.closest('form').querySelectorAll('.pick-' + kind)].find((p) => p.dataset.agent === agent) || el;
+				// A morph can run it while el is out of its form.
+				window.pickOf = (el, kind, agent) => [...(el.closest('form')?.querySelectorAll('.pick-' + kind) || [])].find((p) => p.dataset.agent === agent) || el;
 				window.pickFocus = (el) => setTimeout(() => {
 					// After a rail switch the open menu is another agent's, so
 					// look for the one that is actually on screen.

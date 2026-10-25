@@ -35,26 +35,8 @@ func TestSetSidebarModeCookies(t *testing.T) {
 	}
 }
 
-func TestRunsFrom(t *testing.T) {
-	s := &Server{}
-	if s.runsFrom("/w/a") {
-		t.Error("no self-update: runsFrom = true")
-	}
-	s.Update = &SelfUpdate{Home: "/home/starcode", Running: "/home/starcode"}
-	if s.runsFrom("/home") {
-		t.Error("running the main binary: runsFrom = true")
-	}
-	s.Update.Running = "/w/a/starcode"
-	if !s.runsFrom("/w/a") || !s.runsFrom("/w/a/") {
-		t.Error("running the build in /w/a: runsFrom = false")
-	}
-	if s.runsFrom("/w/b") || s.runsFrom("") {
-		t.Error("runsFrom = true for another worktree or none")
-	}
-}
-
-// projectFor reads the tid signal; the handler after it must still find
-// its own signals in the same POST body.
+// A handler that peeks at the signals must still find its own in the
+// same POST body.
 func TestPeekSignalsLeavesTheBody(t *testing.T) {
 	body := `{"tid":"abc","_file":"package main\n","prBody":"hello"}`
 	r := httptest.NewRequest(http.MethodPost, "/api/git/p1/file", strings.NewReader(body))
@@ -75,5 +57,26 @@ func TestPeekSignalsLeavesTheBody(t *testing.T) {
 	}
 	if second.File != "package main\n" || second.Body != "hello" {
 		t.Fatalf("second read lost the signals: %+v", second)
+	}
+}
+
+// A draft post that lands after its message was sent must not save the
+// message again; other text, other composers and an empty draft go
+// through.
+func TestSentPromptsDropLateDrafts(t *testing.T) {
+	var p sentPrompts
+	if p.was("t1", "hello") {
+		t.Fatal("nothing sent yet")
+	}
+	p.mark("t1", "hello\n")
+	if !p.was("t1", "hello") {
+		t.Error("the sent text came back as a draft")
+	}
+	if p.was("t1", "hello there") || p.was("t2", "hello") || p.was("t1", "") {
+		t.Error("dropped a draft that was not the sent text")
+	}
+	p.mark("t1", "next")
+	if p.was("t1", "hello") {
+		t.Error("an older message still blocks drafts after the next send")
 	}
 }

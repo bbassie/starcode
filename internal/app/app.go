@@ -12,8 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -42,14 +44,9 @@ type App struct {
 	sessions map[string]*live
 	promptMu sync.Mutex // serializes send-vs-turn-complete queue handoffs
 
-	// WorktreeRoot is where threads' own checkouts go (<data>/worktrees),
-	// one directory per project; empty disables worktrees.
-	WorktreeRoot string
-
-	// KeepWorktree, when set, names checkouts the automatic cleanup must
-	// leave alone whatever their state: the one this process runs its
-	// binary from, say.
-	KeepWorktree func(dir string) bool
+	// AttachDir is where prompt attachments are saved, one directory per
+	// thread; a handoff writes the conversation it hands over there.
+	AttachDir string
 
 	// idleTimeout is how long a session may sit between turns before
 	// reapIdle closes its process; stop ends the sweeper.
@@ -63,6 +60,16 @@ type App struct {
 	// cutOff are the threads Recover found cut off by a restart and left
 	// for ResumeCutOff.
 	cutOff []string
+	// bg counts the work started after a turn ends (recordTurnFiles),
+	// which tests wait for.
+	bg sync.WaitGroup
+
+	// Tools gives a thread's agent the starcode MCP server (main sets it
+	// up; see internal/mcp). Nil, or the agent_tools setting off, leaves
+	// the agents without it.
+	Tools func(threadID string) *agent.MCPServer
+	// kids tracks spawned threads for their parents (see children.go).
+	kids kids
 }
 
 // idleTimeout is how long a thread's agent process stays alive after its
@@ -75,10 +82,6 @@ type App struct {
 // contenders to the threads actually working; the next prompt resumes the
 // session from its id at the cost of one process start.
 const idleTimeout = 30 * time.Minute
-
-// checkpointTimeout bounds the worktree checkpoint taken as a prompt
-// goes out (see startPromptMeta).
-const checkpointTimeout = 20 * time.Second
 
 // idleSweep is how often reapIdle runs.
 const idleSweep = time.Minute
@@ -102,9 +105,8 @@ func New(st *store.Store, b *bus.Bus, agents map[string]agent.Agent, log *slog.L
 	return a
 }
 
-// Start runs the sweeps (idle sessions, snoozes, settling, worktree
-// cleanup) until Shutdown. main calls it once everything the sweeps read
-// is set: WorktreeRoot, KeepWorktree.
+// Start runs the sweeps (idle sessions, snoozes, settling) until
+// Shutdown.
 func (a *App) Start() {
 	go a.reapLoop()
 }
@@ -114,18 +116,22 @@ func (a *App) reapLoop() {
 	defer tick.Stop()
 	settle := time.NewTicker(settleSweep)
 	defer settle.Stop()
+	prs := time.NewTicker(prWatchEvery)
+	defer prs.Stop()
 	a.SettleIdle(context.Background())
-	a.CleanWorktrees(context.Background())
 	for {
 		select {
 		case <-a.stop:
 			return
+		case now := <-prs.C:
+			// gh can take seconds per PR; the other sweeps do not wait.
+			go a.watchPRs(context.Background(), now)
 		case now := <-tick.C:
 			a.reapIdle(now)
 			a.wakeDue(context.Background(), now)
+			a.runSchedules(context.Background(), now)
 		case <-settle.C:
 			a.SettleIdle(context.Background())
-			a.CleanWorktrees(context.Background())
 		}
 	}
 }
@@ -167,8 +173,9 @@ func (a *App) settleIdle(ctx context.Context, now time.Time) {
 // longer before now. promptMu is held from the check until the session
 // is unregistered, so no prompt can start on it in between; the next
 // prompt on that thread starts a fresh session that resumes by id. A
-// thread mid-turn or waiting on an approval has no idle stamp and is
-// left alone.
+// thread mid-turn has no idle stamp, and one waiting on an approval is
+// left alone too. A background subagent with a tool running stretches
+// the wait to four times idleTimeout.
 func (a *App) reapIdle(now time.Time) {
 	a.promptMu.Lock()
 	a.mu.Lock()
@@ -176,8 +183,16 @@ func (a *App) reapIdle(now time.Time) {
 	for _, l := range a.sessions {
 		l.mu.Lock()
 		since := l.idleSince
+		busy := len(l.subTools) > 0
 		l.mu.Unlock()
-		if !since.IsZero() && now.Sub(since) >= a.idleTimeout {
+		// A subagent tool that never reported back must not pin the
+		// process for good, so a busy session gets a longer wait, not
+		// an endless one.
+		timeout := a.idleTimeout
+		if busy {
+			timeout *= 4
+		}
+		if !since.IsZero() && now.Sub(since) >= timeout {
 			idle = append(idle, l)
 		}
 	}
@@ -396,6 +411,9 @@ func (a *App) Shutdown() {
 	for _, l := range ls {
 		l.sess.Close()
 	}
+	// A turn's changed files still being worked out go in before the
+	// store closes.
+	a.bg.Wait()
 	a.agentsMu.RLock()
 	defer a.agentsMu.RUnlock()
 	for name, ag := range a.agents {
@@ -482,68 +500,20 @@ func (a *App) RemoveProject(ctx context.Context, id string) error {
 
 // ---- threads ----
 
-// ThreadStart is how a new thread gets its checkout: the project's
-// default, the project checkout, a new worktree from Base (empty for the
-// repository's default branch), or the worktree of thread ReuseFrom.
-type ThreadStart struct {
-	Mode      string // "" (project default) | "local" | "worktree" | "reuse"
-	Base      string
-	ReuseFrom string
-}
-
-// CreateThread opens a thread on a project. start says where it works;
-// the zero value takes the project's default. A reuse of a thread on
-// another project, or of one without a worktree, is treated as "local".
-func (a *App) CreateThread(ctx context.Context, projectID, agentName, model string, start ThreadStart) (string, error) {
-	p, err := a.Store.Project(ctx, projectID)
-	if err != nil {
+// CreateThread opens a thread on a project. It works in the project's
+// checkout.
+func (a *App) CreateThread(ctx context.Context, projectID, agentName, model string) (string, error) {
+	if _, err := a.Store.Project(ctx, projectID); err != nil {
 		return "", fmt.Errorf("project: %w", err)
 	}
 	if _, ok := a.Agent(agentName); !ok {
 		return "", fmt.Errorf("unknown agent %q", agentName)
 	}
-	var reuse store.Thread
-	if start.Mode == "reuse" {
-		src, err := a.Store.Thread(ctx, start.ReuseFrom)
-		if err != nil {
-			return "", fmt.Errorf("thread to reuse: %w", err)
-		}
-		if src.ProjectID == projectID {
-			reuse = src
-		}
-	}
 	id := newID()
 	if _, err := a.Store.Append(ctx, id, domain.ThreadCreated{ID: id, ProjectID: projectID, Title: "new thread", Agent: agentName, Model: strings.TrimSpace(model)}); err != nil {
 		return "", err
 	}
-	switch {
-	case reuse.Worktree != "":
-		// Same directory and branch, no git command (T3's "new thread in
-		// this worktree"). A worktree two threads share is never removed
-		// with one of them.
-		if _, err := a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: reuse.Worktree, Branch: reuse.WorktreeBranch}); err != nil {
-			return "", err
-		}
-	case start.Mode == "worktree" || (start.Mode == "" && p.Worktrees):
-		if a.WorktreeRoot == "" {
-			break
-		}
-		if err := a.addWorktree(ctx, id, p, start.Base); err != nil {
-			// The thread stands; it works on the main checkout and says why.
-			a.note(ctx, id, "Could not make a worktree, working in "+p.Path+": "+err.Error())
-		}
-	}
 	return id, nil
-}
-
-// CreateThreadIn opens a thread on the worktree another thread uses:
-// CreateThread with Mode "reuse".
-func (a *App) CreateThreadIn(ctx context.Context, from, agentName, model string) (string, error) {
-	src, err := a.Store.Thread(ctx, from)
-	if err != nil {
-		return "", err
-	}
-	return a.CreateThread(ctx, src.ProjectID, agentName, model, ThreadStart{Mode: "reuse", ReuseFrom: from})
 }
 
 // note puts a line in the transcript that is not from the agent, for the
@@ -558,155 +528,10 @@ func (a *App) warn(ctx context.Context, id, text string) {
 	a.Store.Append(ctx, id, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Body: text})
 }
 
-// addWorktree gives thread id a checkout under WorktreeRoot on a new
-// branch from base, or from the repository's default branch when base is
-// empty. The branch and directory carry the thread's short id: the title
-// is not known yet, and a name that never changes is what a pushed
-// branch wants.
-func (a *App) addWorktree(ctx context.Context, id string, p store.Project, base string) error {
-	if !gitx.Read(ctx, p.Path).IsRepo {
-		return fmt.Errorf("%s is not a git repository", p.Path)
-	}
-	if base = strings.TrimSpace(base); base == "" {
-		base = gitx.DefaultBranch(ctx, p.Path)
-	}
-	short := id
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	dir := filepath.Join(a.WorktreeRoot, gitx.Slug(p.Name), short)
-	branch, err := gitx.AddWorktree(ctx, p.Path, dir, "starcode/"+short, base)
-	if err != nil {
-		return err
-	}
-	if _, err := a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: dir, Branch: branch}); err != nil {
-		return err
-	}
-	// The project's setup script (t3.json) runs in the new checkout; an
-	// async one runs alongside the first turn, the other holds it.
-	if sc, ok := gitx.ReadSetupScript(p.Path); ok {
-		run := func() {
-			out, err := gitx.RunSetup(context.Background(), sc, p.Path, dir)
-			msg := "Setup script " + sc.Name + " finished"
-			if err != nil {
-				msg = "Setup script " + sc.Name + " failed: " + err.Error()
-			}
-			if out != "" {
-				msg += "\n" + out
-			}
-			if err != nil {
-				a.warn(context.Background(), id, msg)
-			} else {
-				a.note(context.Background(), id, msg)
-			}
-		}
-		a.note(ctx, id, "Running the setup script from t3.json in "+dir+": "+sc.Command)
-		if sc.Async {
-			go run()
-		} else {
-			run()
-		}
-	}
-	return nil
-}
-
-// temporaryBranch is whether the worktree still has the name it was
-// made with, before the thread had a title.
-func temporaryBranch(t store.Thread) bool {
-	short := t.ID
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	return t.WorktreeBranch == "starcode/"+short || strings.HasPrefix(t.WorktreeBranch, "starcode/"+short+"-")
-}
-
-// nameWorktreeBranch gives the worktree's branch a name from the title
-// once there is one, the way T3 renames its throwaway branch. Only the
-// name made at creation is renamed, and only once.
-func (a *App) nameWorktreeBranch(ctx context.Context, t store.Thread, title string) {
-	if t.Worktree == "" || !temporaryBranch(t) {
-		return
-	}
-	slug := gitx.Slug(title)
-	if slug == "thread" || slug == "new-thread" {
-		return
-	}
-	name, err := gitx.RenameBranch(ctx, t.Worktree, t.WorktreeBranch, "starcode/"+slug)
-	if err != nil {
-		a.Log.Info("worktree branch kept", "thread", t.ID, "err", err)
-		return
-	}
-	a.Store.Append(ctx, t.ID, domain.ThreadWorktreeSet{Path: t.Worktree, Branch: name})
-}
-
-// sharedWorktree is whether another thread works in t's directory.
-func (a *App) sharedWorktree(ctx context.Context, t store.Thread) bool {
-	ts, err := a.Store.Threads(ctx)
-	if err != nil {
-		return true
-	}
-	for _, o := range ts {
-		if o.ID != t.ID && o.Worktree == t.Worktree {
-			return true
-		}
-	}
-	return false
-}
-
-// SetProjectWorktrees sets whether the project's new threads start in a
-// worktree of their own.
-func (a *App) SetProjectWorktrees(ctx context.Context, id string, on bool) error {
-	p, err := a.Store.Project(ctx, id)
-	if err != nil {
-		return err
-	}
-	if p.Worktrees == on {
-		return nil
-	}
-	ps := settingsOf(p)
-	ps.Worktrees = on
-	return a.SetProjectSettings(ctx, id, ps)
-}
-
-// RemoveWorktree drops a thread's checkout and puts the thread back on
-// the project's; an unpushed branch stays in the repository. Without
-// force a checkout with changes is refused. With force its modified and
-// untracked files go with it. Called by hand from the thread's menu.
-func (a *App) RemoveWorktree(ctx context.Context, id string, force bool) error {
-	t, err := a.Store.Thread(ctx, id)
-	if err != nil {
-		return err
-	}
-	if t.Worktree == "" {
-		return nil
-	}
-	p, err := a.Store.Project(ctx, t.ProjectID)
-	if err != nil {
-		return err
-	}
-	if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
-		return errors.New("a turn is running in this worktree")
-	}
-	a.closeSession(id)
-	if a.sharedWorktree(ctx, t) {
-		// Another thread works there; this one just steps off it.
-		_, err = a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: ""})
-		return err
-	}
-	if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree, force); err != nil {
-		return err
-	}
-	_, err = a.Store.Append(ctx, id, domain.ThreadWorktreeSet{Path: ""})
-	return err
-}
-
 func (a *App) RenameThread(ctx context.Context, id, title string) error {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return errors.New("title is required")
-	}
-	if t, err := a.Store.Thread(ctx, id); err == nil {
-		a.nameWorktreeBranch(ctx, t, title)
 	}
 	_, err := a.Store.Append(ctx, id, domain.ThreadRenamed{Title: title})
 	return err
@@ -837,19 +662,6 @@ func (a *App) setLiveMode(ctx context.Context, l *live, mode string) error {
 
 func (a *App) DeleteThread(ctx context.Context, id string) error {
 	a.closeSession(id)
-	// A clean worktree goes with the thread; a dirty one is left on disk
-	// with its branch, since deleting the thread should not lose work.
-	// So this never forces.
-	if t, err := a.Store.Thread(ctx, id); err == nil && t.Worktree != "" {
-		if p, err := a.Store.Project(ctx, t.ProjectID); err == nil {
-			if !a.sharedWorktree(ctx, t) {
-				if err := gitx.RemoveWorktree(ctx, p.Path, t.Worktree, false); err != nil {
-					a.Log.Info("worktree kept", "thread", id, "dir", t.Worktree, "err", err)
-				}
-			}
-			gitx.DropCheckpoints(ctx, p.Path, id)
-		}
-	}
 	_, err := a.Store.Append(ctx, id, domain.ThreadDeleted{})
 	return err
 }
@@ -917,14 +729,6 @@ func (a *App) SendPrompt(ctx context.Context, threadID, text string) error {
 	if text == "" {
 		return errors.New("prompt is empty")
 	}
-	// The worktree checkpoint is taken before promptMu, which every
-	// thread's sends wait on; git on a big tree should not hold them up.
-	// A thread that turns out busy under the lock queues the prompt and
-	// the checkpoint goes unused.
-	var extra map[string]any
-	if pre, err := a.Store.Thread(ctx, threadID); err == nil && pre.Status != domain.StatusRunning && pre.Status != domain.StatusAwaitingApproval {
-		extra = map[string]any{"checkpoint": a.checkpoint(ctx, pre)}
-	}
 	a.promptMu.Lock()
 	defer a.promptMu.Unlock()
 	t, err := a.Store.Thread(ctx, threadID)
@@ -963,9 +767,23 @@ func (a *App) SendPrompt(ctx context.Context, threadID, text string) error {
 		if _, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: newID(), Body: text}); err != nil {
 			return err
 		}
-		return a.startPromptMeta(ctx, l, t, queued[0].ID, queued[0].Body, extra)
+		return a.startPromptMeta(ctx, l, t, queued[0].ID, queued[0].Body, nil)
 	}
-	return a.startPromptMeta(ctx, l, t, "", text, extra)
+	return a.startPromptMeta(ctx, l, t, "", text, nil)
+}
+
+// CompactAndSend compacts the conversation first and sends text after
+// the summary: the compaction runs as a turn, so the prompt waits in the
+// queue and goes out when it ends. A thread that cannot compact now (a
+// turn running, an agent without it) just gets the prompt.
+func (a *App) CompactAndSend(ctx context.Context, threadID, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("prompt is empty")
+	}
+	if err := a.CompactContext(ctx, threadID); err != nil {
+		a.Log.Debug("compact before send", "thread", threadID, "err", err)
+	}
+	return a.SendPrompt(ctx, threadID, text)
 }
 
 // CancelQueuedPrompt removes a follow-up which has not started yet.
@@ -985,6 +803,95 @@ func (a *App) CancelQueuedPrompt(ctx context.Context, threadID, promptID string)
 	return errors.New("queued prompt not found")
 }
 
+// EditQueuedPrompt changes the text of a prompt still in the queue.
+func (a *App) EditQueuedPrompt(ctx context.Context, threadID, promptID, body string) error {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return a.CancelQueuedPrompt(ctx, threadID, promptID)
+	}
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	if _, err := a.queuedIndex(ctx, threadID, promptID); err != nil {
+		return err
+	}
+	_, err := a.Store.Append(ctx, threadID, domain.PromptEdited{ID: promptID, Body: body})
+	return err
+}
+
+// MoveQueuedPrompt moves a queued prompt by delta places, negative
+// being earlier; a delta past either end stops there.
+func (a *App) MoveQueuedPrompt(ctx context.Context, threadID, promptID string, delta int) error {
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	return a.moveQueuedLocked(ctx, threadID, promptID, delta)
+}
+
+func (a *App) moveQueuedLocked(ctx context.Context, threadID, promptID string, delta int) error {
+	i, err := a.queuedIndex(ctx, threadID, promptID)
+	if err != nil {
+		return err
+	}
+	queued, _ := a.Store.QueuedPrompts(ctx, threadID)
+	j := min(max(i+delta, 0), len(queued)-1)
+	if j == i {
+		return nil
+	}
+	ids := make([]string, 0, len(queued))
+	for _, q := range queued {
+		if q.ID != promptID {
+			ids = append(ids, q.ID)
+		}
+	}
+	ids = slices.Insert(ids, j, promptID)
+	_, err = a.Store.Append(ctx, threadID, domain.PromptsReordered{IDs: ids})
+	return err
+}
+
+func (a *App) queuedIndex(ctx context.Context, threadID, promptID string) (int, error) {
+	queued, err := a.Store.QueuedPrompts(ctx, threadID)
+	if err != nil {
+		return 0, err
+	}
+	for i, q := range queued {
+		if q.ID == promptID {
+			return i, nil
+		}
+	}
+	return 0, errors.New("queued prompt not found")
+}
+
+// Steer sends text now: on a busy thread it goes to the front of the
+// queue and the running turn is stopped, so it is the next thing the
+// agent reads; on an idle one it is an ordinary send.
+func (a *App) Steer(ctx context.Context, threadID, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return errors.New("prompt is empty")
+	}
+	a.promptMu.Lock()
+	t, err := a.Store.Thread(ctx, threadID)
+	if err != nil {
+		a.promptMu.Unlock()
+		return err
+	}
+	if !busyThread(t) {
+		a.promptMu.Unlock()
+		return a.SendPrompt(ctx, threadID, text)
+	}
+	id := newID()
+	if _, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: id, Body: text}); err != nil {
+		a.promptMu.Unlock()
+		return err
+	}
+	a.Store.SaveDraft(ctx, threadID, "")
+	err = a.moveQueuedLocked(ctx, threadID, id, -1<<30)
+	a.promptMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return a.Interrupt(ctx, threadID)
+}
+
 // startPromptLocked moves an optional queued prompt into the transcript and
 // sends it. promptMu must be held so an arriving HTTP send cannot overtake a
 // turn-completion handoff.
@@ -994,16 +901,15 @@ func (a *App) startPromptLocked(ctx context.Context, l *live, t store.Thread, qu
 
 // PromptMeta is what a prompt's item records about the moment it went
 // out, for a later rewind to it: the agent session and the point to fork
-// it at to keep everything before the prompt, and the checkpoint of the
-// worktree's files. Auto marks a prompt starcode sent itself ("resume").
+// it at to keep everything before the prompt. Auto marks a prompt
+// starcode sent itself ("resume").
 type PromptMeta struct {
 	// Agent is the instance the session belongs to; a rewind across a
 	// switch to another agent could not fork it.
-	Agent      string `json:"agent,omitempty"`
-	Session    string `json:"session,omitempty"`
-	Anchor     string `json:"anchor,omitempty"`
-	Checkpoint string `json:"checkpoint,omitempty"`
-	Auto       string `json:"auto,omitempty"`
+	Agent   string `json:"agent,omitempty"`
+	Session string `json:"session,omitempty"`
+	Anchor  string `json:"anchor,omitempty"`
+	Auto    string `json:"auto,omitempty"`
 	// Fresh is a prompt that began a conversation (no session yet): a
 	// rewind to it starts a fresh one again.
 	Fresh bool `json:"fresh,omitempty"`
@@ -1014,29 +920,6 @@ func promptMeta(it store.Item) PromptMeta {
 	var m PromptMeta
 	json.Unmarshal(it.Meta, &m)
 	return m
-}
-
-// checkpoint records the files of a worktree of t's own, so a rewind to
-// the prompt about to go out can put them back, and returns the commit or
-// "" for none. A shared worktree is left out: restoring it would undo the
-// other thread's work too. The callers may hold promptMu, which every
-// thread's prompts wait on, so a checkpoint that takes long is given up
-// and the prompt goes out without one.
-func (a *App) checkpoint(ctx context.Context, t store.Thread) string {
-	if t.Worktree == "" || a.sharedWorktree(ctx, t) {
-		return ""
-	}
-	if _, err := os.Stat(t.Worktree); err != nil {
-		return ""
-	}
-	cctx, cancel := context.WithTimeout(ctx, checkpointTimeout)
-	defer cancel()
-	sha, err := gitx.Checkpoint(cctx, t.Worktree, t.ID)
-	if err != nil {
-		a.Log.Info("no checkpoint", "thread", t.ID, "err", err)
-		return ""
-	}
-	return sha
 }
 
 // startPromptMeta is startPromptLocked with extra fields for the prompt
@@ -1054,14 +937,6 @@ func (a *App) startPromptMeta(ctx context.Context, l *live, t store.Thread, queu
 		}
 	} else {
 		meta["fresh"] = true
-	}
-	// The worktree's files, unless the caller recorded them already
-	// ("checkpoint" in extra, "" when there was nothing to record).
-	if _, done := extra["checkpoint"]; !done {
-		meta["checkpoint"] = a.checkpoint(ctx, t)
-	}
-	if meta["checkpoint"] == "" {
-		delete(meta, "checkpoint")
 	}
 	rawMeta, _ := json.Marshal(meta)
 	if len(meta) == 0 {
@@ -1085,7 +960,13 @@ func (a *App) startPromptMeta(ctx context.Context, l *live, t store.Thread, queu
 	}
 	l.idleSince = time.Time{}
 	l.mu.Unlock()
-	if err := l.sess.Send(ctx, text); err != nil {
+	send := l.sess.Send
+	if is, ok := l.sess.(agent.ImageSender); ok {
+		if images := imagePaths(text); len(images) > 0 {
+			send = func(ctx context.Context, text string) error { return is.SendImages(ctx, text, images) }
+		}
+	}
+	if err := send(ctx, text); err != nil {
 		a.Store.Append(ctx, t.ID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
 		return err
 	}
@@ -1146,21 +1027,29 @@ func (a *App) Interrupt(ctx context.Context, threadID string) error {
 	return l.sess.Interrupt(ctx)
 }
 
-// ResolveApproval answers a pending approval. decision is one of the
-// domain.Decision* constants.
-func (a *App) ResolveApproval(ctx context.Context, threadID, approvalID, decision string) error {
-	ap, err := a.Store.Approval(ctx, threadID, approvalID)
-	if err != nil {
-		return err
-	}
-	if ap.Decision != "" {
-		return errors.New("already resolved")
-	}
+// StopSubagent stops the subagent that item itemID (a Task tool call)
+// runs, and leaves the turn going.
+func (a *App) StopSubagent(ctx context.Context, threadID, itemID string) error {
 	a.mu.Lock()
 	l := a.sessions[threadID]
 	a.mu.Unlock()
 	if l == nil {
-		return errors.New("no live session for this thread")
+		return agent.ErrNoTask
+	}
+	ts, ok := l.sess.(agent.TaskStopper)
+	if !ok {
+		return errors.New("this agent cannot stop one subagent; stop the turn instead")
+	}
+	// Item ids are the agent's tool id behind the thread's prefix (pump).
+	return ts.StopTask(ctx, strings.TrimPrefix(itemID, threadID[:min(8, len(threadID))]+"-"))
+}
+
+// ResolveApproval answers a pending approval. decision is one of the
+// domain.Decision* constants.
+func (a *App) ResolveApproval(ctx context.Context, threadID, approvalID, decision string) error {
+	ap, sess, err := a.pendingApproval(ctx, threadID, approvalID)
+	if err != nil {
+		return err
 	}
 	d := agent.Deny
 	switch decision {
@@ -1173,21 +1062,105 @@ func (a *App) ResolveApproval(ctx context.Context, threadID, approvalID, decisio
 	default:
 		return fmt.Errorf("unknown decision %q", decision)
 	}
-	if err := l.sess.Resolve(ctx, approvalID, d); err != nil {
+	// Allowing a question without answers lets the tool run with none, and
+	// the model hears that the user did not answer.
+	if d == agent.Allow && domain.Questions(ap.ToolName, ap.Input) != nil {
+		return errors.New("pick an answer to each question first")
+	}
+	if err := sess.Resolve(ctx, approvalID, d); err != nil {
 		return err
 	}
+	return a.approvalResolved(ctx, threadID, domain.ApprovalResolved{ID: approvalID, Decision: decision})
+}
+
+// AnswerQuestions answers a pending approval that puts questions to the
+// human (see domain.Questions). answers maps each question's text to the
+// answer, and every question needs one.
+func (a *App) AnswerQuestions(ctx context.Context, threadID, approvalID string, answers map[string]string) error {
+	ap, sess, err := a.pendingApproval(ctx, threadID, approvalID)
+	if err != nil {
+		return err
+	}
+	qs := domain.Questions(ap.ToolName, ap.Input)
+	if qs == nil {
+		return errors.New("this approval asks no questions")
+	}
+	for _, q := range qs {
+		if strings.TrimSpace(answers[q.Question]) == "" {
+			return fmt.Errorf("pick or write an answer to %q", q.Question)
+		}
+	}
+	an, ok := sess.(agent.Answerer)
+	if !ok {
+		return errors.New("this agent cannot take answers")
+	}
+	if err := an.Answer(ctx, approvalID, answers); err != nil {
+		return err
+	}
+	return a.approvalResolved(ctx, threadID, domain.ApprovalResolved{ID: approvalID, Decision: domain.DecisionAllow, Answers: answers})
+}
+
+// pendingApproval returns an unanswered approval and the live session
+// that waits for its answer.
+func (a *App) pendingApproval(ctx context.Context, threadID, approvalID string) (store.Approval, agent.Session, error) {
+	ap, err := a.Store.Approval(ctx, threadID, approvalID)
+	if err != nil {
+		return ap, nil, err
+	}
+	if ap.Decision != "" {
+		return ap, nil, errors.New("already resolved")
+	}
+	a.mu.Lock()
+	l := a.sessions[threadID]
+	a.mu.Unlock()
+	if l == nil {
+		return ap, nil, errors.New("no live session for this thread")
+	}
+	return ap, l.sess, nil
+}
+
+// approvalResolved records an answer the session has already been given.
+func (a *App) approvalResolved(ctx context.Context, threadID string, res domain.ApprovalResolved) error {
 	t, err := a.Store.Thread(ctx, threadID)
 	if err != nil {
 		return err
 	}
-	evs := []any{domain.ApprovalResolved{ID: approvalID, Decision: decision}}
-	// Only a thread that is really waiting goes back to running; answering
-	// a card whose turn has already ended must not fake a live turn.
-	if t.Status == domain.StatusAwaitingApproval {
-		evs = append(evs, domain.ThreadStatusChanged{Status: domain.StatusRunning})
+	evs := []any{res}
+	// Only a thread that is really waiting moves on, and only once nothing
+	// else waits: to running mid-turn, or back to idle when the card was a
+	// background subagent's after the turn ended. Answering a card whose
+	// turn is over must not fake a live turn.
+	if t.Status == domain.StatusAwaitingApproval && !a.othersPending(ctx, threadID, res.ID) {
+		next := domain.StatusRunning
+		a.mu.Lock()
+		l := a.sessions[threadID]
+		a.mu.Unlock()
+		if l != nil {
+			l.mu.Lock()
+			if !l.idleSince.IsZero() {
+				next = domain.StatusIdle
+			}
+			l.mu.Unlock()
+		}
+		evs = append(evs, domain.ThreadStatusChanged{Status: next})
 	}
 	_, err = a.Store.Append(ctx, threadID, evs...)
 	return err
+}
+
+// othersPending says whether the thread has an unanswered approval other
+// than id.
+func (a *App) othersPending(ctx context.Context, threadID, id string) bool {
+	aps, err := a.Store.PendingApprovals(ctx, threadID)
+	if err != nil {
+		return false
+	}
+	for _, ap := range aps {
+		if ap.ID != id {
+			return true
+		}
+	}
+	return false
 }
 
 // SessionRules lists the "allow for session" rules active on a thread.
@@ -1232,6 +1205,19 @@ func (a *App) MarkSeen(ctx context.Context, threadID string) {
 	}
 }
 
+// MarkUnread puts the unread mark back on a thread, for one to come back
+// to. Opening it marks it read again.
+func (a *App) MarkUnread(ctx context.Context, threadID string) error {
+	if _, err := a.Store.Thread(ctx, threadID); err != nil {
+		return err
+	}
+	if err := a.Store.MarkUnread(ctx, threadID); err != nil {
+		return err
+	}
+	a.Bus.Publish(domain.SeenChanged{ThreadID: threadID})
+	return nil
+}
+
 // Compact folds streamed deltas (see Store.Compact) and logs the count.
 func (a *App) Compact(ctx context.Context, threadID string) {
 	n, err := a.Store.Compact(ctx, threadID)
@@ -1257,9 +1243,16 @@ type live struct {
 	// ctxTokens and ctxWindow are the last context reading written to the
 	// log, so a repeat costs nothing.
 	ctxTokens, ctxWindow int64
-	// idleSince is when the last turn ended, zero while one runs. reapIdle
-	// closes the session once it has been set for idleTimeout.
+	// idleSince is when the last turn ended, zero while one runs. Anything
+	// the session says between turns (a background subagent at work, a
+	// turn the agent started itself) moves it up. reapIdle closes the
+	// session once it has been set for idleTimeout.
 	idleSince time.Time
+	// subTools holds the item ids of a subagent's tool calls that have not
+	// finished. A background subagent goes on after the main turn ends;
+	// while one has a tool running the session is not idle, and its
+	// approvals outlive the turn.
+	subTools map[string]bool
 	// turn-scoped bookkeeping
 	interrupted bool
 	turnID      string
@@ -1292,18 +1285,16 @@ func (a *App) session(ctx context.Context, t store.Thread) (*live, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.Worktree != "" && t.WorktreeBranch != "" {
-		// A worktree deleted outside starcode comes back on its branch.
-		if err := gitx.EnsureWorktree(ctx, p.Path, t.Worktree, t.WorktreeBranch); err != nil {
-			a.note(ctx, t.ID, "The worktree "+t.Worktree+" is gone and could not be put back, working in "+p.Path+": "+err.Error())
-		}
+	cfg := agent.Config{Cwd: p.Path, Model: t.Model, ResumeID: t.ExternalSessionID, ForkAt: t.ForkAt, PermissionMode: t.PermissionMode, Effort: t.Effort}
+	if a.Tools != nil && a.Store.AgentTools(ctx) {
+		cfg.Tools = a.Tools(t.ID)
 	}
 	// Sessions outlive the request that started them.
-	sess, err := ag.Start(context.Background(), agent.Config{Cwd: t.Dir(p), Model: t.Model, ResumeID: t.ExternalSessionID, ForkAt: t.ForkAt, PermissionMode: t.PermissionMode, Effort: t.Effort})
+	sess, err := ag.Start(context.Background(), cfg)
 	if err != nil {
 		return nil, err
 	}
-	l := &live{threadID: t.ID, projectID: t.ProjectID, agentName: t.Agent, sess: sess, seenMsgs: map[string]string{}, seenTools: map[string]bool{}, pending: map[string]agent.ApprovalRequested{}}
+	l := &live{threadID: t.ID, projectID: t.ProjectID, agentName: t.Agent, sess: sess, seenMsgs: map[string]string{}, seenTools: map[string]bool{}, subTools: map[string]bool{}, pending: map[string]agent.ApprovalRequested{}}
 	a.mu.Lock()
 	if existing := a.sessions[t.ID]; existing != nil {
 		a.mu.Unlock()
@@ -1359,6 +1350,13 @@ func (a *App) pump(l *live) {
 			// resumes from.
 			continue
 		}
+		if e.Kind != agent.KindLimits {
+			l.mu.Lock()
+			if !l.idleSince.IsZero() {
+				l.idleSince = time.Now()
+			}
+			l.mu.Unlock()
+		}
 		switch e.Kind {
 		case agent.KindSessionInfo:
 			t, err := a.Store.Thread(ctx, tid)
@@ -1373,7 +1371,6 @@ func (a *App) pump(l *live) {
 			t, err := a.Store.Thread(ctx, tid)
 			if title != "" && err == nil && title != t.Title {
 				append_(domain.ThreadRenamed{Title: title})
-				a.nameWorktreeBranch(ctx, t, title)
 			}
 		case agent.KindTurnStarted:
 			l.mu.Lock()
@@ -1395,6 +1392,9 @@ func (a *App) pump(l *live) {
 			l.mu.Lock()
 			seen := l.seenTools[ts.ID]
 			l.seenTools[ts.ID] = true
+			if ts.Parent != "" {
+				l.subTools[id] = true
+			}
 			l.mu.Unlock()
 			if seen {
 				if len(ts.Input) > 0 || ts.Summary != "" {
@@ -1419,6 +1419,9 @@ func (a *App) pump(l *live) {
 				status = domain.ItemFailed
 			}
 			evs = append(evs, domain.ItemCompleted{ID: itemID(tc.ID), Status: status})
+			l.mu.Lock()
+			delete(l.subTools, itemID(tc.ID))
+			l.mu.Unlock()
 			append_(evs...)
 			a.Bus.Publish(domain.GitChanged{ProjectID: l.projectID})
 			// The agent opening a pull request links the thread to it.
@@ -1431,7 +1434,8 @@ func (a *App) pump(l *live) {
 			}
 		case agent.KindApproval:
 			ap := *e.Approval
-			auto := slices.Contains(a.SessionRules(ctx, tid), domain.RuleKey(ap.ToolName, ap.Input))
+			// A question always waits for the human; no rule can answer it.
+			auto := domain.Questions(ap.ToolName, ap.Input) == nil && slices.Contains(a.SessionRules(ctx, tid), domain.RuleKey(ap.ToolName, ap.Input))
 			req := domain.ApprovalRequested{ID: ap.ID, ItemID: itemID(ap.ToolID), ToolName: ap.ToolName, Description: ap.Description, Input: ap.Input}
 			if auto {
 				if err := l.sess.Resolve(ctx, ap.ID, agent.Allow); err != nil {
@@ -1479,7 +1483,13 @@ func (a *App) pump(l *live) {
 			// must not turn this turn's start into an update, and the map
 			// would otherwise grow for the life of the session.
 			l.seenTools = map[string]bool{}
-			l.pending = map[string]agent.ApprovalRequested{}
+			// A stopped turn takes its subagents with it; one that ended on
+			// its own may have left some working in the background.
+			if tc.Status == "interrupted" {
+				clear(l.subTools)
+			}
+			maps.DeleteFunc(l.pending, func(_ string, ap agent.ApprovalRequested) bool { return !l.subTools[itemID(ap.ToolID)] })
+			subTools := maps.Clone(l.subTools)
 			l.idleSince = time.Now()
 			l.mu.Unlock()
 			append_(closers...)
@@ -1507,21 +1517,47 @@ func (a *App) pump(l *live) {
 			// An approval the turn never got an answer for (Stop was pressed,
 			// or the agent gave up) is over with the turn. Left pending, its
 			// card would come back on every reload and answering it would
-			// resolve a request nobody is waiting on.
+			// resolve a request nobody is waiting on. A background
+			// subagent's request is the exception: the subagent still
+			// waits for it, and the thread waits with it.
 			var completed []any
+			waiting := false
 			if aps, err := a.Store.PendingApprovals(ctx, tid); err == nil {
 				for _, ap := range aps {
+					if subTools[ap.ItemID] {
+						waiting = true
+						continue
+					}
 					completed = append(completed, domain.ApprovalResolved{ID: ap.ID, Decision: domain.DecisionDeny, Auto: true})
 				}
 			}
+			if waiting && status == domain.StatusIdle {
+				status = domain.StatusAwaitingApproval
+			}
+			resultID := newID()
 			completed = append(completed,
-				domain.ItemStarted{ID: newID(), Kind: domain.KindResult, Status: tc.Status, Body: body},
+				domain.ItemStarted{ID: resultID, Kind: domain.KindResult, Status: tc.Status, Body: body},
 				domain.TurnCompleted{TurnID: tc.TurnID, Anchor: tc.Anchor, Status: tc.Status, DurationMS: tc.DurationMS, CostUSD: tc.CostUSD, InputTok: tc.InputTokens, OutputTok: tc.OutputTokens, Error: tc.Error},
 			)
-			if len(queued) == 0 {
+			// A turn stopped by the plan's usage limit waits for the reset
+			// on the Snoozed shelf and resumes then (see wakeDue). A queued
+			// prompt would only hit the same limit, so it waits too.
+			limited := tc.Status == "error" && !tc.LimitReset.IsZero() && a.Store.ResumeAfterLimit(ctx)
+			if len(queued) == 0 || limited {
 				completed = append(completed, domain.ThreadStatusChanged{Status: status, Detail: detail})
 			}
+			if limited {
+				completed = append(completed, domain.ThreadSnoozed{Until: limitWake(tc.LimitReset, time.Now()), Resume: true},
+					domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Body: "The plan's usage limit stopped this turn. The thread waits on the Snoozed shelf until the limit resets, and then starcode resumes the turn. Waking it or sending a prompt before then cancels that."})
+			}
 			append_(completed...)
+			// What the turn changed goes on its result line; git may take
+			// a moment on a big tree, so the line shows first.
+			a.bg.Add(1)
+			go func() {
+				defer a.bg.Done()
+				a.recordTurnFiles(tid, resultID)
+			}()
 			// Settings that changed during the turn want a fresh session;
 			// a queued prompt starts on that one instead of this.
 			l.mu.Lock()
@@ -1532,7 +1568,7 @@ func (a *App) pump(l *live) {
 				a.retire(l)
 				next = nil
 			}
-			if len(queued) > 0 {
+			if len(queued) > 0 && !limited {
 				t, err := a.Store.Thread(ctx, tid)
 				if err == nil && next == nil {
 					next, err = a.session(ctx, t)
@@ -1545,6 +1581,9 @@ func (a *App) pump(l *live) {
 				}
 			}
 			a.promptMu.Unlock()
+			if len(queued) == 0 || limited {
+				a.childDone(tid)
+			}
 			a.Bus.Publish(domain.GitChanged{ProjectID: l.projectID})
 		case agent.KindNotice:
 			append_(domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: e.Notice.Text})
@@ -1676,4 +1715,18 @@ func must[T any](v T, err error) T {
 		panic(err)
 	}
 	return v
+}
+
+// attachedImage matches the line the web layer adds for an attached image
+// (web.promptWithAttachments).
+var attachedImage = regexp.MustCompile(`(?m)^\[Attached image ".*" is saved at: (.+)\]$`)
+
+// imagePaths are the images attached to a prompt, which go to the agent
+// as images where it takes them.
+func imagePaths(text string) []string {
+	var out []string
+	for _, m := range attachedImage.FindAllStringSubmatch(text, -1) {
+		out = append(out, m[1])
+	}
+	return out
 }

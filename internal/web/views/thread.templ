@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"net/url"
 	"starcode/internal/agent"
 	"starcode/internal/domain"
 	"starcode/internal/keys"
@@ -31,6 +32,15 @@ type ThreadData struct {
 	Limits []agent.LimitWindow
 	// Stashed is how many prompts the stash holds, for the stash button.
 	Stashed int
+	// Parent is the thread whose agent spawned this one; ID is empty when
+	// the reader opened it.
+	Parent store.Thread
+	// Scheduled are the thread's schedules (send later, cron), shown with
+	// the queue.
+	Scheduled []store.Schedule
+	// Notify is what the thread pushes to the reader's devices
+	// (store.NotifyAll, NotifyInput, NotifyOff).
+	Notify string
 	// Full renders every item. Otherwise the transcript starts at its
 	// last stretch (see SplitTail) with a button that loads the rest, so
 	// a long thread does not cost its whole history on every open and
@@ -227,11 +237,13 @@ templ Earlier(items []store.Item, aps []store.Approval) {
 // The bar hides while an approval is open, and the time it shows leaves
 // those waits out: it counts from the turn's start moved forward by the
 // time spent waiting, so the clock script can keep ticking from one
-// timestamp.
+// timestamp. The header carries a moving line along its foot for the same
+// turn, so a phone that has scrolled the bar away still shows work.
 templ BusyBar(d ThreadData) {
 	<div id="busybar" class={ "busybar", templ.KV("on", d.Thread.Status == domain.StatusRunning) }>
 		if d.Thread.Status == domain.StatusRunning {
 			{{ since := workingSince(d) }}
+			@Icon("loader-circle", "ui-icon spin-icon busy-spin")
 			<span class="shimmer" data-busy-word>Working…</span>
 			<span class="dim tiny-text" data-since={ since.UTC().Format(time.RFC3339) }>{ elapsedText(time.Since(since)) }</span>
 			if n := AgentsRunning(d.Items); n > 0 {
@@ -306,13 +318,18 @@ templ MessageRail(items []store.Item) {
 
 // MainHead is the breadcrumb row; patched on rename and status change.
 templ MainHead(d ThreadData) {
-	<header id="mainhead" class="mainhead">
+	<header id="mainhead" class={ "mainhead", templ.KV("running", d.Thread.Status == domain.StatusRunning) }>
 		<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
 		<nav class="crumbs ellipsis">
 			// On a phone the title gets the whole row; the project is one
 			// tap away in the thread list.
 			<a class="hide-sm" href="/">{ d.Project.Name }</a>
 			<span class="dim hide-sm">/</span>
+			// A spawned thread leads back to the thread that spawned it.
+			if d.Parent.ID != "" {
+				<a class="hide-sm ellipsis crumb-parent" href={ templ.SafeURL("/threads/" + d.Parent.ID) } title="The thread whose agent started this one">{ d.Parent.Title }</a>
+				<span class="dim hide-sm">/</span>
+			}
 			// The title is a button that swaps in the rename box; Enter or
 			// the save button posts, Escape and blur put the title back.
 			<button type="button" class="crumb-title ellipsis" title="Rename thread" data-show="!$rename" data-preserve-attr="style" data-on:click={ "$title = " + jsq(d.Thread.Title) + "; $rename = true; renameFocus()" }>{ d.Thread.Title }</button>
@@ -321,21 +338,31 @@ templ MainHead(d ThreadData) {
 				// mousedown is stopped so the click does not blur the input
 				// before the submit lands.
 				<button class="btn icon tiny" type="submit" title="Save title" aria-label="Save title" data-on:mousedown="evt.preventDefault()">@Icon("check", "ui-icon")</button>
+				// The agent's small model reads the conversation and names
+				// it; a few seconds and a fraction of a cent.
+				<button class="btn icon tiny ghost retitle" type="button" title="Write a title from the conversation" aria-label="Write a title from the conversation" data-indicator:_retitling data-attr:disabled="$_retitling" data-class:busy="$_retitling" data-on:mousedown="evt.preventDefault()" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/retitle')" }>@Icon("sparkles", "ui-icon")</button>
 			</form>
 		</nav>
 		if d.Thread.Archived {
 			<span class="status-pill st-idle" title="Settled: sending a message brings the thread back">@Icon("archive", "ui-icon") <span>settled</span></span>
 		}
+		if d.Notify == store.NotifyOff {
+			<span class="status-pill st-idle" title="This thread sends no notifications (change it in the menu)">@Icon("bell-off", "ui-icon")</span>
+		} else if d.Notify == store.NotifyInput {
+			<span class="status-pill st-idle" title="This thread notifies only when it needs you (change it in the menu)">@Icon("bell-dot", "ui-icon")</span>
+		}
 		if d.Thread.Snoozed() {
-			<button type="button" class="status-pill st-idle" title="Snoozed: it comes back into the list then. Click to wake it now." data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/wake')" }>@Icon("alarm-clock", "ui-icon") <span class="hide-sm">until </span><time data-local={ d.Thread.SnoozedUntil.UTC().Format(time.RFC3339) }>{ d.Thread.SnoozedUntil.UTC().Format("Jan 2 15:04") }</time></button>
+			<button type="button" class="status-pill st-idle" title={ snoozeTitle(d.Thread) } data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/wake')" }>@Icon("alarm-clock", "ui-icon") <span class="hide-sm">until </span><time data-local={ d.Thread.SnoozedUntil.UTC().Format(time.RFC3339) }>{ d.Thread.SnoozedUntil.UTC().Format("Jan 2 15:04") }</time></button>
 		}
 		// With a reason behind the status (an error, what the agent is
 		// waiting on) the pill is a button that shows it under the header;
-		// a title attribute alone never shows on a phone.
+		// a title attribute alone never shows on a phone. A plain running
+		// turn gets no pill: the busy bar and the sweep along the header's
+		// foot already say so, and a spinner here would be a third one.
 		if d.Thread.StatusDetail != "" {
 			<button type="button" class={ "status-pill", "st-" + d.Thread.Status } title={ d.Thread.StatusDetail } data-on:click="$stat = !$stat">@StatusIcon(d.Thread.Status) <span>{ statusLabel(d.Thread.Status) }</span></button>
 			<div class="status-detail" data-show="$stat" data-preserve-attr="style" style="display: none" data-on:click__outside="$stat && !evt.target.closest('.status-pill') && ($stat = false)">{ d.Thread.StatusDetail }</div>
-		} else {
+		} else if d.Thread.Status != domain.StatusRunning {
 			<span class={ "status-pill", "st-" + d.Thread.Status }>@StatusIcon(d.Thread.Status) <span>{ statusLabel(d.Thread.Status) }</span></span>
 		}
 		if d.Thread.Status == "error" && authFailure(d.Thread.StatusDetail) {
@@ -357,33 +384,28 @@ templ MainHead(d ThreadData) {
 				</a>
 			}
 			<button class="btn icon ghost tiny dim pr-unlink" data-on:click={ "confirm('Unlink pull request #" + strconv.Itoa(pr.Number) + " from this thread?') && @post('/api/threads/" + d.Thread.ID + "/pr/unlink')" } title="Unlink the pull request from this thread" aria-label="Unlink the pull request">@Icon("unlink", "ui-icon")</button>
+			// The watch wakes the agent when the PR changes (app.PRWatch).
+			if d.Thread.PRWatch != "" {
+				<button class="btn ghost tiny pr-watch on" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/pr/unwatch')" } title={ "Watching #" + strconv.Itoa(pr.Number) + ": " + prWatchWhat + " Click to stop." } aria-label="Stop watching the pull request">@Icon("eye", "ui-icon") <span class="hide-sm">watching</span></button>
+			} else if pr.State == "" || pr.State == "open" {
+				<button class="btn ghost tiny dim pr-watch" data-indicator:_watching data-attr:disabled="$_watching" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/pr/watch')" } title={ "Watch #" + strconv.Itoa(pr.Number) + ": " + prWatchWhat } aria-label="Watch the pull request">@Icon("eye", "ui-icon") <span class="hide-sm">watch</span></button>
+			}
 		}
 		<span class="spacer"></span>
-		if d.Thread.Worktree != "" && !worktreeOnDisk(d.Thread) {
-			// The cleanup (or someone) removed the checkout; the branch
-			// stays and the next prompt checks it out again.
-			<span class="dim tiny-text hide-sm" title={ "The worktree " + d.Thread.Worktree + " was removed. The branch " + d.Thread.WorktreeBranch + " is kept, and the next prompt checks it out there again." }>
-				@Icon("folder-git-2", "ui-icon")
-				<span>{ MidTrunc(d.Thread.WorktreeBranch, 36) } · removed</span>
-			</span>
-		} else if d.Branch != "" {
-			<span class="dim tiny-text hide-sm" title={ branchTitle(d) }>
-				if d.Thread.Worktree != "" {
-					@Icon("folder-git-2", "ui-icon")
-				} else {
-					@Icon("git-branch", "ui-icon")
-				}
+		if d.Branch != "" {
+			<span class="dim tiny-text hide-sm" title={ "Branch " + d.Branch }>
+				@Icon("git-branch", "ui-icon")
 				<span>{ MidTrunc(d.Branch, 36) }</span>
 			</span>
 		}
 		// The thread's folder in VS Code on the reader's machine; the
 		// layout's vscodeOpen builds the link. Left out on a phone, which
 		// has no VS Code to hand it to.
-		{{ dir := d.Thread.Dir(d.Project) }}
+		{{ dir := d.Project.Path }}
 		<button class="btn ghost vscode-open" type="button" data-on:click={ VSCodeOpen(dir) } title={ "Open " + dir + " in VS Code" }>@Icon("brand-vscode", "ui-icon") <span class="hide-sm">VS Code</span></button>
 		<button class="btn ghost" data-on:click="$term = !$term" title="Toggle terminal">@Icon("terminal", "ui-icon") <span class="hide-sm">terminal</span></button>
 		<button class="btn ghost gittoggle" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
-		// Pin, the worktree actions, settle and delete live behind this
+		// Pin, branch, hand off, settle and delete live behind this
 		// button on every screen; terminal and changes stay in the row.
 		<button class="btn icon ghost more-toggle" type="button" data-on:click="$more = !$more" title="More" aria-label="More actions">@Icon("ellipsis-vertical", "ui-icon")</button>
 		<div class="head-more" data-class:open="$more" data-on:click__outside="$more && !evt.target.closest('.more-toggle') && ($more = false)" data-on:click="evt.target.closest('.snooze-at') || ($more = false)">
@@ -404,14 +426,27 @@ templ MainHead(d ThreadData) {
 					<input class="in" type="datetime-local" data-on:change={ "el.value && (@post('/api/threads/" + d.Thread.ID + "/snooze?until=' + encodeURIComponent(snoozeAt('at', el.value))), $more = false)" }/>
 				</label>
 			</div>
+			<div class="head-more-group">
+				<span class="dim tiny-text head-more-label">@Icon("bell", "ui-icon") <span>notify me</span></span>
+				<div class="snooze-opts">
+					@notifyButton(d, store.NotifyAll, "always", "When a turn ends, and when it needs you")
+					@notifyButton(d, store.NotifyInput, "when it needs me", "Only for approvals, questions and the agent asking for you")
+					@notifyButton(d, store.NotifyOff, "never", "No notifications from this thread")
+				</div>
+			</div>
+			<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unread?leave=1')" } title="Mark unread and leave it for later">@Icon("mail", "ui-icon") <span class="hide-sm">mark unread</span></button>
 			if d.Thread.Pinned {
 				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unpin')" } title="Unpin: back into date order">@Icon("pin-off", "ui-icon") <span class="hide-sm">unpin</span></button>
 			} else {
 				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/pin')" } title="Pin to the top of the project's list">@Icon("pin", "ui-icon") <span class="hide-sm">pin</span></button>
 			}
-			if d.Thread.Worktree != "" {
-				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/worktree/thread')" } title={ "Open another thread on " + d.Thread.Worktree }>@Icon("message-square-plus", "ui-icon") <span class="hide-sm">new thread in this worktree</span></button>
-				<button class="btn ghost dim" data-on:click={ "confirm(" + jsq("Remove this thread's worktree and work on the project checkout instead?\n\nThe branch "+d.Thread.WorktreeBranch+" is kept. If the worktree has uncommitted files, you are asked again before they are lost.") + ") && @post('/api/threads/" + d.Thread.ID + "/worktree/remove')" } title={ "Remove the worktree " + d.Thread.Worktree + " and work on the project's checkout" }>@Icon("folder-git-2", "ui-icon") <span class="hide-sm">remove worktree</span></button>
+			if len(d.Items) > 0 {
+				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/branch')" } title={ branchHint }>@Icon("git-fork", "ui-icon") <span class="hide-sm">branch</span></button>
+				for _, name := range d.Settings.Agents {
+					if name != d.Thread.Agent {
+						<button class="btn ghost dim" data-on:click={ "confirm(" + jsq(handoffAsk(d, name)) + ") && @post('/api/threads/" + d.Thread.ID + "/handoff?agent=" + url.QueryEscape(name) + "')" } title={ "A new thread on " + instanceLabel(d.Settings, name) + " takes the work over from here, with this conversation to read" }>@Icon("arrow-right-left", "ui-icon") <span class="hide-sm">hand off to { instanceLabel(d.Settings, name) }</span></button>
+					}
+				}
 			}
 			if d.Thread.Archived {
 				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unarchive')" } title="Bring this thread back into the list">@Icon("archive-restore", "ui-icon") <span class="hide-sm">unsettle</span></button>
@@ -423,20 +458,38 @@ templ MainHead(d ThreadData) {
 	</header>
 }
 
-// VSCodeOpen is the expression that opens dir in VS Code (vscodeOpen in
-// the layout script). For a thread, dir is Thread.Dir: its worktree when
-// it has one.
-func VSCodeOpen(dir string) string {
-	return "vscodeOpen(" + jsq(dir) + ")"
+// prWatchWhat says what a watch on a pull request does.
+const prWatchWhat = "starcode checks it every minute and tells the agent when a check fails or they all pass, someone else comments or reviews, or the branch starts to conflict. It stops when the PR merges or closes."
+
+// snoozeTitle is the tooltip on the header's snooze pill.
+func snoozeTitle(t store.Thread) string {
+	if t.SnoozeResume {
+		return "Waiting for the usage limit to reset: the turn resumes then. Click to wake it now, which cancels that."
+	}
+	return "Snoozed: it comes back into the list then. Click to wake it now."
 }
 
-// branchTitle is the header's tooltip on the branch: the worktree's
-// path when the thread has one.
-func branchTitle(d ThreadData) string {
-	if d.Thread.Worktree != "" {
-		return "Worktree " + d.Thread.Worktree + " on branch " + d.Branch
+// branchHint is the header's tooltip on branch.
+const branchHint = "Branch: a new thread that carries on from here with a fork of this conversation, while this one stays as it is. Both work in the project's checkout."
+
+// handoffAsk is the question before a handoff to agent name.
+func handoffAsk(d ThreadData, name string) string {
+	msg := "Hand this work over to " + instanceLabel(d.Settings, name) + "?\n\nA new thread on it gets this conversation as a file, reads it and the changes, and tells you where things stand before it changes anything."
+	return msg + " This thread stays as it is."
+}
+
+// instanceLabel is the display name of agent instance name.
+func instanceLabel(sd SettingsData, name string) string {
+	if l := sd.Looks[name].Label; l != "" {
+		return l
 	}
-	return "Branch " + d.Branch
+	return name
+}
+
+// VSCodeOpen is the expression that opens dir in VS Code (vscodeOpen in
+// the layout script).
+func VSCodeOpen(dir string) string {
+	return "vscodeOpen(" + jsq(dir) + ")"
 }
 
 func modelShown(t store.Thread) string {
@@ -465,10 +518,12 @@ func statusLabel(s string) string {
 	return s
 }
 
-// Work is a folded run of agent activity. Open while it is still going.
+// Work is a folded run of agent activity. It stays folded while it runs
+// too: the header says what it is doing (see WorkSummary), and a tap
+// opens it, which morphs keep.
 templ Work(items []store.Item, aps []store.Approval, kids map[string][]store.Item) {
 	{{ running, _, _ := WorkState(items, aps) }}
-	<details id={ "work-" + items[0].ID } class={ "work", templ.KV("running", running) } open?={ running } data-preserve-attr="open">
+	<details id={ "work-" + items[0].ID } class={ "work", templ.KV("running", running) } data-preserve-attr="open">
 		@WorkSummary(items, aps)
 		<div class="work-body">
 			for _, it := range items {
@@ -482,32 +537,61 @@ templ WorkSummary(items []store.Item, aps []store.Approval) {
 	{{ running, steps, dur := WorkState(items, aps) }}
 	<summary id={ "wsum-" + items[0].ID } class="work-head">
 		if running {
-			<span class="shimmer">Working…</span>
+			{{ icon, text := liveStep(ctx, items) }}
+			if text != "" {
+				<span class="work-live">
+					if icon != "" {
+						@Icon(icon, "ui-icon")
+					}
+					<span class="shimmer ellipsis">{ text }</span>
+				</span>
+			} else {
+				<span class="shimmer">Working…</span>
+			}
 		} else {
-			<span>Worked for { elapsedText(dur) }</span>
-		}
-		if steps > 0 {
-			<span class="dim">· { fmt.Sprintf("%d %s", steps, plural(steps, "step", "steps")) }</span>
+			<span class="work-took">Worked for { elapsedText(dur) }</span>
+			if sum := workSummary(ctx, items); sum != "" {
+				<span class="dim ellipsis work-sum">· { sum }</span>
+			} else if steps > 0 {
+				<span class="dim">· { fmt.Sprintf("%d %s", steps, plural(steps, "step", "steps")) }</span>
+			}
 		}
 		<span class="dim tiny-text row-ts" data-ts={ items[0].CreatedAt.UTC().Format(time.RFC3339) }></span>
 	</summary>
 }
 
 templ PromptQueue(d ThreadData) {
-	<div id="prompt-queue" class={ "prompt-queue", templ.KV("empty", len(d.Queued) == 0) }>
+	<div id="prompt-queue" class={ "prompt-queue", templ.KV("empty", len(d.Queued) == 0 && len(d.Scheduled) == 0) }>
+		if len(d.Scheduled) > 0 {
+			<div class="queue-list">
+				for _, sc := range d.Scheduled {
+					@scheduledRow(sc)
+				}
+			</div>
+		}
 		if len(d.Queued) > 0 {
 			<div class="queue-head">
 				<span>@Icon("list-end", "ui-icon") <span>{ fmt.Sprintf("%d %s queued", len(d.Queued), plural(len(d.Queued), "message", "messages")) }</span></span>
 			</div>
 			<div class="queue-list">
 				for i, q := range d.Queued {
-					<div class="queue-item">
+					<div class="queue-item" data-class:editing={ "$qedit == '" + q.ID + "'" }>
 						<span class="queue-position">{ fmt.Sprintf("%d", i+1) }</span>
-						<span class="ellipsis" title={ promptSummary(q.Body) }>{ promptSummary(q.Body) }</span>
+						<span class="ellipsis" title={ promptSummary(q.Body) } data-show={ "$qedit != '" + q.ID + "'" } data-preserve-attr="style">{ promptSummary(q.Body) }</span>
+						// Editing happens in place, so the prompt keeps its turn.
+						<form class="queue-edit" data-show={ "$qedit == '" + q.ID + "'" } data-preserve-attr="style" style="display: none" data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + d.Thread.ID + "/queue/" + q.ID + "/edit', {filterSignals: {include: /^qbody$/}})" }>
+							<textarea class="in" rows="3" data-bind:qbody data-on:keydown="evt.key === 'Escape' ? (evt.preventDefault(), $qedit = '') : sendKey(evt) && (evt.preventDefault(), el.form.requestSubmit())"></textarea>
+							<button class="btn icon tiny" type="submit" title="Save">@Icon("check", "ui-icon")</button>
+						</form>
 						if i == 0 && busy(d.Thread) {
 							// Steer: stop the running turn so this goes out now.
 							<button class="btn ghost tiny queue-now" type="button" title="Send now: stop the running turn and send this message" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/steer')" }>@Icon("fast-forward", "ui-icon") <span>now</span></button>
 						}
+						if len(d.Queued) > 1 {
+							<button class="btn icon ghost queue-move" type="button" title="Move up" disabled?={ i == 0 } data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/queue/" + q.ID + "/move?by=-1')" }>@Icon("arrow-up", "ui-icon")</button>
+							<button class="btn icon ghost queue-move" type="button" title="Move down" disabled?={ i == len(d.Queued)-1 } data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/queue/" + q.ID + "/move?by=1')" }>@Icon("arrow-down", "ui-icon")</button>
+						}
+						<button class="btn icon ghost" type="button" title="Edit" data-on:click={ "$qbody = " + jsq(q.Body) + "; $qedit = '" + q.ID + "'; setTimeout(() => el.closest('.queue-item').querySelector('textarea')?.focus())" }>@Icon("pencil", "ui-icon")</button>
 						<button class="btn icon ghost" type="button" title="Remove queued message" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/queue/" + q.ID + "/remove')" }>@Icon("x", "ui-icon")</button>
 					</div>
 				}
@@ -602,18 +686,28 @@ const (
 	nudgeIdle   = 70 * time.Minute
 )
 
-// CompactNudge suggests compacting a big conversation that has sat idle,
-// above the composer. It hides while a turn runs, and a dismissal is kept
-// in this browser for that size of conversation.
+// CompactNudge offers to compact a big conversation that has sat idle,
+// above the composer: past nudgeIdle the prompt cache is gone and the
+// next prompt pays to read every token again. While the chip is on, a
+// send compacts first and the prompt goes out after the summary
+// (sendQuery in the layout adds ?compact=1). Turning it off sends with
+// the full history; this browser keeps that for this size of
+// conversation. It hides while a turn runs.
 templ CompactNudge(d ThreadData) {
 	{{ t := d.Thread }}
 	if t.ContextTokens >= nudgeTokens && time.Since(t.UpdatedAt) >= nudgeIdle && !busy(t) {
-		{{ key := fmt.Sprintf("nudge:%s:%d", t.ID, t.ContextTokens/10_000) }}
-		<div class="compact-nudge" data-show={ "!$locked && !localStorage.getItem(" + jsq(key) + ")" } data-preserve-attr="style">
+		{{ key := fmt.Sprintf("keepfull:%s:%d", t.ID, t.ContextTokens/10_000) }}
+		<div class="compact-nudge" data-key={ key } data-show="!$locked" data-preserve-attr="style class" data-init={ "localStorage.getItem(" + jsq(key) + ") && (el.classList.add('off'), el.querySelector('.compact-chip').setAttribute('aria-pressed', 'false'))" }>
 			@Icon("fold-vertical", "ui-icon")
-			<span class="nudge-text"><strong>{ fmt.Sprintf("%dK tokens", (t.ContextTokens+500)/1000) }</strong>{ fmt.Sprintf(", idle for %s. The next prompt re-reads all of it uncached.", idleWords(time.Since(t.UpdatedAt))) }</span>
-			<button type="button" class="btn tiny nudge-compact" data-on:click={ "@post('/api/threads/" + t.ID + "/compact')" } title="Fold the conversation so far into a summary first">Compact</button>
-			<button type="button" class="btn icon ghost tiny" title="Not now" aria-label="Dismiss" data-on:click={ "localStorage.setItem(" + jsq(key) + ", '1'); el.closest('.compact-nudge').remove()" }>@Icon("x", "ui-icon")</button>
+			<span class="nudge-text">
+				<strong>{ fmt.Sprintf("%dK tokens", (t.ContextTokens+500)/1000) }</strong>{ fmt.Sprintf(", idle for %s. ", idleWords(time.Since(t.UpdatedAt))) }
+				<span class="nudge-on">Sending compacts them into a summary first.</span>
+				<span class="nudge-off">The next prompt re-reads all of them uncached.</span>
+			</span>
+			<button type="button" class="chip compact-chip" aria-pressed="true" title="On: the next send compacts first. Off: it sends with the full history." data-on:click="compactToggle(el)">
+				@Icon("check", "ui-icon chip-check")
+				<span>{ fmt.Sprintf("compact %dK", (t.ContextTokens+500)/1000) }</span>
+			</button>
 		</div>
 	}
 }
@@ -802,7 +896,7 @@ templ Composer(d ThreadData) {
 		class={ "composer", templ.KV("busy", locked) }
 		data-class:busy="$locked"
 		data-signals={ signalsJSON(t.Agent, t.Model, t.Effort, t.PermissionMode, composerSignals(d)) }
-		data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + t.ID + "/send', " + withSignal("_attach") + ")" }
+		data-on:submit={ "evt.preventDefault(); @post('/api/threads/" + t.ID + "/send' + sendQuery(), " + withSignal("_attach") + ")" }
 	>
 		@SessionRules(d)
 		@CompactNudge(d)
@@ -817,7 +911,7 @@ templ Composer(d ThreadData) {
 				placeholder={ promptPlaceholder(d) }
 				data-attr:placeholder="$placeholder"
 				data-bind:prompt
-				data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send', " + withSignal("_attach") + "))" }
+				data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send' + sendQuery(evt), " + withSignal("_attach") + "))" }
 				data-on:input__debounce.600ms={ draftPost(t.ID) }
 				data-effect="$prompt; autoGrow(el)"
 				autocomplete="off"
@@ -844,6 +938,7 @@ templ ComposerActions(d ThreadData) {
 		if locked {
 			<button class="btn round warn" type="button" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/interrupt')" } title="Stop">@Icon("square", "ui-icon")</button>
 		}
+		@SendLater(d.Thread.ID)
 		<button class="btn round primary" type="submit" title={ sendTitle(locked) }>@Icon("arrow-up", "ui-icon")</button>
 	</div>
 }
@@ -922,6 +1017,12 @@ func promptPreview(body string) string {
 
 // snoozeButton is one of the header menu's snooze times; kind is what
 // the layout's snoozeAt turns into a time.
+// notifyButton picks the thread's notify level; the current one is
+// marked.
+templ notifyButton(d ThreadData, level, label, title string) {
+	<button class={ "btn", "ghost", "tiny", templ.KV("dim", d.Notify != level), templ.KV("sel", d.Notify == level) } type="button" title={ title } data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/notify?level=" + level + "')" }>{ label }</button>
+}
+
 templ snoozeButton(threadID, kind, label string) {
 	<button class="btn ghost dim tiny" type="button" data-on:click={ "@post('/api/threads/" + threadID + "/snooze?until=' + encodeURIComponent(snoozeAt('" + kind + "')))" }>{ label }</button>
 }

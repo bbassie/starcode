@@ -114,13 +114,29 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 		"sandbox":        mode.sandbox,
 	}
 	turnParams := map[string]any{"approvalPolicy": mode.approval}
+	if mode.reviewer != "" {
+		params["approvalsReviewer"] = mode.reviewer
+		turnParams["approvalsReviewer"] = mode.reviewer
+	}
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 		turnParams["model"] = cfg.Model
 	}
+	config := map[string]any{}
 	if cfg.Effort != "" {
-		params["config"] = map[string]any{"model_reasoning_effort": cfg.Effort}
+		config["model_reasoning_effort"] = cfg.Effort
 		turnParams["effort"] = cfg.Effort
+	}
+	if cfg.Tools != nil {
+		// A dotted key sets this one server and leaves the reader's own
+		// mcp_servers as they are. wait_thread can block for minutes.
+		config["mcp_servers.starcode"] = map[string]any{
+			"command": cfg.Tools.Command, "args": cfg.Tools.Args, "env": cfg.Tools.Env,
+			"tool_timeout_sec": 900, "startup_timeout_sec": 20,
+		}
+	}
+	if len(config) > 0 {
+		params["config"] = config
 	}
 	method := "thread/start"
 	if cfg.ResumeID != "" {
@@ -157,6 +173,15 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 	model := res.Thread.Model
 	if model == "" {
 		model = cfg.Model
+	}
+	if mode.plan {
+		// The mode names the model it runs on, and its effort takes
+		// precedence over the turn's.
+		settings := map[string]any{"model": model, "developer_instructions": nil}
+		if cfg.Effort != "" {
+			settings["reasoning_effort"] = cfg.Effort
+		}
+		turnParams["collaborationMode"] = map[string]any{"mode": "plan", "settings": settings}
 	}
 	s := newSession(c, res.Thread.ID, a.log)
 	s.turnParams = turnParams
@@ -245,13 +270,23 @@ func (a *Agent) ensureClient(ctx context.Context) (*client, error) {
 // permissionModes are starcode-level ids mapping onto codex's two knobs.
 type codexMode struct {
 	id, label, approval, sandbox string
+	// plan runs the turns in codex's plan collaboration mode: it reads
+	// and asks (request_user_input, the question card) and proposes a
+	// plan instead of changing files.
+	plan bool
+	// reviewer is where codex routes its approval requests: "" for the
+	// reader, "auto_review" for a reviewing subagent that allows or
+	// denies each one by its risk without asking the reader.
+	reviewer string
 }
 
 var permissionModes = []codexMode{
-	{"", "default (workspace writes allowed, ask to leave the sandbox)", "on-request", "workspace-write"},
-	{"untrusted", "untrusted (ask before every command)", "untrusted", "workspace-write"},
-	{"read-only", "read-only (no writes, ask to leave the sandbox)", "on-request", "read-only"},
-	{"full-access", "full-access (no sandbox, never ask)", "never", "danger-full-access"},
+	{"", "default (workspace writes allowed, ask to leave the sandbox)", "on-request", "workspace-write", false, ""},
+	{"auto-review", "auto-review (workspace writes allowed, a reviewing agent decides on leaving the sandbox)", "on-request", "workspace-write", false, "auto_review"},
+	{"untrusted", "untrusted (ask before every command)", "untrusted", "workspace-write", false, ""},
+	{"read-only", "read-only (no writes, ask to leave the sandbox)", "on-request", "read-only", false, ""},
+	{"plan", "plan (read, ask questions, propose a plan; no writes)", "on-request", "read-only", true, ""},
+	{"full-access", "full-access (no sandbox, never ask)", "never", "danger-full-access", false, ""},
 }
 
 func permissionMode(id string) codexMode {

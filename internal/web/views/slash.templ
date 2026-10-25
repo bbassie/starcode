@@ -2,6 +2,7 @@ package views
 
 import (
 	"starcode/internal/gitx"
+	"starcode/internal/store"
 	"strconv"
 	"strings"
 )
@@ -63,4 +64,46 @@ func prPickRepo(repo string) string {
 		return ""
 	}
 	return " in " + repo
+}
+
+// AtPickData is what the composer's "@" menu offers.
+type AtPickData struct {
+	Files   []string
+	Threads []store.Thread
+}
+
+// AtPickMenu is the composer's "@" menu. The server already filtered the
+// rows by what follows the "@", so they carry no data-k. A file pick
+// inserts @path, which the agent reads relative to its checkout; a thread
+// pick inserts a link to the thread, whose id read_thread takes.
+templ AtPickMenu(d AtPickData) {
+	if len(d.Files) > 0 {
+		<div class="pick-head">Files</div>
+		for _, f := range d.Files {
+			<button type="button" class="opt" data-ins={ "@" + f } data-on:click="atPick(el)">
+				<span class="pr-mark">@Icon("file", "ui-icon")</span>
+				<span class="opt-text"><span class="opt-name mono ellipsis">{ f }</span></span>
+			</button>
+		}
+	}
+	if len(d.Threads) > 0 {
+		<div class="pick-head">Threads</div>
+		for _, t := range d.Threads {
+			<button type="button" class="opt" data-ins={ atThreadLink(t) } data-on:click="atPick(el)">
+				<span class="pr-mark">@Icon("message-square", "ui-icon")</span>
+				<span class="opt-text">
+					<span class="opt-name ellipsis">{ t.Title }</span>
+					<span class="opt-desc">{ t.Agent } · { t.Status }</span>
+				</span>
+			</button>
+		}
+	}
+	<p class="dim pad slash-empty" hidden?={ len(d.Files)+len(d.Threads) > 0 }>no matching file or thread</p>
+}
+
+// atThreadLink is a markdown link to a thread, which reads as its title
+// and gives the agent the id in the path.
+func atThreadLink(t store.Thread) string {
+	title := strings.NewReplacer("[", "(", "]", ")").Replace(t.Title)
+	return "[thread: " + title + "](/threads/" + t.ID + ")"
 }

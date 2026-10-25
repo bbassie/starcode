@@ -20,6 +20,11 @@ type GitData struct {
 	// Editing is whether the detail opens in the editor; it matches the
 	// gitEdit signal the same response patches.
 	Editing bool
+	// Find marks its matches in the diff, and FindLine and FindOp ("add",
+	// "del", "ctx") name the line a find result opened at.
+	Find     string
+	FindLine int
+	FindOp   string
 	// Preview is the URL of a file shown rendered instead of as text,
 	// PreviewKind what it is: "html", "pdf" or "image".
 	Preview     string
@@ -137,6 +142,7 @@ templ GitPanel(d GitData) {
 		// default width back.
 		<div class="panel-drag" title="Drag to resize; double-click for the default width"></div>
 		@GitHeader(d)
+		@GitFind(d)
 		@GitFiles(d)
 		@FileExplorer(ExplorerData{Project: d.Project, Files: d.Tree, Hidden: !d.TreeOpen})
 		@PullRequests(PRData{Project: d.Project, ThreadID: d.ThreadID})
@@ -158,9 +164,9 @@ templ GitHeader(d GitData) {
 		}
 		<span class="spacer"></span>
 		if d.Status.IsRepo {
-			<span class="dim">@Icon("git-branch", "ui-icon") <span>{ d.Status.Branch }</span></span>
+			<span class="dim git-branch" title={ d.Status.Branch }>@Icon("git-branch", "ui-icon") <span class="ellipsis">{ d.Status.Branch }</span></span>
 			if d.Status.Summary != "" {
-				<span class="mono">{ d.Status.Summary }</span>
+				<span class="mono git-sum">{ d.Status.Summary }</span>
 			}
 		}
 		if d.Project.ID != "" {
@@ -171,6 +177,58 @@ templ GitHeader(d GitData) {
 			// width on the next thread; the body's signals read it back.
 			<button class="btn icon ghost tiny wide-toggle" type="button" data-on:click="$wide = !$wide; panelWidthReset()" data-effect="localStorage.setItem('panel-wide', $wide ? '1' : '0')" title="Widen or narrow the panel" aria-label="Widen or narrow the panel">@Icon("unfold-horizontal", "ui-icon")</button>
 		<button class="btn icon ghost tiny" data-on:click="$git = false" title="Close" aria-label="Close changes panel">@Icon("x", "ui-icon")</button>
+	</div>
+}
+
+// GitFind is the search over every changed file's diff, above the list
+// of changes. It sits outside GitFiles, which the stream redraws as the
+// agent works, so the box keeps its text and the results stay.
+templ GitFind(d GitData) {
+	<div id="git-find" class="git-find" data-show="$panelTab === 'changes'" data-preserve-attr="style">
+		if d.Project.ID != "" {
+			{{ find := "@query('/api/git/" + d.Project.ID + "/find?q=' + encodeURIComponent($gfind))" }}
+			<div class="git-find-box">
+				@Icon("search", "ui-icon")
+				<input id="git-find-in" class="in" type="search" placeholder="Find in changes" aria-label="Find in the changed files" autocomplete="off" spellcheck="false" enterkeyhint="search" data-bind:gfind data-on:input__debounce.300ms={ find } data-on:keydown={ "evt.key === 'Escape' && $gfind !== '' && (evt.preventDefault(), evt.stopPropagation(), $gfind = '', " + find + ")" }/>
+			</div>
+			<div id="git-find-results"></div>
+		}
+	</div>
+}
+
+// GitFindResults lists the matching lines, grouped under their file.
+templ GitFindResults(projectID, q string, hits []gitx.DiffHit, more bool) {
+	<div id="git-find-results">
+		if q != "" {
+			if len(hits) == 0 {
+				<p class="dim tiny-text find-none">no matches in the changes</p>
+			} else {
+				<ul class="find-hits">
+					for i, h := range hits {
+						if i == 0 || hits[i-1].Path != h.Path {
+							<li class="find-file mono ellipsis" title={ h.Path }>{ h.Path }</li>
+						}
+						<li>
+							<a role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" data-on:click={ "evt.preventDefault(); $gitPath = " + strconv.Quote(h.Path) + "; $gitEdit = false; @query('" + findDiffURL(projectID, q, h) + "')" }>
+								<span class={ "find-line", "mono", "dim", "op-" + hitOp(h) }>{ strconv.Itoa(h.Line) }</span>
+								<span class="find-text mono ellipsis">
+									for _, p := range hitParts(h.Text, q) {
+										if p.Mark {
+											<mark>{ p.Text }</mark>
+										} else {
+											{ p.Text }
+										}
+									}
+								</span>
+							</a>
+						</li>
+					}
+				</ul>
+				if more {
+					<p class="dim tiny-text find-none">{ fmt.Sprintf("showing the first %d matches", len(hits)) }</p>
+				}
+			}
+		}
 	</div>
 }
 
@@ -849,8 +907,22 @@ templ GitDetail(d GitData) {
 			</form>
 			if d.Diff != "" {
 				<pre class="diff" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) }>
-					for _, line := range strings.Split(strings.TrimRight(d.Diff, "\n"), "\n") {
-						<span class={ diffClass(line) }>{ line }</span>
+					for _, row := range diffRows(d.Diff, d.Find, d.FindLine, d.FindOp) {
+						<span
+							class={ row.Class }
+							if row.Target {
+								id="diff-target"
+								data-init="el.scrollIntoView({block: 'center'})"
+							}
+						>
+							for _, p := range row.Parts {
+								if p.Mark {
+									<mark>{ p.Text }</mark>
+								} else {
+									{ p.Text }
+								}
+							}
+						</span>
 						{ "\n" }
 					}
 				</pre>

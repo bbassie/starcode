@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"starcode/internal/gitx"
 	"starcode/internal/store"
 	"starcode/internal/web/views"
 )
@@ -39,15 +40,50 @@ var claudeCommands = []views.SlashItem{
 	{Cmd: "/pr-comments", Desc: "Read the comments on the branch's pull request"},
 }
 
-// Codex has no built-ins here: its app-server takes turn/start text as
-// a prompt and leaves slash commands to the TUI, so "/review" typed
-// into a Codex thread would reach the model as three words. Compacting
-// goes through the context ring, which calls thread/compact/start.
+// codexCommands are the commands the Codex adapter runs itself through
+// app-server methods (codex.session.command); its app-server takes any
+// other turn text as a prompt.
+var codexCommands = []views.SlashItem{
+	{Cmd: "/compact", Desc: "Fold the conversation so far into a summary and go on from that"},
+	{Cmd: "/review", Desc: "Review the uncommitted changes; /review main compares the branch with main, and more words are what to look at"},
+}
 
 // slashRoutes registers the menu's endpoint. server.go calls it.
 func (s *Server) slashRoutes() {
 	s.mux.HandleFunc("GET /api/threads/{id}/commands", s.slashCommands)
 	s.mux.HandleFunc("GET /api/threads/{id}/prpick", s.prPick)
+	s.mux.HandleFunc("GET /api/threads/{id}/atpick", s.atPick)
+}
+
+// atPick is the composer's "@" menu for the words q: the project's files
+// that match them, and other threads whose title does. With nothing typed
+// yet it offers the threads touched last.
+func (s *Server) atPick(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	t, err := s.App.Store.Thread(ctx, r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	var d views.AtPickData
+	if p, err := s.App.Store.Project(ctx, t.ProjectID); err == nil && q != "" {
+		d.Files = gitx.MatchFiles(s.projectFileList(ctx, p), q, 8)
+	}
+	var ts []store.Thread
+	if q == "" {
+		ts, _ = s.App.Store.Threads(ctx)
+	} else {
+		ts, _ = s.App.Store.SearchThreads(ctx, q, 12)
+	}
+	for _, o := range ts {
+		if o.ID != t.ID && !o.Archived && len(d.Threads) < 6 {
+			d.Threads = append(d.Threads, o)
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	views.AtPickMenu(d).Render(ctx, w)
 }
 
 // slashCommands answers with the menu's rows as plain HTML; the page
@@ -72,7 +108,7 @@ func (s *Server) slashCommands(w http.ResponseWriter, r *http.Request) {
 	}
 	configDir = driverConfigDir(driver, configDir)
 	items := slashLists.get(t.ID+"\x00"+configDir, func() []views.SlashItem {
-		return slashItems(driver, configDir, t.Dir(p))
+		return slashItems(driver, configDir, p.Path)
 	})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -106,6 +142,9 @@ func driverConfigDir(driver, configDir string) string {
 // slashItems is the menu for a driver: its built-ins, then the skills
 // and custom commands under the config dir and the project, by name.
 func slashItems(driver, configDir, project string) []views.SlashItem {
+	if driver == "codex" {
+		return append([]views.SlashItem(nil), codexCommands...)
+	}
 	if driver != "claude" {
 		return nil
 	}
@@ -259,7 +298,6 @@ func (s *Server) prPick(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	p.Path = t.Dir(p)
 	e := s.prList(r, p)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

@@ -25,14 +25,16 @@ var spriteIcons = []string{
 	"bot", "brain", "chart-no-axes-combined", "check", "chevron-down", "chevron-right", "chevrons-up",
 	"circle", "circle-alert", "circle-arrow-up", "circle-check", "circle-dot", "circle-help", "circle-slash", "circle-x",
 	"clipboard-paste", "columns-2", "command", "copy", "ellipsis-vertical", "external-link", "eye", "eye-off",
-	"file", "folder", "folder-git-2", "folder-plus", "fold-vertical", "gauge",
+	"file", "folder", "folder-plus", "fold-vertical", "gauge",
 	"git-branch", "git-compare-arrows", "git-merge", "git-pull-request", "git-pull-request-closed", "git-pull-request-create", "git-pull-request-draft",
 	"fast-forward", "keyboard", "link", "list-end", "loader-circle", "log-in", "menu", "pin", "pin-off", "qr-code",
-	"message-square", "message-square-plus", "message-square-x", "palette", "paperclip", "pencil", "pencil-line", "plug", "plus",
+	"mail", "message-square", "message-square-plus", "message-square-x", "palette", "paperclip", "pencil", "pencil-line", "plug", "plus",
 	"refresh-cw", "rotate-ccw", "rotate-cw", "save", "search", "settings", "shield-check", "square", "square-pen", "square-x", "star",
 	"terminal", "trash-2", "triangle-alert", "undo-2", "unfold-horizontal", "unlink", "upload", "user", "x",
 	"alarm-clock", "sun", "sunrise", "calendar", "calendar-clock", "history", "text-quote", "bookmark", "bookmark-plus",
 	"zoom-in", "zoom-out", "chevrons-down-up", "chevrons-up-down", "list-filter", "file-text", "image", "maximize-2", "code",
+	"git-fork", "arrow-right-left", "sparkles", "globe", "list-checks", "wrench", "file-plus", "file-diff",
+	"bell", "bell-off", "bell-dot",
 }
 
 // brandPaths are the brand marks as sprite symbols. The drivers' are

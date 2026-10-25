@@ -1,10 +1,12 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"starcode/internal/agent"
@@ -66,6 +68,9 @@ func (a *Agent) Limits(ctx context.Context) (agent.Limits, error) {
 	if len(windows) == 0 {
 		return agent.Limits{}, errors.New("codex: the account reported no subscription windows")
 	}
+	c.mu.Lock()
+	c.windows = windows
+	c.mu.Unlock()
 	return agent.Limits{CheckedAt: time.Now(), Windows: windows}, nil
 }
 
@@ -131,6 +136,7 @@ func (c *client) limitsUpdated(params json.RawMessage) {
 		return
 	}
 	c.mu.Lock()
+	c.windows = windows
 	sessions := make([]*session, 0, len(c.sessions))
 	for _, s := range c.sessions {
 		sessions = append(sessions, s)
@@ -139,4 +145,24 @@ func (c *client) limitsUpdated(params json.RawMessage) {
 	for _, s := range sessions {
 		s.emit(agent.Event{Kind: agent.KindLimits, Limits: &agent.Limits{CheckedAt: time.Now(), Windows: windows}})
 	}
+}
+
+// fullReset is when the account's limit lifts, going by the last update:
+// the latest reset of the windows used up. Zero when none is.
+func (c *client) fullReset() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var at time.Time
+	for _, w := range c.windows {
+		if w.Percent >= 100 && w.ResetsAt.After(at) {
+			at = w.ResetsAt
+		}
+	}
+	return at
+}
+
+// usageLimitHit is whether a turn error is the plan's usage running out:
+// codex marks it usageLimitExceeded in the error's codexErrorInfo.
+func usageLimitHit(info json.RawMessage, msg string) bool {
+	return bytes.Contains(info, []byte("usageLimitExceeded")) || strings.Contains(strings.ToLower(msg), "usage limit")
 }

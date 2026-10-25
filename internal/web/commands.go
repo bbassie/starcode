@@ -3,15 +3,15 @@ package web
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
@@ -44,13 +44,6 @@ type signals struct {
 	File   string       `json:"_file"`
 	Title  string       `json:"title"`
 	Attach []UploadFile `json:"_attach"`
-	// WT is the home composer's "Start in" choice (see app.ThreadStart):
-	// empty for the project's default, "local", "worktree" with WTBase
-	// as the branch to start from, or "reuse" with WTFrom the thread
-	// whose worktree the new one shares.
-	WT     string `json:"wt"`
-	WTBase string `json:"wtbase"`
-	WTFrom string `json:"wtfrom"`
 }
 
 func (s *Server) readSignals(r *http.Request) signals {
@@ -115,32 +108,15 @@ func (s *Server) removeProject(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r)
 }
 
-// projectFor is the project a panel request is about, seen from the
-// thread the page is on: when that thread works in a worktree, Path is
-// the worktree, so the tree, the diffs, the editor and the PR list all
-// look at the checkout the agent is changing. The thread comes from the
-// tid signal every page sends (see the layout's data-signals).
+// projectFor is the project a panel request is about.
 func (s *Server) projectFor(r *http.Request) (store.Project, error) {
-	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
-	if err != nil {
-		return p, err
-	}
-	var sig struct {
-		TID string `json:"tid"`
-	}
-	peekSignals(r, &sig)
-	if sig.TID != "" {
-		if t, err := s.App.Store.Thread(r.Context(), sig.TID); err == nil && t.ProjectID == p.ID {
-			p.Path = t.Dir(p)
-		}
-	}
-	return p, nil
+	return s.App.Store.Project(r.Context(), r.PathValue("id"))
 }
 
 // peekSignals reads the request's signals and leaves the body as it was.
-// A POST carries them in its body, which can be read once; the handler
-// that called projectFor still has its own signals to read (the file
-// text, the uploads, a PR comment), and without this it found none.
+// A POST carries them in its body, which can be read once; a handler
+// that peeks first still has its own signals to read (the file text,
+// the uploads, a PR comment), and without this it found none.
 func peekSignals(r *http.Request, v any) {
 	if r.Method == http.MethodGet || r.Body == nil {
 		datastar.ReadSignals(r, v)
@@ -153,109 +129,6 @@ func peekSignals(r *http.Request, v any) {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	datastar.ReadSignals(r, v)
 	r.Body = io.NopCloser(bytes.NewReader(body))
-}
-
-// setProjectWorktrees flips the project's default for new threads.
-func (s *Server) setProjectWorktrees(w http.ResponseWriter, r *http.Request) {
-	p, err := s.App.Store.Project(r.Context(), r.PathValue("id"))
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	if err := s.App.SetProjectWorktrees(r.Context(), p.ID, !p.Worktrees); err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	s.ok(w, r)
-}
-
-// newThreadInWorktree opens a thread on the same checkout as this one.
-func (s *Server) newThreadInWorktree(w http.ResponseWriter, r *http.Request) {
-	sig := s.readSignals(r)
-	agent := sig.Agent
-	if agent == "" {
-		agent = views.FirstOr(s.agentNames(), "")
-	}
-	id, err := s.App.CreateThreadIn(r.Context(), r.PathValue("id"), agent, sig.Model)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	mode := sig.modeOr(s.defaultMode(r.Context(), agent))
-	if sig.Effort != "" || mode != "" {
-		s.App.SetThreadSettings(r.Context(), id, app.ThreadSettings{Agent: agent, Model: sig.Model, Effort: sig.Effort, PermissionMode: mode})
-	}
-	sse := datastar.NewSSE(w, r)
-	sse.Redirect("/threads/" + id)
-}
-
-// errRunningFromWorktree is the refusal for a worktree whose build this
-// process runs: removing it would delete the executable under the server.
-var errRunningFromWorktree = errors.New("starcode is running the build from this thread's worktree; press \"back to main\" in the banner first")
-
-// runsFrom reports whether this process runs a binary built in dir, a
-// thread's worktree, rather than the main one.
-func (s *Server) runsFrom(dir string) bool {
-	if s.Update == nil || dir == "" || s.Update.Running == s.Update.Home {
-		return false
-	}
-	return filepath.Dir(s.Update.Running) == filepath.Clean(dir)
-}
-
-// worktreeShared reports whether another thread works in t's worktree.
-// App.RemoveWorktree only steps off a shared one and deletes nothing. A
-// failed listing counts as shared, the same way the app reads it.
-func (s *Server) worktreeShared(ctx context.Context, t store.Thread) bool {
-	ts, err := s.App.Store.Threads(ctx)
-	if err != nil {
-		return true
-	}
-	for _, o := range ts {
-		if o.ID != t.ID && o.Worktree == t.Worktree {
-			return true
-		}
-	}
-	return false
-}
-
-// removeWorktree puts the thread back on the project's checkout. A
-// worktree with changes is not removed on the first request: the answer
-// is a confirm dialog that names the count, and a yes posts the same URL
-// again with ?force=1.
-func (s *Server) removeWorktree(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	ctx := r.Context()
-	t, err := s.App.Store.Thread(ctx, id)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	if s.runsFrom(t.Worktree) {
-		s.fail(w, r, errRunningFromWorktree)
-		return
-	}
-	force := r.URL.Query().Get("force") == "1"
-	if !force && t.Worktree != "" && !s.worktreeShared(ctx, t) {
-		if n := gitx.WorktreeChanges(ctx, t.Worktree); n > 0 {
-			files := "files"
-			if n == 1 {
-				files = "file"
-			}
-			msg, _ := json.Marshal(fmt.Sprintf("The worktree has %d uncommitted or untracked %s. Remove it anyway? Those files are lost; the branch %s is kept.", n, files, t.WorktreeBranch))
-			url, _ := json.Marshal(r.URL.Path + "?force=1")
-			// The page's stream shows the result, so the script drops
-			// the response.
-			sse := datastar.NewSSE(w, r)
-			sse.ExecuteScript(fmt.Sprintf("if (confirm(%s)) fetch(%s, {method: 'POST'})", msg, url))
-			return
-		}
-	}
-	if err := s.App.RemoveWorktree(ctx, id, force); err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	s.Term.KillPrefix(termPrefix(id))
-	s.ok(w, r)
 }
 
 func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
@@ -328,18 +201,18 @@ func (s *Server) newThreadForProject(w http.ResponseWriter, r *http.Request) {
 			sig.Agent, sig.Model, sig.Effort, sig.Mode = p.Agent, p.Model, p.Effort, &mode
 		}
 	}
-	s.createThread(w, r, r.PathValue("id"), sig.Agent, sig.Model, sig.Effort, sig.Mode, "", nil, app.ThreadStart{})
+	s.createThread(w, r, r.PathValue("id"), sig.Agent, sig.Model, sig.Effort, sig.Mode, "", nil)
 }
 
 func (s *Server) newThread(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<20) // attachments ride the signals as base64
 	sig := s.readSignals(r)
-	s.createThread(w, r, sig.Project, sig.Agent, sig.Model, sig.Effort, sig.Mode, sig.Prompt, sig.Attach, app.ThreadStart{Mode: sig.WT, Base: sig.WTBase, ReuseFrom: sig.WTFrom})
+	s.createThread(w, r, sig.Project, sig.Agent, sig.Model, sig.Effort, sig.Mode, sig.Prompt, sig.Attach)
 }
 
 // createThread makes a thread, applies settings, and when the home
 // composer carried a prompt, sends it as the first turn before redirecting.
-func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID, agent, model, effort string, mode *string, prompt string, attach []UploadFile, start app.ThreadStart) {
+func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID, agent, model, effort string, mode *string, prompt string, attach []UploadFile) {
 	if agent == "" {
 		agent = views.FirstOr(s.agentNames(), "")
 		if agent == "" {
@@ -351,7 +224,7 @@ func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID,
 		m := s.defaultMode(r.Context(), agent)
 		mode = &m
 	}
-	id, err := s.App.CreateThread(r.Context(), projectID, agent, model, start)
+	id, err := s.App.CreateThread(r.Context(), projectID, agent, model)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -363,6 +236,7 @@ func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID,
 		}
 	}
 	if strings.TrimSpace(prompt) != "" || len(attach) > 0 {
+		s.sent.mark("home", prompt)
 		prompt, err := s.attachToPrompt(id, prompt, attach)
 		if err != nil {
 			s.fail(w, r, err)
@@ -385,12 +259,20 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		s.ok(w, r)
 		return
 	}
+	s.sent.mark(r.PathValue("id"), sig.Prompt)
 	prompt, err := s.attachToPrompt(r.PathValue("id"), sig.Prompt, sig.Attach)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	if err := s.App.SendPrompt(r.Context(), r.PathValue("id"), prompt); err != nil {
+	send := s.App.SendPrompt
+	switch {
+	case r.URL.Query().Get("steer") == "1":
+		send = s.App.Steer
+	case r.URL.Query().Get("compact") == "1":
+		send = s.App.CompactAndSend
+	}
+	if err := send(r.Context(), r.PathValue("id"), prompt); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -443,8 +325,44 @@ func (s *Server) interrupt(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r)
 }
 
+func (s *Server) stopSubagent(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.StopSubagent(r.Context(), r.PathValue("id"), r.PathValue("item")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
 func (s *Server) removeQueuedPrompt(w http.ResponseWriter, r *http.Request) {
 	if err := s.App.CancelQueuedPrompt(r.Context(), r.PathValue("id"), r.PathValue("qid")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
+// editQueuedPrompt saves the queue row's edit box; empty text removes
+// the prompt.
+func (s *Server) editQueuedPrompt(w http.ResponseWriter, r *http.Request) {
+	var sig struct {
+		Body string `json:"qbody"`
+	}
+	datastar.ReadSignals(r, &sig)
+	if err := s.App.EditQueuedPrompt(r.Context(), r.PathValue("id"), r.PathValue("qid"), sig.Body); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	datastar.NewSSE(w, r).MarshalAndPatchSignals(map[string]any{"qedit": "", "qbody": ""})
+}
+
+// moveQueuedPrompt is the queue row's up and down buttons (by=-1, 1).
+func (s *Server) moveQueuedPrompt(w http.ResponseWriter, r *http.Request) {
+	by, err := strconv.Atoi(r.URL.Query().Get("by"))
+	if err != nil {
+		s.fail(w, r, errors.New("by is a number of places"))
+		return
+	}
+	if err := s.App.MoveQueuedPrompt(r.Context(), r.PathValue("id"), r.PathValue("qid"), by); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -462,12 +380,6 @@ func (s *Server) setThreadSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteThread(w http.ResponseWriter, r *http.Request) {
-	// Deleting takes a clean worktree along, and with it the binary this
-	// process may be running.
-	if t, err := s.App.Store.Thread(r.Context(), r.PathValue("id")); err == nil && s.runsFrom(t.Worktree) {
-		s.fail(w, r, errRunningFromWorktree)
-		return
-	}
 	if err := s.App.DeleteThread(r.Context(), r.PathValue("id")); err != nil {
 		s.fail(w, r, err)
 		return
@@ -506,12 +418,20 @@ func (s *Server) revokeRule(w http.ResponseWriter, r *http.Request) {
 
 // saveDraft keeps what a composer holds, keyed by thread id or "home".
 // Only the prompt signal is posted (the composer filters the rest out).
+// A draft that is the text just sent from that composer is dropped: the
+// draft post fires on a pause in typing and can land after the send
+// cleared the draft (a slow connection, or Enter pressed within the
+// pause), which would bring the sent message back on the next page load.
 func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var sig struct {
 		Prompt string `json:"prompt"`
 	}
 	datastar.ReadSignals(r, &sig)
+	if s.sent.was(r.PathValue("key"), sig.Prompt) {
+		s.ok(w, r)
+		return
+	}
 	if err := s.App.SaveDraft(r.Context(), r.PathValue("key"), sig.Prompt); err != nil {
 		s.fail(w, r, err)
 		return
@@ -531,6 +451,21 @@ func (s *Server) pinThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.undoToast(w, r, "Unpinned “"+s.threadTitle(r, id)+"”", time.Time{}, "@post('/api/threads/"+id+"/pin?undo=1')")
+}
+
+// markUnread puts the unread mark back on a thread. From the thread's own
+// page (?leave=1) it goes home too, or the open page would mark it read
+// again on the next event.
+func (s *Server) markUnread(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.MarkUnread(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if r.URL.Query().Get("leave") == "1" {
+		datastar.NewSSE(w, r).Redirect("/")
+		return
+	}
+	s.ok(w, r)
 }
 
 // setSidebarMode stores the sidebar's list order and its density in two
@@ -580,8 +515,8 @@ func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
 		SettleMerged bool `json:"settleMerged"`
 		SettleDays   int  `json:"settleDays"`
 		Resume       bool `json:"resume"`
-		CleanDays    int  `json:"cleanDays"`
-		CleanMerged  bool `json:"cleanMerged"`
+		ResumeLimit  bool `json:"resumeLimit"`
+		AgentTools   bool `json:"agentTools"`
 	}
 	datastar.ReadSignals(r, &sig)
 	days := min(max(sig.SettleDays, 0), 365)
@@ -592,21 +527,16 @@ func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
 		}
 		return "0"
 	}
-	cleanBefore := fmt.Sprint(s.App.Store.WorktreeCleanDays(ctx), s.App.Store.WorktreeCleanMerged(ctx))
 	for k, v := range map[string]string{
 		"settle_merged":        flag(sig.SettleMerged),
 		"resume_after_restart": flag(sig.Resume),
-		"wt_clean_days":        strconv.Itoa(min(max(sig.CleanDays, 0), 365)),
-		"wt_clean_merged":      flag(sig.CleanMerged),
+		"resume_after_limit":   flag(sig.ResumeLimit),
+		"agent_tools":          flag(sig.AgentTools),
 	} {
 		if err := s.App.Store.SetSetting(ctx, k, v); err != nil {
 			s.fail(w, r, err)
 			return
 		}
-	}
-	// New cleanup rules run now, like a new settle period below.
-	if fmt.Sprint(s.App.Store.WorktreeCleanDays(ctx), s.App.Store.WorktreeCleanMerged(ctx)) != cleanBefore {
-		go s.App.CleanWorktrees(context.Background())
 	}
 	before := s.App.Store.SettleIdleDays(ctx)
 	if err := s.App.Store.SetSetting(ctx, "settle_idle_days", strconv.Itoa(days)); err != nil {
@@ -647,12 +577,70 @@ func (s *Server) renameThread(w http.ResponseWriter, r *http.Request) {
 	sse.MarshalAndPatchSignals(map[string]any{"rename": false})
 }
 
+// retitleThread has the thread's agent write a title from the
+// conversation; the rename box closes when it lands.
+func (s *Server) retitleThread(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.RetitleThread(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	sse := datastar.NewSSE(w, r)
+	sse.MarshalAndPatchSignals(map[string]any{"rename": false})
+}
+
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	if err := s.App.ResolveApproval(r.Context(), r.PathValue("id"), r.PathValue("aid"), r.PathValue("decision")); err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	s.ok(w, r)
+}
+
+// answer takes the question card's form: field qN holds the picked
+// option labels of question N, qN-other what the human wrote.
+func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
+	tid, aid := r.PathValue("id"), r.PathValue("aid")
+	ap, err := s.App.Store.Approval(r.Context(), tid, aid)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if err := s.App.AnswerQuestions(r.Context(), tid, aid, formAnswers(domain.Questions(ap.ToolName, ap.Input), r.PostForm)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
+// formAnswers turns the question card's fields into the answer of each
+// question. Picked labels join with ", " as Claude Code's own picker does.
+// Written text is the whole answer to a single choice question and one
+// more item of a multiple choice one.
+func formAnswers(qs []domain.Question, form url.Values) map[string]string {
+	out := make(map[string]string, len(qs))
+	for i, q := range qs {
+		key := "q" + strconv.Itoa(i)
+		var picked []string
+		for _, v := range form[key] {
+			if v = strings.TrimSpace(v); v != "" {
+				picked = append(picked, v)
+			}
+		}
+		if other := strings.TrimSpace(form.Get(key + "-other")); other != "" {
+			if !q.MultiSelect {
+				picked = nil
+			}
+			picked = append(picked, other)
+		}
+		if len(picked) > 0 {
+			out[q.Question] = strings.Join(picked, ", ")
+		}
+	}
+	return out
 }
 
 func (s *Server) setTheme(w http.ResponseWriter, r *http.Request) {
@@ -692,11 +680,32 @@ func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	sse := datastar.NewSSE(w, r)
 	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "_file": ""})
+	q := r.URL.Query()
+	line, _ := strconv.Atoi(q.Get("line"))
 	sse.PatchElementTempl(views.GitDetail(views.GitData{
 		Project:  p,
 		Selected: path,
 		Diff:     gitx.Diff(r.Context(), p.Path, path),
+		Find:     q.Get("find"),
+		FindLine: line,
+		FindOp:   q.Get("op"),
 	}))
+}
+
+// maxFindHits caps the lines a find in the changes lists.
+const maxFindHits = 200
+
+// gitFind searches the diff of every changed file for ?q and lists the
+// matching lines under the box.
+func (s *Server) gitFind(w http.ResponseWriter, r *http.Request) {
+	p, err := s.projectFor(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	q := r.URL.Query().Get("q")
+	hits, more := gitx.FindInDiff(r.Context(), p.Path, q, maxFindHits)
+	datastar.NewSSE(w, r).PatchElementTempl(views.GitFindResults(p.ID, q, hits, more))
 }
 
 func (s *Server) gitFile(w http.ResponseWriter, r *http.Request) {
@@ -759,4 +768,34 @@ func insideProject(path string) bool {
 		return false
 	}
 	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+}
+
+// sentPrompts is the last text sent from each composer (a thread id, or
+// "home"), kept so a late draft post cannot save it again. It lives in
+// memory only: a restart forgets it, and the race it guards is seconds
+// long. An entry stays until the next send from that composer, so a
+// draft typed to be exactly the last message is not kept; that costs
+// little next to a sent message coming back.
+type sentPrompts struct {
+	mu   sync.Mutex
+	last map[string]string
+}
+
+func (p *sentPrompts) mark(key, text string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.last == nil {
+		p.last = map[string]string{}
+	}
+	p.last[key] = strings.TrimSpace(text)
+}
+
+func (p *sentPrompts) was(key, text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.last[key] == text
 }

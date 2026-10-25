@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"starcode/internal/agent"
+	"starcode/internal/domain"
 )
 
 // pipeTransport stands in for a codex process: the test writes what the
@@ -641,13 +644,12 @@ func TestServerRequestsAreAlwaysAnswered(t *testing.T) {
 	}
 	expectKind(t, events, agent.KindNotice)
 
-	// request_user_input is declined the same way.
+	// request_user_input without questions has nothing to ask.
 	f.send(`{"id":72,"method":"item/tool/requestUserInput","params":{"threadId":"thr_1","isBlocking":true}}`)
 	m = f.next()
-	if string(m.ID) != "72" || !strings.Contains(string(m.Result), `"decline"`) {
-		t.Fatalf("requestUserInput answer = %+v", m)
+	if string(m.ID) != "72" || string(m.Result) != `{"answers":{}}` {
+		t.Fatalf("requestUserInput answer = %+v %s", m, m.Result)
 	}
-	expectKind(t, events, agent.KindNotice)
 
 	// Permission requests are answered with an empty grant.
 	f.send(`{"id":73,"method":"item/permissions/requestApproval","params":{"threadId":"thr_1","turnId":"turn_1","itemId":"call_1","permissions":{"fileSystem":{"write":["/etc"]}}}}`)
@@ -852,5 +854,122 @@ func TestItemEventsAnnounceAnUnseenTurn(t *testing.T) {
 	ev = expectKind(t, events, agent.KindToolStarted)
 	if ev.ToolStarted.Summary != "ls" {
 		t.Fatalf("summary = %q", ev.ToolStarted.Summary)
+	}
+}
+
+// The starcode tools ride the thread's config next to the effort.
+func TestStartAddsStarcodeTools(t *testing.T) {
+	a, f := newFake(t)
+	res := startAsync(a, agent.Config{Cwd: "/work", Effort: "high", Tools: &agent.MCPServer{Command: "/bin/starcode", Args: []string{"mcp"}, Env: map[string]string{"STARCODE_THREAD": "t1"}}})
+	f.handshake()
+	m := f.expect("thread/start")
+	var p struct {
+		Config map[string]json.RawMessage `json:"config"`
+	}
+	if err := json.Unmarshal(m.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if string(p.Config["model_reasoning_effort"]) != `"high"` {
+		t.Fatalf("config %v", p.Config)
+	}
+	var srv struct {
+		Command string
+		Args    []string
+		Env     map[string]string
+	}
+	json.Unmarshal(p.Config["mcp_servers.starcode"], &srv)
+	if srv.Command != "/bin/starcode" || len(srv.Args) != 1 || srv.Env["STARCODE_THREAD"] != "t1" {
+		t.Fatalf("server %+v", srv)
+	}
+	f.reply(m.ID, `{"thread":{"id":"thr_9"}}`)
+	if r := <-res; r.err != nil {
+		t.Fatal(r.err)
+	}
+}
+
+// request_user_input becomes the AskUserQuestion card, and the answers go
+// back keyed by codex's question ids.
+func TestRequestUserInput(t *testing.T) {
+	_, f, s := harness(t)
+	events := s.Events()
+	f.send(`{"id":80,"method":"item/tool/requestUserInput","params":{"threadId":"thr_1","turnId":"turn_1","itemId":"call_9","isBlocking":true,"questions":[{"id":"q_db","header":"Database","question":"Which database?","options":[{"label":"sqlite","description":"one file"},{"label":"postgres","description":"a server"}]}]}}`)
+	expectKind(t, events, agent.KindTurnStarted)
+	ev := expectKind(t, events, agent.KindApproval)
+	ap := ev.Approval
+	qs := domain.Questions(ap.ToolName, ap.Input)
+	if len(qs) != 1 || qs[0].Question != "Which database?" || len(qs[0].Options) != 2 {
+		t.Fatalf("questions %+v from %s", qs, ap.Input)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		errc <- s.(agent.Answerer).Answer(context.Background(), ap.ID, map[string]string{"Which database?": "sqlite"})
+	}()
+	m := f.next()
+	if string(m.ID) != "80" || string(m.Result) != `{"answers":{"q_db":{"answers":["sqlite"]}}}` {
+		t.Fatalf("answer %s", m.Result)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An attached image goes in as a localImage input; a file of another type
+// stays in the text only.
+func TestSendImages(t *testing.T) {
+	_, f, s := harness(t)
+	dir := t.TempDir()
+	png := filepath.Join(dir, "shot.png")
+	os.WriteFile(png, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0o644)
+	txt := filepath.Join(dir, "notes.txt")
+	os.WriteFile(txt, []byte("hi"), 0o644)
+	errc := make(chan error, 1)
+	go func() { errc <- s.(agent.ImageSender).SendImages(context.Background(), "look", []string{png, txt}) }()
+	m := f.expect("turn/start")
+	var p struct {
+		Input []map[string]string `json:"input"`
+	}
+	json.Unmarshal(m.Params, &p)
+	if len(p.Input) != 2 || p.Input[1]["type"] != "localImage" || p.Input[1]["path"] != png {
+		t.Fatalf("input %+v", p.Input)
+	}
+	f.reply(m.ID, `{"turn":{"id":"turn_2","status":"inProgress","items":[],"error":null}}`)
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The plan mode runs every turn in codex's plan collaboration mode, on
+// the thread's model.
+func TestPlanMode(t *testing.T) {
+	a, f := newFake(t)
+	res := startAsync(a, agent.Config{Cwd: "/work", PermissionMode: "plan", Effort: "low"})
+	f.handshake()
+	m := f.expect("thread/start")
+	var p map[string]any
+	json.Unmarshal(m.Params, &p)
+	if p["sandbox"] != "read-only" {
+		t.Fatalf("thread/start %v", p)
+	}
+	f.reply(m.ID, `{"thread":{"id":"thr_9","model":"gpt-x"}}`)
+	r := <-res
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- r.sess.Send(context.Background(), "plan it") }()
+	m = f.expect("turn/start")
+	var tp struct {
+		CollaborationMode struct {
+			Mode     string
+			Settings map[string]any
+		} `json:"collaborationMode"`
+	}
+	json.Unmarshal(m.Params, &tp)
+	if tp.CollaborationMode.Mode != "plan" || tp.CollaborationMode.Settings["model"] != "gpt-x" || tp.CollaborationMode.Settings["reasoning_effort"] != "low" {
+		t.Fatalf("turn/start %s", m.Params)
+	}
+	f.reply(m.ID, `{"turn":{"id":"turn_1","status":"inProgress","items":[],"error":null}}`)
+	if err := <-errc; err != nil {
+		t.Fatal(err)
 	}
 }

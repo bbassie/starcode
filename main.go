@@ -28,16 +28,14 @@ import (
 	"starcode/internal/app"
 	"starcode/internal/bus"
 	"starcode/internal/keys"
+	"starcode/internal/mcp"
 	"starcode/internal/providers"
+	"starcode/internal/push"
 	"starcode/internal/store"
 	"starcode/internal/tlsx"
 	"starcode/internal/web"
 	"starcode/internal/web/views"
 )
-
-// restartHome is the home binary as run() saw it, for the re-exec's
-// environment.
-var restartHome string
 
 func main() {
 	restart, err := run()
@@ -47,21 +45,8 @@ func main() {
 	}
 	if restart != "" {
 		// Same arguments, same environment, new binary. Exec keeps the pid,
-		// so a service manager sees nothing happen. A branch binary (a
-		// worktree's build) gets told where home is, so its banner can
-		// offer the way back; the home binary runs without the variable.
-		env := []string{}
-		for _, kv := range os.Environ() {
-			if !strings.HasPrefix(kv, web.HomeExeEnv+"=") {
-				env = append(env, kv)
-			}
-		}
-		if home := os.Getenv(web.HomeExeEnv); home != "" && restart != home {
-			env = append(env, web.HomeExeEnv+"="+home)
-		} else if home == "" && restart != restartHome {
-			env = append(env, web.HomeExeEnv+"="+restartHome)
-		}
-		if err := syscall.Exec(restart, os.Args, env); err != nil {
+		// so a service manager sees nothing happen.
+		if err := syscall.Exec(restart, os.Args, os.Environ()); err != nil {
 			fmt.Fprintln(os.Stderr, "starcode: restart:", err)
 			os.Exit(1)
 		}
@@ -90,6 +75,11 @@ func run() (string, error) {
 		sub, args = args[0], args[1:]
 	}
 	fs.Parse(args)
+	if sub == "mcp" {
+		// An agent's tool server: it talks to the running instance over
+		// its socket and must not touch the database itself.
+		return "", mcp.Main()
+	}
 
 	level := slog.LevelInfo
 	if *debug {
@@ -158,7 +148,7 @@ func run() (string, error) {
 		agents[in.Name] = ag
 	}
 	a := app.New(st, b, agents, log)
-	a.WorktreeRoot = filepath.Join(*data, "worktrees")
+	a.AttachDir = filepath.Join(*data, "attachments")
 	if err := a.Recover(context.Background()); err != nil {
 		return "", err
 	}
@@ -183,6 +173,16 @@ func run() (string, error) {
 		return "", err
 	}
 	h.Keys = kb
+	// Web Push needs a key of the instance's own; without one the
+	// notifications fall back to the page's (an open tab only).
+	if ps, err := push.Load(filepath.Join(*data, "vapid.pem")); err != nil {
+		log.Warn("web push off", "err", err)
+	} else {
+		if sub := os.Getenv("STARCODE_PUSH_SUBJECT"); sub != "" {
+			ps.Subject = sub
+		}
+		h.Push = ps
+	}
 	views.SetKeys(kb)
 	// HTTPS is on wherever a phone could be on the other end. The
 	// certificate comes from a CA of this instance's own unless files are
@@ -217,6 +217,22 @@ func run() (string, error) {
 	}
 	h.Watch(ctx)
 
+	// The agents reach the starcode tools through `starcode mcp`, which
+	// calls back on a socket of their own in the data dir.
+	if exe, err := os.Executable(); err != nil {
+		log.Warn("agent tools off: no executable path", "err", err)
+	} else if stopTools, err := serveAgentAPI(ctx, filepath.Join(*data, "agent.sock"), h.AgentHandler(), log); err != nil {
+		log.Warn("agent tools off", "err", err)
+	} else {
+		defer stopTools()
+		sock := filepath.Join(*data, "agent.sock")
+		a.Tools = func(threadID string) *agent.MCPServer {
+			return &agent.MCPServer{Command: exe, Args: []string{"mcp"}, Env: map[string]string{
+				mcp.EnvSocket: sock, mcp.EnvThread: threadID, mcp.EnvKey: h.AgentKey(threadID),
+			}}
+		}
+	}
+
 	// Requests inherit reqCtx so cancelling it ends every SSE stream at
 	// once; otherwise Shutdown would sit out its timeout waiting on them.
 	reqCtx, cancelReqs := context.WithCancel(context.Background())
@@ -231,6 +247,18 @@ func run() (string, error) {
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return reqCtx },
+		// Over HTTPS a page puts its stream, reconnects and posts on one
+		// HTTP/2 connection. A network change (a VPN switching paths) can
+		// kill it without either end hearing, and TCP alone takes many
+		// minutes to give up while the heartbeats sit unacknowledged. A
+		// ping that goes unanswered closes it after about 45s, so the
+		// device's next packet on it meets a reset and the browser opens
+		// a new connection instead of queueing on the dead one.
+		HTTP2: &http.HTTP2Config{
+			SendPingTimeout:  30 * time.Second,
+			PingTimeout:      15 * time.Second,
+			WriteByteTimeout: 30 * time.Second,
+		},
 	}
 	go func() {
 		<-ctx.Done()
@@ -258,9 +286,8 @@ func run() (string, error) {
 		return "", err
 	}
 	if restart.Load() {
-		restartHome = h.Update.Home
-		log.Info("restarting", "exe", h.Update.Target())
-		return h.Update.Target(), nil
+		log.Info("restarting", "exe", h.Update.Home)
+		return h.Update.Home, nil
 	}
 	return "", nil
 }
@@ -286,4 +313,25 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// serveAgentAPI serves the agent API on a Unix socket only this user can
+// open. A socket left by an instance that died is replaced.
+func serveAgentAPI(ctx context.Context, path string, h http.Handler, log *slog.Logger) (func(), error) {
+	os.Remove(path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Warn("agent api", "err", err)
+		}
+	}()
+	return func() { srv.Close(); os.Remove(path) }, nil
 }

@@ -1,0 +1,206 @@
+package views
+
+import "time"
+import "starcode/internal/store"
+
+// SchedulesData is the Schedules settings page.
+type SchedulesData struct {
+	Schedules []store.Schedule
+	Projects  []store.Project
+	// Threads names the threads schedules post into or ran in.
+	Threads map[string]store.Thread
+	Agents  []string
+	Looks   map[string]AgentLook
+}
+
+// localTime is a time the layout's clock script writes out in the
+// reader's zone.
+templ localTime(t time.Time) {
+	<time data-local={ t.UTC().Format(time.RFC3339) }>{ t.UTC().Format("Jan 2 15:04 UTC") }</time>
+}
+
+// scheduledRow is a schedule under the composer of its thread.
+templ scheduledRow(sc store.Schedule) {
+	<div class="queue-item scheduled">
+		<span class="queue-position" title="Scheduled">@Icon("alarm-clock", "ui-icon")</span>
+		<span class="ellipsis" title={ promptSummary(sc.Prompt) }>{ promptSummary(sc.Prompt) }</span>
+		<span class="dim tiny-text nowrap">
+			if sc.Paused {
+				paused
+			} else {
+				@localTime(sc.Next)
+			}
+			if sc.Cron != "" {
+				<span title="Repeats on this cron schedule">{ " · " + sc.Cron }</span>
+			}
+		</span>
+		<button class="btn ghost tiny queue-now" type="button" title="Send it now" data-on:click={ "@post('/api/schedules/" + sc.ID + "/run')" }>@Icon("fast-forward", "ui-icon") <span>now</span></button>
+		<button class="btn icon ghost" type="button" title="Cancel the scheduled message" data-on:click={ "@post('/api/schedules/" + sc.ID + "/remove')" }>@Icon("x", "ui-icon")</button>
+	</div>
+}
+
+// SendLater is the clock beside the send button: the prompt goes out at
+// a time instead of now. The browser works the time out in its own zone.
+templ SendLater(threadID string) {
+	<div class="pick pick-later" data-show="$prompt.trim() != ''" data-preserve-attr="style" style="display: none" data-on:click__outside="$pick == 'later' && !evt.target.closest('.pick') && ($pick = '')">
+		<button type="button" class="btn icon ghost later-btn" title="Send later" aria-label="Send later" data-on:click="$pick = $pick == 'later' ? '' : 'later'" data-class:open="$pick == 'later'">@Icon("alarm-clock", "ui-icon")</button>
+		<div class="pick-menu pick-later-menu" data-show="$pick == 'later'" data-preserve-attr="style" style="display: none">
+			<div class="pick-head">Send later</div>
+			<div class="later-opts">
+				@laterButton(threadID, "snoozeAt('1h')", "in 1 hour")
+				@laterButton(threadID, "snoozeAt('3h')", "in 3 hours")
+				@laterButton(threadID, "snoozeAt('tomorrow')", "tomorrow 9:00")
+				@laterButton(threadID, "snoozeAt('week')", "Monday 9:00")
+			</div>
+			<label class="snooze-at dim tiny-text">
+				<span>or at</span>
+				<input class="in" type="datetime-local" data-on:change={ "el.value && (" + laterPost(threadID, "snoozeAt('at', el.value)") + ")" }/>
+			</label>
+		</div>
+	</div>
+}
+
+templ laterButton(threadID, at, label string) {
+	<button class="btn ghost dim tiny" type="button" data-on:click={ laterPost(threadID, at) }>{ label }</button>
+}
+
+func laterPost(threadID, at string) string {
+	return "@post('/api/threads/" + threadID + "/later?at=' + encodeURIComponent(" + at + "), " + withSignal("_attach") + "); $pick = ''"
+}
+
+// SchedulesPage lists every schedule and adds recurring ones.
+templ SchedulesPage(d SchedulesData) {
+	<main id="main" class="settings-page">
+		<header id="mainhead" class="mainhead">
+			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
+			<nav class="crumbs"><span>Settings</span><span class="dim">/</span><span class="dim">Schedules</span></nav>
+		</header>
+		<div class="settings-scroll">
+			<div class="settings-shell">
+				@SettingsNav("schedules")
+				<div class="settings-content">
+					<section id="schedules" class="settings-section">
+						<header>
+							<h1>Schedules</h1>
+							<p class="dim">Prompts that go out later. A recurring one opens a new thread in its project on every run. Messages sent later from a composer, and schedules agents made with the starcode tools, show here too.</p>
+						</header>
+						<div class="settings-card schedule-list">
+							if len(d.Schedules) == 0 {
+								<p class="dim pad">Nothing scheduled.</p>
+							}
+							for _, sc := range d.Schedules {
+								@scheduleCard(d, sc)
+							}
+						</div>
+					</section>
+					<section class="settings-section" data-signals={ "{schedProject: " + jsq(FirstProject(d.Projects)) + ", schedPrompt: '', schedCron: '0 9 * * 1-5', schedTitle: '', schedAgent: ''}" }>
+						<header>
+							<h1>New recurring prompt</h1>
+							<p class="dim">The cron is five fields: minute, hour, day of the month, month, day of the week, in this browser's time zone. <code>0 9 * * 1-5</code> is 9:00 on weekdays, <code>*/30 * * * *</code> every half hour, <code>{ "@daily" }</code> midnight.</p>
+						</header>
+						<form class="settings-card schedule-form" data-on:submit="evt.preventDefault(); @post('/api/schedules?tz=' + encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone))">
+							<div class="setting-row">
+								<label for="sched-project">Project</label>
+								<select id="sched-project" class="in" data-bind:sched-project>
+									for _, p := range d.Projects {
+										<option value={ p.ID }>{ p.Name }</option>
+									}
+								</select>
+							</div>
+							<div class="setting-row">
+								<label for="sched-agent">Agent</label>
+								<select id="sched-agent" class="in" data-bind:sched-agent>
+									<option value="">the project's default</option>
+									for _, a := range d.Agents {
+										<option value={ a }>{ agentLabelOf(d.Looks[a], a) }</option>
+									}
+								</select>
+							</div>
+							<div class="setting-row">
+								<label for="sched-cron">When (cron)</label>
+								<input id="sched-cron" class="in mono" type="text" data-bind:sched-cron spellcheck="false" autocomplete="off"/>
+							</div>
+							<div class="setting-row">
+								<label for="sched-title">Thread title</label>
+								<input id="sched-title" class="in" type="text" data-bind:sched-title placeholder="optional; the date is added" autocomplete="off"/>
+							</div>
+							<textarea class="in schedule-prompt" rows="4" data-bind:sched-prompt placeholder="What the agent should do on every run…"></textarea>
+							<div class="schedule-actions">
+								<button class="btn primary" type="submit">@Icon("calendar-clock", "ui-icon") <span>Add</span></button>
+							</div>
+						</form>
+					</section>
+				</div>
+			</div>
+		</div>
+	</main>
+}
+
+templ scheduleCard(d SchedulesData, sc store.Schedule) {
+	<div class={ "schedule-card", templ.KV("paused", sc.Paused) }>
+		<div class="schedule-what">
+			<span class="ellipsis">{ promptSummary(sc.Prompt) }</span>
+			<span class="dim tiny-text">
+				if sc.ThreadID != "" {
+					if t, ok := d.Threads[sc.ThreadID]; ok {
+						into <a href={ templ.SafeURL("/threads/" + t.ID) }>{ t.Title }</a>
+					}
+				} else {
+					new thread in { projectName(d.Projects, sc.ProjectID) }
+				}
+				if sc.Cron != "" {
+					{ " · " }<code>{ sc.Cron }</code>
+				}
+				if sc.By != "" {
+					if t, ok := d.Threads[sc.By]; ok {
+						{ " · made by the agent of " }<a href={ templ.SafeURL("/threads/" + t.ID) }>{ t.Title }</a>
+					}
+				}
+			</span>
+			<span class="dim tiny-text">
+				if sc.Paused {
+					paused
+				} else {
+					next { " " }@localTime(sc.Next)
+				}
+				if !sc.LastAt.IsZero() {
+					{ " · last " }@localTime(sc.LastAt)
+					if t, ok := d.Threads[sc.LastThread]; ok && sc.ThreadID == "" {
+						{ " in " }<a href={ templ.SafeURL("/threads/" + t.ID) }>{ t.Title }</a>
+					}
+				}
+				if sc.LastError != "" {
+					<span class="err-text">{ " · failed: " + sc.LastError }</span>
+				}
+			</span>
+		</div>
+		<div class="schedule-btns">
+			<button class="btn ghost tiny" type="button" title="Run it now" data-on:click={ "@post('/api/schedules/" + sc.ID + "/run')" }>@Icon("fast-forward", "ui-icon") <span>run now</span></button>
+			if sc.Cron != "" {
+				if sc.Paused {
+					<button class="btn ghost tiny" type="button" data-on:click={ "@post('/api/schedules/" + sc.ID + "/resume')" }>@Icon("rotate-cw", "ui-icon") <span>resume</span></button>
+				} else {
+					<button class="btn ghost tiny" type="button" data-on:click={ "@post('/api/schedules/" + sc.ID + "/pause')" }>@Icon("square", "ui-icon") <span>pause</span></button>
+				}
+			}
+			<button class="btn icon ghost" type="button" title="Delete" data-on:click={ "confirm('Delete this schedule?') && @post('/api/schedules/" + sc.ID + "/remove')" }>@Icon("trash-2", "ui-icon")</button>
+		</div>
+	</div>
+}
+
+// FirstProject is the first project's id, for a form's default.
+func FirstProject(ps []store.Project) string {
+	if len(ps) == 0 {
+		return ""
+	}
+	return ps[0].ID
+}
+
+func projectName(ps []store.Project, id string) string {
+	for _, p := range ps {
+		if p.ID == id {
+			return p.Name
+		}
+	}
+	return "a removed project"
+}

@@ -141,3 +141,28 @@ func TestRateLimitsUpdatedReachesEverySession(t *testing.T) {
 		}
 	}
 }
+
+// TestUsageLimitTurnReportsReset checks a turn codex failed on the usage
+// limit carries the reset of the window that ran out, and another
+// failure none.
+func TestUsageLimitTurnReportsReset(t *testing.T) {
+	_, f, s := harness(t)
+	events := s.Events()
+	f.send(`{"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex","planType":"plus","primary":{"usedPercent":100,"resetsAt":1758000000,"windowDurationMins":300},"secondary":{"usedPercent":40,"resetsAt":1758500000,"windowDurationMins":10080}}}}`)
+	expectKind(t, events, agent.KindLimits)
+
+	sendAsync(t, f, s, "go on", "turn_1")
+	expectKind(t, events, agent.KindTurnStarted)
+	f.send(`{"method":"turn/completed","params":{"threadId":"thr_1","turn":{"id":"turn_1","status":"failed","error":{"message":"You've hit your usage limit.","codexErrorInfo":"usageLimitExceeded"}}}}`)
+	ev := expectKind(t, events, agent.KindTurnCompleted)
+	if !ev.TurnCompleted.LimitReset.Equal(time.Unix(1758000000, 0)) {
+		t.Fatalf("limit reset = %v", ev.TurnCompleted.LimitReset)
+	}
+
+	sendAsync(t, f, s, "again", "turn_2")
+	expectKind(t, events, agent.KindTurnStarted)
+	f.send(`{"method":"turn/completed","params":{"threadId":"thr_1","turn":{"id":"turn_2","status":"failed","error":{"message":"stream disconnected"}}}}`)
+	if ev := expectKind(t, events, agent.KindTurnCompleted); !ev.TurnCompleted.LimitReset.IsZero() {
+		t.Fatalf("another failure has a limit reset: %v", ev.TurnCompleted.LimitReset)
+	}
+}

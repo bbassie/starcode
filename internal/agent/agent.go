@@ -32,6 +32,17 @@ type Config struct {
 	// That is how a rewind drops the turns after it. The session then
 	// reports the new id in SessionInfo.
 	ForkAt string
+	// Tools is the starcode MCP server the agent gets as "starcode", which
+	// lets it act on its own thread and others (see internal/mcp); nil
+	// leaves it out.
+	Tools *MCPServer
+}
+
+// MCPServer is a stdio MCP server for the agent to launch.
+type MCPServer struct {
+	Command string
+	Args    []string
+	Env     map[string]string
 }
 
 // Agent creates sessions. One Agent value serves every thread that uses it.
@@ -57,6 +68,14 @@ type Session interface {
 	Close() error
 }
 
+// ImageSender is implemented by sessions that take images with a prompt:
+// the files at images go to the model as images, not just as paths in the
+// text. A file the session cannot send is left to the text, which names
+// every attachment anyway.
+type ImageSender interface {
+	SendImages(ctx context.Context, text string, images []string) error
+}
+
 // ModeSetter is implemented by sessions that can change the permission mode
 // while a turn runs. A session without it, or one that returns
 // ErrModeNextTurn, keeps its mode for the running turn; the app then starts
@@ -75,6 +94,26 @@ var ErrModeNextTurn = errors.New("permission mode applies from the next turn")
 // TurnCompleted, so the app treats it like a prompt without a prompt.
 type Compactor interface {
 	Compact(ctx context.Context) error
+}
+
+// TaskStopper is implemented by sessions that can stop one subagent (a
+// Claude Task) while the turn and the other subagents go on. toolID is the
+// tool call that started it. The subagent's tool call then completes with
+// what it had so far.
+type TaskStopper interface {
+	StopTask(ctx context.Context, toolID string) error
+}
+
+// ErrNoTask is a StopTask for a tool call that runs no task (any more).
+var ErrNoTask = errors.New("that subagent is not running")
+
+// Answerer is implemented by sessions whose agent can put questions to
+// the human (Claude Code's AskUserQuestion). The question arrives as an
+// ApprovalRequested; Answer allows the call with answers, which maps each
+// question's text to the chosen option labels (joined by ", ") or to the
+// human's own words. Resolve with Deny still declines it.
+type Answerer interface {
+	Answer(ctx context.Context, approvalID string, answers map[string]string) error
 }
 
 type Decision string
@@ -216,6 +255,10 @@ type TurnCompleted struct {
 	InputTokens  int64
 	OutputTokens int64
 	Error        string
+	// LimitReset is set when the turn failed because the account ran
+	// out of its plan's usage, to when the limit lifts (as the CLI
+	// reported it); zero for any other outcome.
+	LimitReset time.Time
 }
 
 // Notice is a non-fatal message to show in the transcript (rate limits,
@@ -238,6 +281,24 @@ type Closed struct {
 type Limits struct {
 	CheckedAt time.Time
 	Windows   []LimitWindow
+	// Resets is the account's banked resets, nil when it has none or
+	// the agent does not report them.
+	Resets *ResetCredits
+}
+
+// ResetCredits is a plan's banked resets: grants that each clear the
+// usage windows once when redeemed. NextID is the grant a redeem uses.
+type ResetCredits struct {
+	Available int
+	NextID    string
+	Expires   time.Time // when the next grant lapses; zero when it does not
+}
+
+// ResetRedeemer is an agent whose plan can redeem a banked reset.
+// requestID makes a retry the same claim. The outcome is a sentence for
+// the human: "Usage reset", "Nothing to reset yet", and so on.
+type ResetRedeemer interface {
+	RedeemReset(ctx context.Context, grantID, requestID string) (outcome string, err error)
 }
 
 // LimitWindow is one allowance: the 5-hour session, the week, a
@@ -248,6 +309,13 @@ type LimitWindow struct {
 	Label    string    // "Session", "Weekly", "Weekly · Fable"
 	Percent  float64   // 0..100 used
 	ResetsAt time.Time // zero when unknown
+}
+
+// Asker is an agent that can answer a one-off prompt with no tools and
+// no saved session, for small jobs such as a thread's title. It costs a
+// process launch and a few tokens on a small model.
+type Asker interface {
+	Ask(ctx context.Context, prompt string) (string, error)
 }
 
 // LimitReader is an agent that can read its account's limits without a

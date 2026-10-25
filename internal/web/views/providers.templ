@@ -442,16 +442,12 @@ func contains(xs []string, x string) bool {
 // turn that is running when the process goes stops, and picks up again
 // on the next start when Resume is on (Settings > General); hence the
 // count.
-// BannerData is what the update bar shows: the home binary rebuilt,
-// binaries built in the project's worktrees (one row each, by branch),
-// and, while a branch binary runs, the way back to the home one.
+// BannerData is what the update bar shows: the home binary rebuilt, or
+// the main checkout behind origin.
 type BannerData struct {
 	HomeChanged bool
 	Running     int // turns a restart would cut off
 	Resume      bool
-	Branch      string
-	BranchTitle string
-	Builds      []BranchBuild
 	// Behind is how many commits the home checkout is behind origin;
 	// the pull fields are the state of "pull and build".
 	Behind      int
@@ -463,13 +459,8 @@ type BannerData struct {
 	HomeKey string
 }
 
-type BranchBuild struct {
-	Path, Branch, Title string
-	At                  time.Time
-}
-
 templ UpdateBanner(d BannerData) {
-	if d.HomeChanged || d.Branch != "" || len(d.Builds) > 0 || d.Behind > 0 || d.PullRunning || d.PullErr != "" {
+	if d.HomeChanged || d.Behind > 0 || d.PullRunning || d.PullErr != "" {
 		<div id="update" class="update">
 			if d.PullRunning {
 				<div class="update-row">
@@ -495,18 +486,6 @@ templ UpdateBanner(d BannerData) {
 					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
 				</div>
 			}
-			if d.Branch != "" {
-				// Stays up while a branch binary runs; no "later".
-				<div class="update-row branch">
-					<span>@Icon("folder-git-2", "ui-icon") <span>Running the build from <span class="mono">{ d.Branch }</span></span>
-						if d.BranchTitle != "" {
-							<span class="dim">({ d.BranchTitle })</span>
-						}
-					</span>
-					<span class="spacer"></span>
-					<button class="btn tiny" data-on:click={ restartClick(d, "") } title="Restart into the main checkout's binary">@Icon("undo-2", "ui-icon") back to main</button>
-				</div>
-			}
 			if d.HomeChanged {
 				<div class="update-row" data-dismiss={ "home:" + d.HomeKey }>
 					<span>@Icon("rotate-cw", "ui-icon") starcode was rebuilt. Restart to run the new version.</span>
@@ -518,20 +497,7 @@ templ UpdateBanner(d BannerData) {
 						}
 					}
 					<span class="spacer"></span>
-					<button class="btn primary tiny" data-on:click={ restartClick(d, "") }>restart now</button>
-					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
-				</div>
-			}
-			for _, b := range d.Builds {
-				<div class="update-row" data-dismiss={ "build:" + b.Path + ":" + b.At.UTC().Format(time.RFC3339) }>
-					<span>@Icon("folder-git-2", "ui-icon") <span>This thread's build is ready: <span class="mono">{ b.Branch }</span></span>
-						if b.Title != "" {
-							<span class="dim">({ b.Title })</span>
-						}
-						<span class="dim" data-ago={ b.At.UTC().Format(time.RFC3339) }>{ ago(b.At) }</span>
-					</span>
-					<span class="spacer"></span>
-					<button class="btn primary tiny" data-on:click={ restartClick(d, b.Path) } title={ "Restart into " + b.Path }>restart into it</button>
+					<button class="btn primary tiny" data-on:click={ restartClick(d) }>restart now</button>
 					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
 				</div>
 			}
@@ -541,16 +507,15 @@ templ UpdateBanner(d BannerData) {
 	}
 }
 
-// restartClick posts the restart, into a branch build when into is set,
-// after a warning when turns would be cut off and not resumed.
-func restartClick(d BannerData, into string) string {
-	url := "/api/restart"
-	if into != "" {
-		url += "?into=" + urlQuery(into)
-	}
+// restartClick posts the restart, after a warning when turns would be
+// cut off and not resumed. The button says so at once and the page
+// reconnects fast (restartStarted in the layout), since the stream is
+// what shows the restart went through.
+func restartClick(d BannerData) string {
+	post := "(restartStarted(el), @post('/api/restart'))"
 	if d.Running > 0 && !d.Resume {
-		return fmt.Sprintf("confirm('%d running %s will be interrupted. Restart now?') && @post('%s')", d.Running, plural(d.Running, "turn", "turns"), url)
+		return fmt.Sprintf("confirm('%d running %s will be interrupted. Restart now?') && %s", d.Running, plural(d.Running, "turn", "turns"), post)
 	}
-	return "@post('" + url + "')"
+	return post
 }
 

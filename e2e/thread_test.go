@@ -3,6 +3,8 @@
 package e2e
 
 import (
+	"context"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,6 +12,9 @@ import (
 	"testing"
 
 	"github.com/go-rod/rod/lib/input"
+
+	"starcode/internal/domain"
+	"starcode/internal/store"
 )
 
 func TestSendAndRewind(t *testing.T) {
@@ -42,6 +47,39 @@ func TestSendAndRewind(t *testing.T) {
 	p.KeyActions().Type(input.Enter).MustDo()
 	e.until("the turn after the rewind", func() bool { return len(e.items(id, "result")) > before })
 	e.waitIdle(id)
+	wait(p, `() => document.querySelectorAll('.item.user').length === 2`)
+}
+
+func TestBranch(t *testing.T) {
+	e := newEnv(t)
+	id := e.thread()
+	e.turns(id, "first prompt", "second prompt")
+	p := e.page("/threads/"+id, false)
+	wait(p, `() => document.querySelectorAll('.item.user').length === 2`)
+
+	// In front of the second prompt: the new thread has the first, and the
+	// second waits in its composer.
+	click(p.MustElements(`.item.user [aria-label="Branch from before this message"]`)[1])
+	wait(p, `(id) => location.pathname.startsWith('/threads/') && !location.pathname.endsWith(id)`, id)
+	p.MustElement("#sidebar .side-brand")
+	wait(p, `() => document.querySelectorAll('.item.user').length === 1`)
+	wait(p, `() => document.querySelector('form.composer .prompt').value === 'second prompt'`)
+	branch := strings.TrimPrefix(p.MustEval(`() => location.pathname`).String(), "/threads/")
+	if n := len(e.items(id, "user")); n != 2 {
+		t.Fatalf("the original has %d prompts", n)
+	}
+	before := len(e.items(branch, "result"))
+	p.MustElement("form.composer .prompt").MustFocus()
+	p.KeyActions().Type(input.Enter).MustDo()
+	e.until("the branch's turn", func() bool { return len(e.items(branch, "result")) > before })
+	e.waitIdle(branch)
+	wait(p, `() => document.querySelectorAll('.item.user').length === 2`)
+
+	// The whole thread, from the header menu.
+	click(p.MustElement("#mainhead .more-toggle"))
+	click(p.MustElementR(".head-more button", "^\\s*branch"))
+	wait(p, `(id) => !location.pathname.endsWith(id)`, branch)
+	p.MustElement("#sidebar .side-brand")
 	wait(p, `() => document.querySelectorAll('.item.user').length === 2`)
 }
 
@@ -202,4 +240,114 @@ func TestPaletteAndPhone(t *testing.T) {
 	if toast > 200 {
 		t.Errorf("the toast sits %dpx down on a phone, over the composer", toast)
 	}
+}
+
+func TestWorkHeader(t *testing.T) {
+	e := newEnv(t)
+	id := e.thread()
+	p := e.page("/threads/"+id, false)
+	p.MustElement("form.composer .prompt").MustInput("look around")
+	p.KeyActions().Type(input.Enter).MustDo()
+	// While the turn runs the block stays folded and names the step.
+	wait(p, `() => !!document.querySelector('details.work.running .work-live')`)
+	if p.MustEval(`() => document.querySelector('details.work.running').open`).Bool() {
+		t.Error("a running work block opened on its own")
+	}
+	e.waitIdle(id)
+	wait(p, `() => !document.querySelector('details.work.running')`)
+	head := p.MustElement("details.work > summary").MustText()
+	if !strings.Contains(head, "Worked for") || !strings.Contains(head, "ran 1 command") {
+		t.Errorf("work header = %q", head)
+	}
+	// Rows are a kind icon and words, not the tool's name.
+	click(p.MustElement("details.work > summary"))
+	row := p.MustElement("details.item.tool.k-command > summary").MustText()
+	if strings.HasPrefix(strings.TrimSpace(row), "Bash") {
+		t.Errorf("command row = %q", row)
+	}
+}
+
+func TestTurnFilesCard(t *testing.T) {
+	e := newEnv(t)
+	id := e.thread()
+	e.turns(id, "edit something")
+	p := e.page("/threads/"+id, false)
+	card := p.MustElement(".item.result .turn-files > summary").MustText()
+	if !strings.Contains(card, "1 file edited") || !strings.Contains(card, "+2") || !strings.Contains(card, "−1") {
+		t.Errorf("card = %q", card)
+	}
+	click(p.MustElement(".item.result .turn-files > summary"))
+	if path := p.MustElement(".tf-path").MustText(); path != "README.md" {
+		t.Errorf("card path = %q", path)
+	}
+	// The edit itself reads as a diff.
+	click(p.MustElement("details.work > summary"))
+	click(p.MustElement("details.item.tool.k-edit > summary"))
+	if n := len(p.MustElements("details.item.tool.k-edit .tdiff .dl.add")); n != 2 {
+		t.Errorf("added lines in the diff = %d", n)
+	}
+	if os.Getenv("STARCODE_E2E_SHOTS") != "" {
+		p.MustScreenshot(filepath.Join(os.Getenv("STARCODE_E2E_SHOTS"), "turn-files.png"))
+	}
+}
+
+func TestAskUserQuestion(t *testing.T) {
+	e := newEnv(t)
+	id := e.thread()
+	p := e.page("/threads/"+id, false)
+	if err := e.app.SendPrompt(context.Background(), id, "ask me first"); err != nil {
+		t.Fatal(err)
+	}
+	wait(p, `() => !!document.querySelector('form.approval.question')`)
+	ap := func() store.Approval {
+		aps, _ := e.store.Approvals(context.Background(), id)
+		if len(aps) != 1 {
+			t.Fatalf("approvals = %d", len(aps))
+		}
+		return aps[0]
+	}
+
+	// Sending with nothing picked leaves the question waiting.
+	click(p.MustElement(`form.approval.question [data-decision="allow"]`))
+	wait(p, `() => !!document.querySelector('#toast.toast')`)
+	if a := ap(); a.Decision != "" {
+		t.Fatalf("answered without answers: %q", a.Decision)
+	}
+
+	click(p.MustElementR(".q-opt", "Grey"))
+	click(p.MustElementR(".q-opt", "Home"))
+	click(p.MustElementR(".q-opt", "Settings"))
+	p.MustElement(`input[name="q1-other"]`).MustInput("Sidebar")
+	click(p.MustElement(`form.approval.question [data-decision="allow"]`))
+	e.until("the answers", func() bool { return ap().Decision != "" })
+	want := map[string]string{"Which colour should the button be?": "Grey", "Which pages need it?": "Home, Settings, Sidebar"}
+	if got := ap().Answers; !maps.Equal(got, want) {
+		t.Fatalf("answers = %v, want %v", got, want)
+	}
+	wait(p, `() => document.querySelectorAll('.approval.resolved .q-answer').length === 2`)
+	e.waitIdle(id)
+	for _, it := range e.items(id, domain.KindTool) {
+		if it.ToolName == "AskUserQuestion" && !strings.Contains(it.Output, `"Which pages need it?"="Home, Settings, Sidebar"`) {
+			t.Fatalf("tool output = %q", it.Output)
+		}
+	}
+}
+
+// TestButtonPending sends a prompt with the send button and checks the
+// button carries .pending while the request is out and drops it after.
+func TestButtonPending(t *testing.T) {
+	e := newEnv(t)
+	id := e.thread()
+	p := e.page("/threads/"+id, false)
+	p.MustEval(`() => {
+		window.sawPending = false;
+		new MutationObserver(() => {
+			if (document.querySelector('form.composer button.pending')) window.sawPending = true;
+		}).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+	}`)
+	p.MustElement("form.composer .prompt").MustInput("a prompt")
+	click(p.MustElement(`form.composer button[type=submit]`))
+	wait(p, `() => window.sawPending`)
+	e.waitIdle(id)
+	wait(p, `() => !document.querySelector('.pending')`)
 }

@@ -1,12 +1,15 @@
 // Package fake is a scripted agent used for UI development and tests. Every
 // Send replays the same little scenario: some thinking, a tool call that
-// needs approval (except in the yolo mode), streamed prose, a result.
+// needs approval (except in the yolo mode), streamed prose, a result. A
+// prompt with "ask me" in it first puts a question to the human, the way
+// Claude Code's AskUserQuestion does, in every mode.
 package fake
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +47,22 @@ func (a *Agent) Provider(ctx context.Context) (agent.ProviderInfo, error) {
 	return agent.ProviderInfo{Binary: "built in", Version: "0.0.0", LoggedIn: &yes, Account: "no account needed"}, nil
 }
 
+// Ask answers a one-off prompt without a model: a title-shaped line made
+// from the last "Me:" line of the prompt, so retitling can be tried in
+// the UI for free.
+func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
+	last := "the conversation"
+	for _, l := range strings.Split(prompt, "\n") {
+		if t, ok := strings.CutPrefix(l, "Me: "); ok && strings.TrimSpace(t) != "" {
+			last = strings.TrimSpace(t)
+		}
+	}
+	if r := []rune(last); len(r) > 40 {
+		last = string(r[:40])
+	}
+	return "Fake title: " + last, nil
+}
+
 func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	s := &session{
@@ -53,6 +72,7 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 		cancel:  cancel,
 		events:  make(chan agent.Event, 256),
 		decided: make(chan agent.Decision, 1),
+		answers: make(chan map[string]string, 1),
 		stop:    make(chan struct{}, 1),
 	}
 	id := cfg.ResumeID
@@ -65,7 +85,10 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 		<-ctx.Done()
 		s.closeOnce.Do(func() {
 			s.emit(agent.Event{Kind: agent.KindClosed, Closed: &agent.Closed{}})
+			s.emitMu.Lock()
+			s.closed = true
 			close(s.events)
+			s.emitMu.Unlock()
 		})
 	}()
 	return s, nil
@@ -78,15 +101,30 @@ type session struct {
 	cancel    context.CancelFunc
 	events    chan agent.Event
 	decided   chan agent.Decision
+	answers   chan map[string]string
 	stop      chan struct{}
 	mu        sync.Mutex
 	turn      int
 	ctxTokens int64
 	running   bool
+	// task is the subagent running now and taskStop whether StopTask
+	// asked it to end.
+	task      string
+	taskStop  bool
 	closeOnce sync.Once
+	// emitMu and closed keep emit off the channel once it is closed: the
+	// turn's goroutine can still be emitting when the session closes, and
+	// a send on a closed channel panics even inside a select.
+	emitMu sync.RWMutex
+	closed bool
 }
 
 func (s *session) emit(e agent.Event) {
+	s.emitMu.RLock()
+	defer s.emitMu.RUnlock()
+	if s.closed {
+		return
+	}
 	select {
 	case s.events <- e:
 	case <-s.ctx.Done():
@@ -160,6 +198,11 @@ func (s *session) run(turnID, prompt string) {
 	}
 	s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t1, Status: "done", Output: "main.go\ninternal/app/app.go\ninternal/web/server.go"}})
 
+	if strings.Contains(strings.ToLower(prompt), "ask me") && !s.ask(turnID) {
+		finish("interrupted")
+		return
+	}
+
 	// A tool that needs approval.
 	t2 := turnID + "-t2"
 	in2, _ := json.Marshal(map[string]any{"command": "go test ./...", "description": "Run the test suite"})
@@ -191,29 +234,33 @@ func (s *session) run(turnID, prompt string) {
 		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t2, Status: "done"}})
 	}
 
+	// An edit, which the transcript shows as a diff and the turn's
+	// changed-files card counts. Nothing is written: it is only the call.
+	t4 := turnID + "-t4"
+	in4, _ := json.Marshal(map[string]any{"file_path": filepath.Join(s.cfg.Cwd, "README.md"), "old_string": "# project\nold line", "new_string": "# project\nnew line\nanother line"})
+	s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: t4, Name: "Edit", Input: in4, Summary: "README.md"}})
+	s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t4, Status: "done", Output: "The file README.md has been updated."}})
+
 	// A subagent: a Task tool whose nested calls carry its id as Parent,
 	// the way Claude Code's parent_tool_use_id does.
 	t3 := turnID + "-t3"
 	in3, _ := json.Marshal(map[string]any{"description": "Look over the tests", "subagent_type": "Explore", "prompt": "List the test files and say what they cover."})
 	s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: t3, Name: "Task", Input: in3, Summary: "Look over the tests"}})
-	for i, name := range []string{"Glob", "Read"} {
-		nid := fmt.Sprintf("%s-n%d", t3, i)
-		nin, _ := json.Marshal(map[string]any{"pattern": "**/*_test.go"})
-		s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: nid, Name: name, Input: nin, Summary: "**/*_test.go", Parent: t3}})
-		if !s.sleep() {
-			finish("interrupted")
-			return
-		}
-		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: nid, Status: "done", Output: "internal/app/app_test.go"}})
+	s.mu.Lock()
+	s.task, s.taskStop = t3, false
+	s.mu.Unlock()
+	switch s.subagent(t3) {
+	case "done":
+		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t3, Status: "done", Output: "The tests cover the queue, restarts and the store."}})
+	case "stopped":
+		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t3, Status: "failed", IsError: true, Output: "[Request interrupted by user for tool use]"}})
+	default:
+		finish("interrupted")
+		return
 	}
-	for _, w := range strings.SplitAfter("The tests cover the queue, restarts and the store. ", " ") {
-		s.emit(agent.Event{Kind: agent.KindTextDelta, TextDelta: &agent.TextDelta{MessageID: t3 + "-m", Text: w, Parent: t3}})
-		if !s.sleep() {
-			finish("interrupted")
-			return
-		}
-	}
-	s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t3, Status: "done", Output: "The tests cover the queue, restarts and the store."}})
+	s.mu.Lock()
+	s.task = ""
+	s.mu.Unlock()
 
 	s.context(4_500)
 	msg2 := turnID + "-m2"
@@ -272,12 +319,104 @@ func (s *session) Compact(ctx context.Context) error {
 	return nil
 }
 
+// subagent runs the Task t3's nested calls and text. It reports "done",
+// "stopped" when StopTask ended it, or "interrupted" for the whole turn.
+func (s *session) subagent(t3 string) string {
+	stopped := func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.taskStop
+	}
+	for i, name := range []string{"Glob", "Read"} {
+		nid := fmt.Sprintf("%s-n%d", t3, i)
+		nin, _ := json.Marshal(map[string]any{"pattern": "**/*_test.go"})
+		s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: nid, Name: name, Input: nin, Summary: "**/*_test.go", Parent: t3}})
+		if !s.sleep() {
+			return "interrupted"
+		}
+		if stopped() {
+			// The nested call ends with the subagent.
+			s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: nid, Status: "failed", IsError: true}})
+			return "stopped"
+		}
+		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: nid, Status: "done", Output: "internal/app/app_test.go"}})
+	}
+	for _, w := range strings.SplitAfter("The tests cover the queue, restarts and the store. ", " ") {
+		s.emit(agent.Event{Kind: agent.KindTextDelta, TextDelta: &agent.TextDelta{MessageID: t3 + "-m", Text: w, Parent: t3}})
+		if !s.sleep() {
+			return "interrupted"
+		}
+		if stopped() {
+			return "stopped"
+		}
+	}
+	return "done"
+}
+
+// StopTask ends the running subagent; the turn goes on.
+func (s *session) StopTask(ctx context.Context, toolID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.task == "" || s.task != toolID {
+		return agent.ErrNoTask
+	}
+	s.taskStop = true
+	return nil
+}
+
 func (s *session) Interrupt(ctx context.Context) error {
 	select {
 	case s.stop <- struct{}{}:
 	default:
 	}
 	return nil
+}
+
+// ask puts one single and one multiple choice question to the human and
+// reports whether the turn may go on.
+func (s *session) ask(turnID string) bool {
+	id := turnID + "-q"
+	in, _ := json.Marshal(map[string]any{"questions": []map[string]any{
+		{"question": "Which colour should the button be?", "header": "Colour", "multiSelect": false, "options": []map[string]any{
+			{"label": "Blue", "description": "Matches the accent"},
+			{"label": "Grey", "description": "Quieter"},
+		}},
+		{"question": "Which pages need it?", "header": "Pages", "multiSelect": true, "options": []map[string]any{
+			{"label": "Home", "description": ""},
+			{"label": "Thread", "description": ""},
+			{"label": "Settings", "description": ""},
+		}},
+	}})
+	s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: id, Name: "AskUserQuestion", Input: in}})
+	s.emit(agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{ID: id + "-a", ToolID: id, ToolName: "AskUserQuestion", Input: in}})
+	out := "The user did not answer the questions."
+	select {
+	case answers := <-s.answers:
+		var b strings.Builder
+		b.WriteString("User has answered your questions:")
+		for _, q := range []string{"Which colour should the button be?", "Which pages need it?"} {
+			fmt.Fprintf(&b, " %q=%q.", q, answers[q])
+		}
+		out = b.String()
+	case <-s.decided:
+	case <-s.stop:
+		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: id, Status: "declined", Output: "interrupted"}})
+		return false
+	case <-s.ctx.Done():
+		return false
+	}
+	s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: id, Status: "done", Output: out}})
+	return true
+}
+
+// Answer answers the question ask put.
+func (s *session) Answer(ctx context.Context, approvalID string, answers map[string]string) error {
+	select {
+	case s.answers <- answers:
+		return nil
+	default:
+		return fmt.Errorf("fake: no pending question")
+	}
 }
 
 func (s *session) Resolve(ctx context.Context, approvalID string, d agent.Decision) error {

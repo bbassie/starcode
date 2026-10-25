@@ -346,9 +346,53 @@ func inboxOrder(ts []store.Thread) []store.Thread {
 		}
 		return 3
 	}
+	// A thread an agent spawned sits right under the thread that spawned
+	// it, and the family ranks by its most urgent member.
+	byID := map[string]store.Thread{}
+	for _, t := range ts {
+		byID[t.ID] = t
+	}
+	root := func(t store.Thread) string {
+		for i := 0; t.Parent != "" && i < 8; i++ {
+			p, ok := byID[t.Parent]
+			if !ok {
+				break
+			}
+			t = p
+		}
+		return t.ID
+	}
+	family := map[string]int{}
+	for _, t := range ts {
+		r := root(t)
+		if cur, ok := family[r]; !ok || rank(t) < cur {
+			family[r] = rank(t)
+		}
+	}
 	out := append([]store.Thread(nil), ts...)
-	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
-	return out
+	sort.SliceStable(out, func(i, j int) bool { return family[root(out[i])] < family[root(out[j])] })
+	kids := map[string][]store.Thread{}
+	for _, t := range out {
+		if _, ok := byID[t.Parent]; ok {
+			kids[t.Parent] = append(kids[t.Parent], t)
+		}
+	}
+	nested := make([]store.Thread, 0, len(out))
+	var add func(t store.Thread, depth int)
+	add = func(t store.Thread, depth int) {
+		nested = append(nested, t)
+		if depth < 8 {
+			for _, k := range kids[t.ID] {
+				add(k, depth+1)
+			}
+		}
+	}
+	for _, t := range out {
+		if _, ok := byID[t.Parent]; !ok {
+			add(t, 0)
+		}
+	}
+	return nested
 }
 
 // settledThreads are the archived threads whose turn is over, the last
@@ -398,12 +442,12 @@ func initialsStyle(name string) string {
 }
 
 // ThreadRow is one thread in the inbox or under its project: the project
-// mark and name (inbox only), the worktree branch and the agent mark on
-// the first line, the status and title on the second.
+// mark and name (inbox only) and the age on the first line, the status,
+// title and agent mark on the second.
 templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool, look AgentLook, isUnread bool, pr store.PRState) {
 	<li
 		id={ "row-" + t.ID }
-		class={ "thread-row", "st-" + t.Status, templ.KV("current", current), templ.KV("unread", isUnread) }
+		class={ "thread-row", "st-" + t.Status, templ.KV("current", current), templ.KV("unread", isUnread), templ.KV("child", t.Parent != "") }
 		data-id={ t.ID }
 		data-k={ searchKey(t, p) }
 		data-show="$q == '' || el.dataset.k.includes($q.toLowerCase())"
@@ -413,9 +457,6 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 				if showProject {
 					<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>
 					<span class="dim tiny-text ellipsis">{ p.Name }</span>
-				}
-				if t.Worktree != "" {
-					<span class="dim tiny-text ellipsis row-branch" title={ t.Worktree }>@Icon("folder-git-2", "ui-icon") <span>{ t.WorktreeBranch }</span></span>
 				}
 				<span class="spacer"></span>
 				<span class="dim tiny-text row-age" data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span>
@@ -440,6 +481,9 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 		// Quick actions take the age's place while the pointer is on the
 		// row (touch screens keep the age; the header's menu has these).
 		<span class="row-actions">
+			if !isUnread && !current && !active(t) {
+				<button type="button" class="row-act" title="Mark unread" aria-label="Mark unread" data-on:click={ "@post('/api/threads/" + t.ID + "/unread')" }>@Icon("mail", "ui-icon")</button>
+			}
 			if t.Pinned {
 				<button type="button" class="row-act" title="Unpin" aria-label="Unpin" data-on:click={ "@post('/api/threads/" + t.ID + "/unpin')" }>@Icon("pin-off", "ui-icon")</button>
 			} else {
@@ -456,16 +500,13 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 	</li>
 }
 
-// rowTip is the hover card's content: title, project, branch, model and
+// rowTip is the hover card's content: title, project, model and
 // agent, and the error when the last turn failed. Hidden in the row; the
 // layout's script shows a copy beside the sidebar.
 templ rowTip(t store.Thread, p store.Project, look AgentLook) {
 	<div class="row-tip" hidden>
 		<div class="row-tip-title">{ t.Title }</div>
 		<div class="row-tip-line"><span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span> <span class="ellipsis">{ p.Name }</span></div>
-		if t.Worktree != "" {
-			<div class="row-tip-line">@Icon("folder-git-2", "ui-icon") <span class="ellipsis">{ t.WorktreeBranch }</span></div>
-		}
 		<div class="row-tip-line"><span class="agent-mark" style={ agentMarkStyle(look.Color) }>@Brand(look.Driver, "ui-icon")</span> <span class="ellipsis">{ modelShown(t) + " · " + agentLabelOf(look, t.Agent) }</span></div>
 		if t.Status == domain.StatusError && t.StatusDetail != "" {
 			<div class="row-tip-line err">@Icon("circle-alert", "ui-icon") <span class="ellipsis">{ t.StatusDetail }</span></div>

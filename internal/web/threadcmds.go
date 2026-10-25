@@ -12,7 +12,6 @@ import (
 	"github.com/starfederation/datastar-go/datastar"
 
 	"starcode/internal/app"
-	"starcode/internal/gitx"
 	"starcode/internal/store"
 	"starcode/internal/web/views"
 )
@@ -26,6 +25,8 @@ func (s *Server) threadCmdRoutes() {
 	s.mux.HandleFunc("POST /api/threads/{id}/snooze", s.snoozeThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/wake", s.wakeThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/rewind/{item}", s.rewindThread)
+	s.mux.HandleFunc("POST /api/threads/{id}/branch", s.branchThread)
+	s.mux.HandleFunc("POST /api/threads/{id}/handoff", s.handOffThread)
 	s.mux.HandleFunc("POST /api/stash", s.stashPrompt)
 	s.read("/api/stash", s.stashList)
 	s.mux.HandleFunc("POST /api/stash/{id}/restore", s.restoreStash)
@@ -83,10 +84,10 @@ func (s *Server) wakeThread(w http.ResponseWriter, r *http.Request) {
 }
 
 // rewindThread cuts the conversation back to before a prompt and puts
-// the prompt in the composer; ?files=1 puts the worktree's files back
-// too. The page's stream redraws the transcript.
+// the prompt in the composer; the files stay as they are. The page's
+// stream redraws the transcript.
 func (s *Server) rewindThread(w http.ResponseWriter, r *http.Request) {
-	text, err := s.App.Rewind(r.Context(), r.PathValue("id"), r.PathValue("item"), r.URL.Query().Get("files") == "1")
+	text, err := s.App.Rewind(r.Context(), r.PathValue("id"), r.PathValue("item"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -94,6 +95,51 @@ func (s *Server) rewindThread(w http.ResponseWriter, r *http.Request) {
 	sse := datastar.NewSSE(w, r)
 	sse.MarshalAndPatchSignals(map[string]any{"prompt": text})
 	sse.ExecuteScript("promptFocus()")
+}
+
+// branchThread opens a branch of the thread and goes to it; ?before=
+// names the prompt to branch off in front of, none branches after the
+// last turn.
+func (s *Server) branchThread(w http.ResponseWriter, r *http.Request) {
+	id, _, err := s.App.Branch(r.Context(), r.PathValue("id"), r.URL.Query().Get("before"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	datastar.NewSSE(w, r).Redirect("/threads/" + id)
+}
+
+// handOffThread gives the thread's work to the agent ?agent= names, in a
+// new thread, and goes to it. The new thread runs the way the project
+// starts that agent's threads when it names it; another install of the
+// same CLI keeps the thread's own settings, and anything else gets the
+// agent's defaults.
+func (s *Server) handOffThread(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	t, err := s.App.Store.Thread(ctx, r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	to := app.Handoff{Agent: r.URL.Query().Get("agent")}
+	looks := s.agentLooks()
+	switch p, err := s.App.Store.Project(ctx, t.ProjectID); {
+	case err == nil && p.Agent == to.Agent:
+		to.Model, to.Effort, to.PermissionMode = p.Model, p.Effort, p.Mode
+	case looks[to.Agent].Driver != "" && looks[to.Agent].Driver == looks[t.Agent].Driver:
+		to.Model, to.Effort, to.PermissionMode = t.Model, t.Effort, t.PermissionMode
+	default:
+		to.PermissionMode = s.defaultMode(ctx, to.Agent)
+	}
+	id, err := s.App.HandOff(ctx, t.ID, to)
+	if err != nil {
+		if id == "" {
+			s.fail(w, r, err)
+			return
+		}
+		s.Log.Warn("handoff", "thread", t.ID, "to", id, "err", err)
+	}
+	datastar.NewSSE(w, r).Redirect("/threads/" + id)
 }
 
 // stashPrompt puts the composer's text aside and empties the composer.
@@ -165,16 +211,14 @@ func (s *Server) deleteStash(w http.ResponseWriter, r *http.Request) {
 // its signals name the page's one project form.
 func (s *Server) setProjectSettings(w http.ResponseWriter, r *http.Request) {
 	var sig struct {
-		Own       bool   `json:"pown"`
-		Agent     string `json:"agent"`
-		Model     string `json:"model"`
-		Effort    string `json:"effort"`
-		Mode      string `json:"mode"`
-		Worktrees bool   `json:"pworktrees"`
-		Cleanup   string `json:"pcleanup"`
+		Own    bool   `json:"pown"`
+		Agent  string `json:"agent"`
+		Model  string `json:"model"`
+		Effort string `json:"effort"`
+		Mode   string `json:"mode"`
 	}
 	datastar.ReadSignals(r, &sig)
-	ps := app.ProjectSettings{Worktrees: sig.Worktrees, Cleanup: sig.Cleanup}
+	var ps app.ProjectSettings
 	if sig.Own {
 		ps.Agent, ps.Model, ps.Effort, ps.Mode = sig.Agent, sig.Model, sig.Effort, sig.Mode
 	}
@@ -208,7 +252,7 @@ func (s *Server) projectsPage(w http.ResponseWriter, r *http.Request) {
 
 // projectsData is Settings > Projects for project sel, or the first.
 func (s *Server) projectsData(ctx context.Context, projects []store.Project, sel string) views.ProjectsPageData {
-	d := views.ProjectsPageData{Projects: projects, CleanDays: s.App.Store.WorktreeCleanDays(ctx), CleanMerged: s.App.Store.WorktreeCleanMerged(ctx)}
+	d := views.ProjectsPageData{Projects: projects}
 	for _, p := range projects {
 		if p.ID == sel || d.Sel.ID == "" {
 			d.Sel = p
@@ -221,11 +265,6 @@ func (s *Server) projectsData(ctx context.Context, projects []store.Project, sel
 	d.Settings = s.homeSettings(caps, capsErrs)
 	if d.Sel.HasDefaults() {
 		d.Settings.Agent, d.Settings.Model, d.Settings.Effort, d.Settings.Mode = d.Sel.Agent, d.Sel.Model, d.Sel.Effort, d.Sel.Mode
-	}
-	if d.Sel.Path != "" {
-		if sc, ok := gitx.ReadSetupScript(d.Sel.Path); ok {
-			d.SetupName, d.Setup = sc.Name, sc.Command
-		}
 	}
 	return d
 }

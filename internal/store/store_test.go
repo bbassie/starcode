@@ -792,10 +792,12 @@ func TestNewThreadEventsReplay(t *testing.T) {
 		domain.ThreadArchived{},
 		domain.ThreadSnoozed{Until: until},
 		domain.ThreadRewound{ItemID: "u2", SessionID: "conv", ForkAt: "anchor-1"},
+		// Nothing writes this any more, but old logs hold it and must replay.
+		domain.ThreadWorktreeSet{Path: "/gone", Branch: "starcode/x"},
 	); err != nil {
 		t.Fatal(err)
 	}
-	s.Append(ctx, "", domain.ProjectSettingsChanged{ID: "p1", Worktrees: true, Agent: "claude", Model: "haiku", Mode: "plan", Cleanup: "off"})
+	s.Append(ctx, "", domain.ProjectSettingsChanged{ID: "p1", Agent: "claude", Model: "haiku", Mode: "plan"})
 
 	check := func(label string) {
 		t.Helper()
@@ -817,7 +819,7 @@ func TestNewThreadEventsReplay(t *testing.T) {
 			t.Errorf("%s: search rows = %d, want 1", label, n)
 		}
 		p, _ := s.Project(ctx, "p1")
-		if !p.Worktrees || p.Agent != "claude" || p.Model != "haiku" || p.Mode != "plan" || p.Cleanup != "off" {
+		if p.Agent != "claude" || p.Model != "haiku" || p.Mode != "plan" {
 			t.Errorf("%s: project = %+v", label, p)
 		}
 	}

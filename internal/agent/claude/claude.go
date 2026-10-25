@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,7 +25,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +36,7 @@ import (
 	"unicode/utf8"
 
 	"starcode/internal/agent"
+	"starcode/internal/agent/imagein"
 )
 
 // eventBuffer is the capacity of the channel returned by Events. A consumer
@@ -60,6 +64,9 @@ type Agent struct {
 	// the last Limits probe saw. See limits.go.
 	lmu          sync.Mutex
 	overageModel string
+	// version is the CLI's version for the reset calls' user agent, read
+	// once (resets.go); also under lmu.
+	version string
 }
 
 type Option func(*Agent)
@@ -195,6 +202,7 @@ func (a *Agent) Capabilities(ctx context.Context) (agent.Capabilities, error) {
 	caps.PermissionModes = []agent.Choice{
 		{ID: "", Label: "default (ask for everything not allowed by settings)"},
 		{ID: "acceptEdits", Label: "acceptEdits (file edits without asking)"},
+		{ID: "auto", Label: "auto (a classifier allows safe actions and blocks risky ones)"},
 		{ID: "plan", Label: "plan (read-only, no changes)"},
 		{ID: "dontAsk", Label: "dontAsk (deny anything that would prompt)"},
 		{ID: "bypassPermissions", Label: "bypassPermissions (never ask)"},
@@ -213,6 +221,10 @@ var olderModels = []agent.Model{
 	{ID: "claude-opus-4-7", DisplayName: "Opus 4.7", Description: "Opus 4.7 (claude-opus-4-7)"},
 	{ID: "claude-opus-4-6", DisplayName: "Opus 4.6", Description: "Opus 4.6 (claude-opus-4-6)"},
 	{ID: "claude-sonnet-4-6", DisplayName: "Sonnet 4.6", Description: "Sonnet 4.6 (claude-sonnet-4-6)"},
+	// These two run with 200K unless the id asks for 1M; the models after
+	// them have 1M on their own (see nativeLong).
+	{ID: "claude-opus-4-6[1m]", DisplayName: "Opus 4.6 (1M)", Description: "Opus 4.6 with 1M context (claude-opus-4-6[1m])"},
+	{ID: "claude-sonnet-4-6[1m]", DisplayName: "Sonnet 4.6 (1M)", Description: "Sonnet 4.6 with 1M context (claude-sonnet-4-6[1m])"},
 }
 
 // standardWindow and longWindow are the two context sizes Claude models
@@ -223,21 +235,45 @@ const (
 )
 
 // contextWindowFor is the token limit of a Claude model, guessed from any
-// of the names the CLI gives it. The model list carries no number, so the
-// long-context variants are recognized by the "[1m]" suffix on their id or
-// by their description, and everything else gets the standard window. Only
-// the catalog uses it. A session reports no window until a turn's result
-// states one: the id a session sees ("claude-fable-5-1", no suffix) is
-// not enough to guess from, and a guess written into the thread would
-// hide the catalog's better one.
+// of the names the CLI gives it. The model list carries no number: a name
+// with the "[1m]" suffix or "1M context" in it is long, and so is a model
+// that has 1M without asking (nativeLong); everything else gets the
+// standard window. The CLI used to list a "[1m]" entry per model and no
+// longer does, since the current models run with 1M either way. Only the
+// catalog uses this. A session reports no window until a turn's result
+// states one, and a guess written into the thread would hide that.
 func contextWindowFor(names ...string) int64 {
 	for _, n := range names {
 		s := strings.ToLower(n)
-		if strings.Contains(s, "[1m]") || strings.Contains(s, "1m context") {
+		if strings.Contains(s, "[1m]") || strings.Contains(s, "1m context") || nativeLong(s) {
 			return longWindow
 		}
 	}
 	return standardWindow
+}
+
+var modelVersion = regexp.MustCompile(`^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?`)
+
+// nativeLong is whether a model id runs with a 1M window without the
+// "[1m]" suffix, as the CLI's own catalog has it (context.native_1m):
+// Fable and Mythos, Opus from 4.7 and Sonnet from 5. Aliases ("opus")
+// say nothing; the caller passes the id they resolve to as well.
+func nativeLong(id string) bool {
+	m := modelVersion.FindStringSubmatch(id)
+	if m == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(m[2])
+	minor, _ := strconv.Atoi(m[3])
+	switch m[1] {
+	case "fable", "mythos":
+		return true
+	case "opus":
+		return major > 4 || (major == 4 && minor >= 7)
+	case "sonnet":
+		return major >= 5
+	}
+	return false
 }
 
 // versionedName puts the version on an alias label. The CLI names aliases
@@ -325,6 +361,25 @@ func firstLineOf(s string) string {
 	return line
 }
 
+// toolsServer is the name the starcode tools go by; Claude shows them as
+// mcp__starcode__<tool>.
+const toolsServer = "starcode"
+
+// mcpArgs adds the starcode tools next to the reader's own MCP servers
+// and lets the agent call them without asking: they act inside starcode
+// only, and a thread an agent spawns never gets a looser mode than the
+// thread that spawned it.
+func mcpArgs(m *agent.MCPServer) []string {
+	env := m.Env
+	if env == nil {
+		env = map[string]string{}
+	}
+	cfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
+		toolsServer: map[string]any{"type": "stdio", "command": m.Command, "args": m.Args, "env": env},
+	}})
+	return []string{"--mcp-config", string(cfg), "--allowedTools", "mcp__" + toolsServer}
+}
+
 // Start spawns the CLI. The session lives until Close is called or ctx is
 // cancelled.
 //
@@ -348,6 +403,9 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 	}
 	if cfg.Effort != "" {
 		args = append(args, "--effort", cfg.Effort)
+	}
+	if cfg.Tools != nil {
+		args = append(args, mcpArgs(cfg.Tools)...)
 	}
 	if cfg.ResumeID != "" {
 		args = append(args, "--resume", cfg.ResumeID)
@@ -597,6 +655,35 @@ func (s *session) Send(ctx context.Context, text string) error {
 	return s.write(userTurn(text))
 }
 
+// SendImages is Send with the images at paths as content blocks. One that
+// does not load is skipped; the text names it, and the agent can open it.
+func (s *session) SendImages(ctx context.Context, text string, paths []string) error {
+	var images []image
+	for _, p := range paths {
+		mime, data, err := imagein.Load(p)
+		if err != nil {
+			s.log.Debug("claude: image left to the text", "path", p, "err", err)
+			continue
+		}
+		images = append(images, image{mime, data})
+	}
+	if len(images) == 0 {
+		return s.Send(ctx, text)
+	}
+	if err := s.alive(); err != nil {
+		return err
+	}
+	turnID := newID()
+	s.mu.Lock()
+	s.st.turnID = turnID
+	s.st.interrupted = false
+	s.mu.Unlock()
+	if err := s.emit(ctx, agent.Event{Kind: agent.KindTurnStarted, TurnStarted: &agent.TurnStarted{TurnID: turnID}}); err != nil {
+		return err
+	}
+	return s.write(userTurnImages(text, images))
+}
+
 // Compact runs the CLI's own /compact, which it takes as a user turn over
 // stream-json: a status line, a compact_boundary with the sizes before and
 // after, the summary as a user message, then a result with no usage.
@@ -633,6 +720,21 @@ func (s *session) SetPermissionMode(ctx context.Context, mode string) error {
 	return s.write(setModeRequest(newUUID(), mode))
 }
 
+// StopTask stops the subagent or background task started by tool call
+// toolID, and leaves the turn and the other subagents running.
+func (s *session) StopTask(ctx context.Context, toolID string) error {
+	if err := s.alive(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	task := s.st.tasks[toolID]
+	s.mu.Unlock()
+	if task == "" {
+		return agent.ErrNoTask
+	}
+	return s.write(stopTaskRequest(newUUID(), task))
+}
+
 // Resolve answers a pending ApprovalRequested.
 func (s *session) Resolve(ctx context.Context, approvalID string, decision agent.Decision) error {
 	if err := s.alive(); err != nil {
@@ -649,6 +751,43 @@ func (s *session) Resolve(ctx context.Context, approvalID string, decision agent
 		return fmt.Errorf("claude: unknown approval %q", approvalID)
 	}
 	return s.write(approvalResponse(approvalID, decision, pending.input))
+}
+
+// Answer allows a pending AskUserQuestion with the human's answers. The
+// CLI reads them from the tool input's "answers" field; without it the
+// tool tells the model that the user did not answer.
+func (s *session) Answer(ctx context.Context, approvalID string, answers map[string]string) error {
+	if err := s.alive(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	pending, ok := s.st.approvals[approvalID]
+	delete(s.st.approvals, approvalID)
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("claude: unknown approval %q", approvalID)
+	}
+	in, err := withAnswers(pending.input, answers)
+	if err != nil {
+		return err
+	}
+	return s.write(approvalResponse(approvalID, agent.Allow, in))
+}
+
+// withAnswers sets input's "answers" field and keeps the rest as it was.
+func withAnswers(input json.RawMessage, answers map[string]string) (json.RawMessage, error) {
+	fields := map[string]json.RawMessage{}
+	if len(input) > 0 {
+		if err := json.Unmarshal(input, &fields); err != nil {
+			return nil, fmt.Errorf("claude: question input: %w", err)
+		}
+	}
+	a, err := json.Marshal(answers)
+	if err != nil {
+		return nil, err
+	}
+	fields["answers"] = a
+	return json.Marshal(fields)
 }
 
 // Close terminates the process and waits for it. It is safe to call twice.
@@ -819,6 +958,26 @@ func (s *session) stderrTail() string { return s.stderr.String() }
 
 // Outgoing messages.
 
+// userTurnImages is a user turn with images after the text, as base64
+// content blocks.
+func userTurnImages(text string, images []image) []byte {
+	content := []any{map[string]any{"type": "text", "text": text}}
+	for _, im := range images {
+		content = append(content, map[string]any{"type": "image", "source": map[string]any{
+			"type": "base64", "media_type": im.mime, "data": base64.StdEncoding.EncodeToString(im.data),
+		}})
+	}
+	return encodeLine(map[string]any{
+		"type":    "user",
+		"message": map[string]any{"role": "user", "content": content},
+	})
+}
+
+type image struct {
+	mime string
+	data []byte
+}
+
 func userTurn(text string) []byte {
 	msg := map[string]any{
 		"type": "user",
@@ -835,6 +994,14 @@ func interruptRequest(id string) []byte {
 		"type":       "control_request",
 		"request_id": id,
 		"request":    map[string]any{"subtype": "interrupt"},
+	})
+}
+
+func stopTaskRequest(id, task string) []byte {
+	return encodeLine(map[string]any{
+		"type":       "control_request",
+		"request_id": id,
+		"request":    map[string]any{"subtype": "stop_task", "task_id": task},
 	})
 }
 
@@ -911,6 +1078,9 @@ type state struct {
 	anchor string
 	// interrupted records that we asked the CLI to stop this turn.
 	interrupted bool
+	// limitReset is when the limit lifts that a rate_limit_event this
+	// turn said rejected the request; the turn's error is that limit.
+	limitReset time.Time
 
 	// msgID is the assistant message the stream events belong to.
 	msgID string
@@ -928,6 +1098,13 @@ type state struct {
 	// denied records tools the user refused, so their result reads as
 	// declined rather than merely failed.
 	denied map[string]bool
+	// subTools records the tool calls a subagent made that have no result
+	// yet. A background subagent keeps working after the main turn ends,
+	// so its approvals and refusals outlive the turn (see endTurn).
+	subTools map[string]bool
+	// tasks maps the tool call that started a subagent or background task
+	// to the CLI's task id, which stop_task takes.
+	tasks map[string]string
 
 	// outbox holds lines the session must write back to the CLI.
 	outbox [][]byte
@@ -961,6 +1138,8 @@ func newState(log *slog.Logger) *state {
 		toolInputs:       map[string]bool{},
 		approvals:        map[string]pendingApproval{},
 		denied:           map[string]bool{},
+		subTools:         map[string]bool{},
+		tasks:            map[string]string{},
 	}
 }
 
@@ -999,6 +1178,12 @@ func (st *state) contextEvent(tokens int64) []agent.Event {
 // turn, so nothing here outlives a result. The model and its context reading
 // describe the conversation instead, and stay.
 func (st *state) endTurn() {
+	// A turn that ends on its own while a subagent still runs left that
+	// subagent in the background. Its can_use_tool still waits for an
+	// answer, so it stays. A stopped turn takes its subagents with it.
+	if st.interrupted {
+		clear(st.subTools)
+	}
 	st.turnID = ""
 	st.interrupted = false
 	st.msgID = ""
@@ -1006,10 +1191,11 @@ func (st *state) endTurn() {
 	clear(st.streamedText)
 	clear(st.streamedThinking)
 	clear(st.toolInputs)
-	clear(st.denied)
-	// A can_use_tool the turn never answered is dead with the turn; keeping
-	// it would let a later Resolve write a response nobody waits for.
-	clear(st.approvals)
+	maps.DeleteFunc(st.denied, func(id string, _ bool) bool { return !st.subTools[id] })
+	// Any other can_use_tool the turn never answered is dead with the
+	// turn; keeping it would let a later Resolve write a response nobody
+	// waits for.
+	maps.DeleteFunc(st.approvals, func(_ string, p pendingApproval) bool { return !st.subTools[p.toolID] })
 }
 
 // Wire shapes. Only the fields the adapter uses are declared.
@@ -1027,6 +1213,10 @@ type outLine struct {
 	SessionID string `json:"session_id"`
 	Model     string `json:"model"`
 	AITitle   string `json:"aiTitle"`
+
+	// system/task_started, system/task_notification
+	TaskID    string `json:"task_id"`
+	ToolUseID string `json:"tool_use_id"`
 
 	// system/compact_boundary. PostTokens is the CLI's count of what the
 	// conversation is after the fold.
@@ -1169,6 +1359,7 @@ func parseLine(line []byte, st *state) []agent.Event {
 			switch {
 			case evs[i].ToolStarted != nil:
 				evs[i].ToolStarted.Parent = out.ParentToolUseID
+				st.subTools[evs[i].ToolStarted.ID] = true
 			case evs[i].TextDelta != nil:
 				evs[i].TextDelta.Parent = out.ParentToolUseID
 			case evs[i].ThinkingDelta != nil:
@@ -1245,6 +1436,17 @@ func parseSystem(out *outLine, st *state) []agent.Event {
 			events = append(events, st.contextEvent(out.CompactMetadata.PostTokens)...)
 		}
 		return events
+	case "task_started":
+		if out.TaskID != "" && out.ToolUseID != "" {
+			st.tasks[out.ToolUseID] = out.TaskID
+		}
+		return nil
+	case "task_notification":
+		// The task ended: completed, failed or stopped.
+		if out.ToolUseID != "" {
+			delete(st.tasks, out.ToolUseID)
+		}
+		return nil
 	default:
 		st.log.Debug("ignored system message", "subtype", out.Subtype)
 		return nil
@@ -1412,6 +1614,7 @@ func parseUser(out *outLine, st *state) []agent.Event {
 		if blk.Type != "tool_result" || blk.ToolUseID == "" {
 			continue
 		}
+		delete(st.subTools, blk.ToolUseID)
 		status := "done"
 		switch {
 		case st.denied[blk.ToolUseID]:
@@ -1479,6 +1682,9 @@ func parseRateLimit(out *outLine, st *state) []agent.Event {
 		status = info.Status
 	}
 	var events []agent.Event
+	if status == "rejected" && info.ResetsAt > 0 {
+		st.limitReset = time.Unix(info.ResetsAt, 0).UTC()
+	}
 	if status != "" && status != "allowed" {
 		events = append(events, agent.Event{
 			Kind:   agent.KindNotice,
@@ -1516,7 +1722,9 @@ func parseResult(out *outLine, st *state) []agent.Event {
 		if done.Error == "" {
 			done.Error = out.Subtype
 		}
+		done.LimitReset = st.limitReset
 	}
+	st.limitReset = time.Time{}
 	if st.interrupted {
 		done.Status = "interrupted"
 		done.Error = ""

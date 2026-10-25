@@ -323,6 +323,40 @@ func TestParseApprovalRequest(t *testing.T) {
 	}
 }
 
+// A background subagent's can_use_tool still waits after the main turn
+// ends, so its approval survives the result; a main-thread one does not,
+// and an interrupt takes both.
+func TestSubagentApprovalOutlivesTurn(t *testing.T) {
+	subTool := `{"type":"assistant","parent_tool_use_id":"toolu_task","session_id":"s1","message":{"id":"msg_sub","role":"assistant","content":[{"type":"tool_use","id":"toolu_sub","name":"Bash","input":{"command":"wc -l"}}]}}`
+	subReq := `{"type":"control_request","request_id":"req-sub","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"wc -l"},"tool_use_id":"toolu_sub"}}`
+	subResult := `{"type":"user","parent_tool_use_id":"toolu_task","session_id":"s1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sub","content":"42"}]}}`
+
+	st := newState(nil)
+	ev := one(t, feed(st, subTool), agent.KindToolStarted).ToolStarted
+	if ev.Parent != "toolu_task" {
+		t.Fatalf("Parent = %q", ev.Parent)
+	}
+	feed(st, subReq, lineApproval, lineResultOK)
+	if _, ok := st.approvals["req-sub"]; !ok {
+		t.Error("subagent approval was dropped with the turn")
+	}
+	if _, ok := st.approvals["590e89a1-ab17-4fa4-bcb7-4a44035eb43d"]; ok {
+		t.Error("main-thread approval outlived the turn")
+	}
+	feed(st, subResult)
+	if st.subTools["toolu_sub"] {
+		t.Error("finished subagent tool still tracked")
+	}
+
+	st = newState(nil)
+	feed(st, subTool, subReq)
+	st.interrupted = true
+	feed(st, lineResultOK)
+	if len(st.approvals) != 0 || len(st.subTools) != 0 {
+		t.Errorf("after interrupt: approvals %d, subTools %d", len(st.approvals), len(st.subTools))
+	}
+}
+
 func TestParseUnsupportedControlRequestIsRefused(t *testing.T) {
 	st := newState(nil)
 	if events := feed(st, lineHookReq); len(events) != 0 {
@@ -446,7 +480,18 @@ func TestContextWindowFor(t *testing.T) {
 		{[]string{"opus[1m]", "claude-opus-5[1m]"}, longWindow},
 		{[]string{"claude-fable-5-1[1m]", "claude-fable-5-1"}, longWindow},
 		{[]string{"default", "claude-opus-5", "Opus 5 with 1M context · Best for everyday tasks"}, longWindow},
-		{[]string{"sonnet", "claude-sonnet-5", "Sonnet 5 · Efficient for routine tasks"}, standardWindow},
+		// The current models have 1M without the suffix; the CLI's list
+		// names them plainly.
+		{[]string{"opus", "claude-opus-5-5", "Most capable for ambitious work"}, longWindow},
+		{[]string{"default", "claude-opus-5-5", "Opus 5.5 · Best for everyday, complex tasks"}, longWindow},
+		{[]string{"sonnet", "claude-sonnet-5", "Most efficient for everyday tasks"}, longWindow},
+		{[]string{"claude-fable-5-1", "claude-fable-5-1"}, longWindow},
+		{[]string{"claude-opus-4-7"}, longWindow},
+		// Older ones need the suffix.
+		{[]string{"claude-opus-4-6"}, standardWindow},
+		{[]string{"claude-opus-4-6[1m]"}, longWindow},
+		{[]string{"claude-sonnet-4-6"}, standardWindow},
+		{[]string{"haiku", "claude-haiku-4-5-20251001"}, standardWindow},
 		{[]string{"haiku"}, standardWindow},
 		{nil, standardWindow},
 	}
@@ -578,6 +623,11 @@ func TestOutgoingMessageShapes(t *testing.T) {
 			`{"response":{"request_id":"req-1","response":{"behavior":"allow","updatedInput":{}},"subtype":"success"},"type":"control_response"}`,
 		},
 		{
+			"answered question",
+			approvalResponse("req-1", agent.Allow, mustAnswers(t, json.RawMessage(`{"questions":[{"question":"Which?"}]}`), map[string]string{"Which?": "A, B"})),
+			`{"response":{"request_id":"req-1","response":{"behavior":"allow","updatedInput":{"answers":{"Which?":"A, B"},"questions":[{"question":"Which?"}]}},"subtype":"success"},"type":"control_response"}`,
+		},
+		{
 			"deny",
 			approvalResponse("req-1", agent.Deny, json.RawMessage(`{"file_path":"/tmp/a.txt"}`)),
 			`{"response":{"request_id":"req-1","response":{"behavior":"deny","message":"User denied this action"},"subtype":"success"},"type":"control_response"}`,
@@ -608,6 +658,15 @@ func TestOutgoingMessageShapes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustAnswers(t *testing.T, in json.RawMessage, answers map[string]string) json.RawMessage {
+	t.Helper()
+	out, err := withAnswers(in, answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 type nopWriteCloser struct{ *bytes.Buffer }
@@ -645,6 +704,26 @@ func TestSetPermissionModeOnlyReturnsToBypass(t *testing.T) {
 	close(s.exited)
 	if err := s.SetPermissionMode(context.Background(), "plan"); err == nil {
 		t.Error("SetPermissionMode on an exited session did not fail")
+	}
+}
+
+func TestStopTask(t *testing.T) {
+	var out bytes.Buffer
+	s := &session{stdin: nopWriteCloser{&out}, dying: make(chan struct{}), exited: make(chan struct{}), st: newState(nil)}
+	ctx := context.Background()
+	if err := s.StopTask(ctx, "toolu_1"); !errors.Is(err, agent.ErrNoTask) {
+		t.Fatalf("StopTask before task_started err = %v, want ErrNoTask", err)
+	}
+	feed(s.st, `{"type":"system","subtype":"task_started","task_id":"t9","tool_use_id":"toolu_1","description":"look around","task_type":"local_agent"}`)
+	if err := s.StopTask(ctx, "toolu_1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"subtype":"stop_task","task_id":"t9"`) {
+		t.Errorf("wrote %q", out.String())
+	}
+	feed(s.st, `{"type":"system","subtype":"task_notification","task_id":"t9","tool_use_id":"toolu_1","status":"stopped"}`)
+	if err := s.StopTask(ctx, "toolu_1"); !errors.Is(err, agent.ErrNoTask) {
+		t.Errorf("StopTask after the task ended err = %v, want ErrNoTask", err)
 	}
 }
 
@@ -1187,5 +1266,71 @@ func TestContextIgnoresSubagents(t *testing.T) {
 	}
 	if st.model != "claude-opus-5" {
 		t.Fatalf("a subagent's model became the conversation's: %q", st.model)
+	}
+}
+
+// TestIntegrationCatalogHasLongWindow asks the installed CLI for its
+// model list (a process launch, no tokens) and checks at least one model
+// comes out with the 1M window. The CLI once stopped listing its "[1m]"
+// entries, and every model read as 200K until nativeLong learned which
+// models have 1M without them.
+func TestIntegrationCatalogHasLongWindow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test needs the claude CLI")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("claude not on PATH")
+	}
+	caps, err := New().Capabilities(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := 0
+	for _, m := range caps.Models {
+		t.Logf("%-24s %8d  %s", m.ID, m.ContextWindow, m.Description)
+		if m.ContextWindow == longWindow {
+			long++
+		}
+	}
+	if long == 0 {
+		t.Fatal("no model in the catalog has the 1M window")
+	}
+}
+
+// TestLimitReset checks a turn the usage limit rejected reports when the
+// limit lifts, and the next turn, which failed for another reason, does
+// not.
+func TestLimitReset(t *testing.T) {
+	st := newState(nil)
+	st.turnID = "turn-1"
+	limitErr := `{"session_id":"s1","usage":{"input_tokens":0,"output_tokens":0},"is_error":true,"subtype":"success","result":"You've hit your session limit · resets 10:50pm (UTC)","type":"result","duration_ms":700}`
+	done := one(t, feed(st, lineRateThrottled, limitErr), agent.KindTurnCompleted).TurnCompleted
+	if done.Status != "error" || !done.LimitReset.Equal(time.Unix(1788525000, 0)) {
+		t.Fatalf("limited turn = %+v", done)
+	}
+	st.turnID = "turn-2"
+	if done := one(t, feed(st, lineResultErr), agent.KindTurnCompleted).TurnCompleted; !done.LimitReset.IsZero() {
+		t.Fatalf("another error has a limit reset: %+v", done)
+	}
+}
+
+func TestMCPArgs(t *testing.T) {
+	args := mcpArgs(&agent.MCPServer{Command: "/bin/starcode", Args: []string{"mcp"}, Env: map[string]string{"K": "v"}})
+	if len(args) != 4 || args[0] != "--mcp-config" || args[2] != "--allowedTools" || args[3] != "mcp__starcode" {
+		t.Fatalf("args %q", args)
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Type, Command string
+			Args          []string
+			Env           map[string]string
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(args[1]), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.MCPServers["starcode"]
+	if s.Type != "stdio" || s.Command != "/bin/starcode" || s.Env["K"] != "v" {
+		t.Fatalf("config %s", args[1])
 	}
 }

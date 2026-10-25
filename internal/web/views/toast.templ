@@ -17,6 +17,14 @@ templ Toast(msg string) {
 	</div>
 }
 
+// NoteToast says what a command did when there is nothing to take back.
+templ NoteToast(msg string) {
+	<div id="toast" class="toast note" data-key={ fmt.Sprint(time.Now().UnixNano()) } data-on:animationend="toastClose(el)">
+		<span>{ msg }</span>
+		<button class="btn icon tiny ghost" type="button" data-on:click="toastClose(el)" aria-label="Dismiss">@Icon("x", "ui-icon")</button>
+	</div>
+}
+
 // UndoToast says what a command did and offers to take it back for a few
 // seconds; undo is the expression that does. The undo hotkey presses the
 // button while the toast is up (the toast leaves the page when its

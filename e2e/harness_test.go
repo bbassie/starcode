@@ -96,6 +96,8 @@ type env struct {
 	store   *store.Store
 	project string // project id
 	dir     string // the project's checkout
+	srv     *httptest.Server
+	fake    *fake.Agent
 }
 
 func newEnv(t *testing.T) *env {
@@ -117,7 +119,6 @@ func newEnv(t *testing.T) *env {
 	fk := fake.New()
 	fk.Delay = 10 * time.Millisecond
 	a := app.New(st, bus.New(1024), map[string]agent.Agent{"fake": fk}, log)
-	a.WorktreeRoot = filepath.Join(data, "worktrees")
 	h := web.New(a, log, "", filepath.Join(data, "attachments"), prov)
 	srv := httptest.NewServer(h)
 	// Cleanups run last first: pages close, then the streams they held
@@ -143,7 +144,7 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, url: srv.URL, app: a, store: st, project: pid, dir: dir}
+	return &env{t: t, url: srv.URL, app: a, store: st, project: pid, dir: dir, srv: srv, fake: fk}
 }
 
 // thread makes a fake-agent thread in the never-ask mode, so a turn runs
@@ -151,7 +152,7 @@ func newEnv(t *testing.T) *env {
 func (e *env) thread() string {
 	e.t.Helper()
 	ctx := context.Background()
-	id, err := e.app.CreateThread(ctx, e.project, "fake", "", app.ThreadStart{})
+	id, err := e.app.CreateThread(ctx, e.project, "fake", "")
 	if err != nil {
 		e.t.Fatal(err)
 	}

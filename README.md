@@ -7,16 +7,25 @@ I built it because I wanted something like [T3 Code](https://github.com/pingdotg
 ## What it does
 
 - Threads per project, with Claude Code and Codex as drivers. Several CLI installs can sit side by side (Settings > Providers), each with its own config dir and colour. A project can name the agent, model and permission mode its new threads start with (Settings > Projects).
-- Settle a thread, pin it or snooze it until later. Each of those shows an undo for a few seconds, and Ctrl+Z takes it.
-- Rewind: drop a prompt and everything after it, and get the prompt back to edit. The agent forgets those turns too, and in a worktree the files can go back with it.
-- A restart does not lose running turns. They resume when starcode comes back, with a prompt that tells the agent what happened.
-- The composer can stash a prompt for later (Ctrl+S), quote a selection from a reply, and link a pull request when you type `#`. A paste of 32 KiB or more goes in as a file.
+- Settle a thread, pin it, snooze it until later or mark it unread again. Each of those shows an undo for a few seconds, and Ctrl+Z takes it.
+- Rewind: drop a prompt and everything after it, and get the prompt back to edit. The agent forgets those turns too; the files stay as they are.
+- Branch a thread, from its end or from before any prompt: the new thread gets a fork of the agent's conversation and works in the same checkout. The original stays as it is.
+- Hand a thread off to another agent or CLI install, when one runs out of quota say. The new thread works in the same checkout, gets the conversation as a file, and says where things stand before it changes anything.
+- Prompts can go out later. The clock beside the send button sends the message in an hour, tomorrow at 9:00 or at a time you pick, and it waits above the composer until then. Settings > Schedules adds recurring prompts on a cron, each run opening a new thread in its project, and lists everything scheduled with pause, run now and delete. Agents get `schedule`, `list_schedules` and `cancel_schedule` as tools. A run missed while starcode was down happens once when it is back.
+- A restart does not lose running turns. They resume when starcode comes back, with a prompt that tells the agent what happened. A turn the plan's usage limit stopped waits on the Snoozed shelf and resumes when the limit resets.
+- Attached images go to the agent as images, not only as a path in the prompt. One over 1568 pixels or about 4 MB is scaled down first. Codex threads get `/review` (the uncommitted changes, or `/review main` against a branch) and `/compact` in the `/` menu. A Codex thread in plan mode can put questions to you as cards with options, like Claude's.
+- Messages sent while a turn runs wait in a queue above the composer, where each can be edited in place, moved up or down, sent now or removed. Settings > This device chooses whether Enter queues or steers (stops the turn and goes first) while a turn runs; Ctrl+Enter does the other.
+- The composer can stash a prompt for later (Ctrl+S), quote a selection from a reply, and link a pull request when you type `#`. Typing `@` offers the project's files and your other threads: a file goes in as `@path`, a thread as a link the agent can open with `read_thread`. A paste of 32 KiB or more goes in as a file.
+- Mermaid blocks in replies are drawn as diagrams; a click shows the source. The script for it loads with the first diagram.
+- Tool calls read as one line each, with an icon for the kind of call and the file, command or search in words. Edits open as diffs, and a turn ends with a card of the files its edit calls changed and their line counts.
 - Approvals in the transcript, with "allow for session" rules and shortcuts for the oldest waiting one.
-- Worktrees: a thread can get its own checkout and branch so agents on one project stay out of each other's way. Checkouts of threads that are done can be removed on their own (Settings > General), never with uncommitted work in them.
-- A side panel with the git changes, a file tree and an editor (HTML, PDF and images open rendered), and a terminal under the transcript that survives reloads.
-- Pull requests: threads link to the PR they open, the header shows its state, and one page lists everything on GitHub that wants your attention.
-- Usage and plan limits per CLI install, read from the CLIs' own transcripts.
-- Works on a phone: swipes for the panels, notifications when a turn ends or an approval waits, and a QR code to sign a phone in.
+- Claude threads have Claude Code's auto mode, where a classifier allows safe actions and blocks risky ones instead of asking. Codex threads have auto-review, where a reviewing agent decides on each request to leave the sandbox. A running subagent has a stop button that ends it alone; the turn goes on with what it had.
+- A side panel with the git changes, a file tree and an editor (HTML, PDF and images open rendered), and a terminal under the transcript that survives reloads. Ctrl+F there searches every changed file's diff.
+- Pull requests: threads link to the PR they open, the header shows its state, and one page lists everything on GitHub that wants your attention. A thread can watch its PR: when a check fails or they all pass, someone else comments, or the branch conflicts, the agent gets a prompt saying so.
+- Agents get starcode as tools (MCP server `starcode`). An agent can rename its thread, link and watch its PR, snooze it with a prompt for later ("check CI in 20 minutes"), schedule prompts, and ask for your attention. It can also start threads of its own, which show under its thread in the sidebar. A child gets the parent's permission mode at most, and when it finishes, the parent gets a prompt with its reply. Children that finish within a few seconds of each other arrive in one prompt. Turn the tools off under Settings > Threads.
+- Usage and plan limits per CLI install, read from the CLIs' own transcripts. A Claude plan with banked resets shows them, with a button that spends one.
+- A big conversation left idle for over an hour compacts before the next prompt goes out, unless you turn that off on the chip above the composer. The rename box can have the agent's small model write a title from the conversation.
+- Works on a phone: swipes for the panels and a QR code to sign a phone in. Notifications come over Web Push, so they reach a phone with starcode closed: when a turn ends, when an approval or a question waits, and when the agent calls `notify`. A thread that is on screen in a page you are looking at sends none, and each thread's menu chooses between always, only when it needs you, and never.
 
 ## Run
 
@@ -59,6 +68,8 @@ To keep it running, `make service` installs a systemd user unit that runs the bi
 - This is a personal tool. I use it every day, and it changes to fit how I work, so expect rough edges and bugs.
 - Everything is an event in a SQLite log, and the pages are projections of it. That is what makes replay, unread marks shared across devices and drafts that follow you from phone to desktop cheap.
 - Keyboard shortcuts are listed in the app under Ctrl+/ and rebound under Settings > Keys.
+- The agent tools run as `starcode mcp`, a stdio MCP server each agent starts. It forwards every call to the running instance over `agent.sock` in the data dir (mode 0600). The tools themselves live in `internal/web/agentapi.go`. Each agent's environment holds its thread id and a key derived from it, so one thread cannot act as another.
+- Web Push signs with a key in `vapid.pem` in the data dir; delete it and every device has to turn notifications on again. The push services want a contact address in each request, `mailto:starcode@example.com` unless `STARCODE_PUSH_SUBJECT` says otherwise. The server needs to reach the push services (Google, Mozilla, Apple) over HTTPS.
 
 ## Development
 
@@ -83,7 +94,7 @@ internal/agent/codex        Codex app-server JSON-RPC adapter
 internal/agent/fake         scripted agent for UI development
 internal/providers          CLI instances: providers.json, adapter construction
 internal/app                commands (write side) and the session pump
-internal/gitx               git status, diff and worktrees via exec
+internal/gitx               git status, diff and GitHub via exec
 internal/term               pty shells for the terminal panel
 internal/keys               shortcut actions, defaults and overrides
 internal/tlsx               the built-in certificate authority

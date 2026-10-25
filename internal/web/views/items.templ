@@ -9,6 +9,7 @@ import (
 	"starcode/internal/domain"
 	"starcode/internal/keys"
 	"starcode/internal/store"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -89,22 +90,6 @@ func meta(it store.Item) toolMeta {
 	return m
 }
 
-// toolSummary is the one-line label next to the tool name. Command tools
-// carry a human-written description ("Run the test suite") that reads better
-// than the command itself, which stays visible in the expanded input block.
-func toolSummary(name string, m toolMeta) string {
-	n := strings.ToLower(name)
-	if strings.Contains(n, "bash") || strings.Contains(n, "command") || strings.Contains(n, "shell") {
-		var in struct {
-			Description string `json:"description"`
-		}
-		if json.Unmarshal(m.Input, &in) == nil && strings.TrimSpace(in.Description) != "" {
-			return strings.TrimSpace(in.Description)
-		}
-	}
-	return m.Summary
-}
-
 // attachmentRef is one "[Attached image "x" is saved at: /path]" line from a
 // user message, split off the prompt so it renders as a legend instead.
 type attachmentRef struct {
@@ -154,21 +139,24 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 				<div class="user-msg">
 					if pm.Auto == "resume" {
 						<span class="dim tiny-text user-auto">@Icon("rotate-cw", "ui-icon") <span>sent by starcode to resume after a restart</span></span>
+					} else if pm.Auto == "limit" {
+						<span class="dim tiny-text user-auto">@Icon("rotate-cw", "ui-icon") <span>sent by starcode when the usage limit reset</span></span>
+					} else if pm.Auto == "prwatch" {
+						<span class="dim tiny-text user-auto">@Icon("eye", "ui-icon") <span>{ fmt.Sprintf("sent by starcode: pull request #%d changed", pm.PR) }</span></span>
+					} else if pm.Auto == "handoff" {
+						<span class="dim tiny-text user-auto">@Icon("arrow-right-left", "ui-icon") <span>sent by starcode to hand the work over</span></span>
 					}
 					if text != "" {
 						// Hover tools: copy the prompt, put it back in the
-						// composer to send again with changes, or rewind the
-						// conversation to before it (with the files, when the
-						// worktree was recorded as it went out).
+						// composer to send again with changes, rewind the
+						// conversation to before it, or branch from there.
 						<div class="msg-tools">
 							<span class="dim tiny-text msg-time" data-ts={ it.CreatedAt.UTC().Format(time.RFC3339) }></span>
 							<button type="button" class="btn icon ghost tiny" title="Copy this message" aria-label="Copy this message" onclick="copyText(this.closest('.user-msg').querySelector('.bubble').textContent, this)">@Icon("copy", "ui-icon")</button>
 							<button type="button" class="btn icon ghost tiny" title="Edit and resend: put this message in the composer" aria-label="Edit and resend" onclick="promptSet(this.closest('.user-msg').querySelector('.bubble').textContent)">@Icon("pencil-line", "ui-icon")</button>
 							if pm.rewindable() {
-								<button type="button" class="btn icon ghost tiny" title="Rewind: drop this message and everything after it, and put it back in the composer to edit. The agent forgets those turns; files stay as they are." aria-label="Rewind to before this message" data-on:click={ rewindAction(it, false) }>@Icon("history", "ui-icon")</button>
-								if pm.Checkpoint != "" {
-									<button type="button" class="btn icon ghost tiny" title="Rewind with the files: the same, and the worktree's files go back to how they were when this message was sent" aria-label="Rewind to before this message, files too" data-on:click={ rewindAction(it, true) }>@Icon("rotate-ccw", "ui-icon")</button>
-								}
+								<button type="button" class="btn icon ghost tiny" title="Rewind: drop this message and everything after it, and put it back in the composer to edit. The agent forgets those turns; files stay as they are." aria-label="Rewind to before this message" data-on:click={ rewindAction(it) }>@Icon("history", "ui-icon")</button>
+								<button type="button" class="btn icon ghost tiny" title="Branch: a new thread with the conversation up to before this message, which goes into its composer. This thread stays as it is." aria-label="Branch from before this message" data-on:click={ "@post('/api/threads/" + it.ThreadID + "/branch?before=" + it.ID + "')" }>@Icon("git-fork", "ui-icon")</button>
 							}
 						</div>
 						<pre class="wrap bubble">{ text }</pre>
@@ -200,7 +188,7 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 			</div>
 		case domain.KindThinking:
 			<details id={ "it-" + it.ID } class="item thinking" data-preserve-attr="open">
-				<summary><span class="tag">thinking</span> <span class="dim ellipsis">{ firstLine(it.Body) }</span></summary>
+				<summary><span class="tool-ic">@Icon("brain", "ui-icon")</span> <span class="tool-line"><span class="tool-text">{ firstLine(it.Body) }</span></span></summary>
 				<pre class="wrap dim">{ it.Body }</pre>
 			</details>
 		case domain.KindTool:
@@ -211,8 +199,13 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 			}
 		case domain.KindResult:
 			<div id={ "it-" + it.ID } class={ "item", "result", "st-" + it.Status }>
-				<span class="tag">@ItemIcon(it.Status) <span>{ it.Status }</span></span>
-				<pre class="wrap dim">{ it.Body }</pre>
+				if tf := turnFilesOf(it); len(tf.Files) > 0 {
+					@TurnFiles(tf)
+				}
+				<div class="result-line">
+					<span class="tag">@ItemIcon(it.Status) <span>{ it.Status }</span></span>
+					<pre class="wrap dim">{ it.Body }</pre>
+				</div>
 			</div>
 		case domain.KindError:
 			<div id={ "it-" + it.ID } class="item error">
@@ -244,10 +237,16 @@ templ AgentTool(it store.Item, kids map[string][]store.Item) {
 	{{ mine := kids[it.ID] }}
 	<details id={ "it-" + it.ID } class={ "item", "tool", "agent", "st-" + it.Status } open?={ it.Status == domain.ItemRunning } data-preserve-attr="open">
 		<summary>
-			<span class={ "glyph", "st-" + it.Status }>@ItemIcon(it.Status)</span>
-			<span class="tag">@Icon("bot", "ui-icon") <span>{ agentTag(in) }</span></span>
-			<span class="ellipsis">{ firstNonEmpty(in.Description, m.Summary) }</span>
-			<span class="dim tiny-text agent-line">{ agentLine(it, mine) }</span>
+			<span class="tool-ic">@Icon("bot", "ui-icon")</span>
+			<span class="tool-line">
+				<span class="tool-verb">{ agentTag(in) }</span>
+				<span class="tool-text">{ firstNonEmpty(in.Description, m.Summary) }</span>
+			</span>
+			<span class="tool-note agent-line">{ agentLine(it, mine) }</span>
+			if it.Status == domain.ItemRunning {
+				<button class="btn icon ghost agent-stop" type="button" title="Stop this subagent" aria-label="Stop this subagent" data-on:click={ "evt.preventDefault(); evt.stopPropagation(); @post('/api/threads/" + it.ThreadID + "/items/" + it.ID + "/stop')" }>@Icon("square", "ui-icon")</button>
+			}
+			@toolState(it.Status)
 		</summary>
 		if in.Prompt != "" {
 			<details class="agent-brief">
@@ -267,10 +266,10 @@ templ AgentTool(it store.Item, kids map[string][]store.Item) {
 }
 
 func agentTag(in agentInput) string {
-	if in.SubagentType != "" {
-		return "agent · " + in.SubagentType
+	if in.SubagentType != "" && in.SubagentType != "general-purpose" {
+		return in.SubagentType
 	}
-	return "agent"
+	return "Agent"
 }
 
 func firstNonEmpty(a, b string) string {
@@ -280,28 +279,116 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
+// Tool is one tool call: an icon for its kind and a line in words, and
+// opened, what is worth reading for that kind (see viewTool).
 templ Tool(it store.Item) {
+	{{ v := viewTool(ctx, it) }}
 	{{ m := meta(it) }}
-	{{ input := PrettyJSON(m.Input) }}
-	<details id={ "it-" + it.ID } class={ "item", "tool", "st-" + it.Status } open?={ it.Status == domain.ItemRunning } data-preserve-attr="open">
+	<details id={ "it-" + it.ID } class={ "item", "tool", "k-" + v.Kind, "st-" + it.Status } data-preserve-attr="open">
 		<summary>
-			<span class={ "glyph", "st-" + it.Status }>@ItemIcon(it.Status)</span>
-			<span class="tag">{ it.ToolName }</span>
-			<span class="ellipsis mono">{ toolSummary(it.ToolName, m) }</span>
+			<span class="tool-ic">@Icon(v.Icon, "ui-icon")</span>
+			<span class="tool-line">
+				if v.Verb != "" {
+					<span class="tool-verb">{ v.Verb }</span>
+				}
+				if v.Text != "" {
+					<span class="tool-text">{ v.Text }</span>
+				}
+				if v.Code != "" && v.Kind == toolCommand {
+					<code class="tool-code">@templ.Raw(shellHTML(v.Code))</code>
+				} else if v.Code != "" {
+					<code class="tool-code">{ v.Code }</code>
+				}
+			</span>
+			if v.Note != "" {
+				<span class="tool-note">{ v.Note }</span>
+			}
+			@toolState(it.Status)
 			// The time the call started, on hover (the layout's clock
 			// script writes it in the reader's zone).
 			<span class="dim tiny-text row-ts" data-ts={ it.CreatedAt.UTC().Format(time.RFC3339) }></span>
 		</summary>
-		if input != "" {
-			<pre class="block input">{ input }</pre>
-		}
-		if it.Output != "" {
-			<pre class="block output">{ clip(it.Output, 20000) }</pre>
+		switch v.Kind {
+			case toolCommand:
+				if v.Command != "" {
+					<pre class="block cmd">@templ.Raw(shellHTML(v.Command))</pre>
+				}
+				if out := commandOutput(it.Output); out != "" {
+					<pre class="block output">{ clip(out, 20000) }</pre>
+				}
+			case toolEdit:
+				for _, f := range v.Files {
+					@DiffBlock(f, len(v.Files) > 1)
+				}
+				if len(v.Files) == 0 || it.Status == domain.ItemFailed {
+					if it.Output != "" {
+						<pre class="block output">{ clip(it.Output, 20000) }</pre>
+					}
+				}
+			case toolPlan:
+				<ul class="block todo-list">
+					for _, t := range v.Todos {
+						<li class={ "todo", "t-" + t.Status }>@Icon(todoIcon(t.Status), "ui-icon") <span>{ t.Content }</span></li>
+					}
+				</ul>
+			case toolRead, toolSearch, toolWeb:
+				if v.Kind == toolWeb {
+					if in := PrettyJSON(m.Input); in != "" && it.ToolName == "WebFetch" {
+						<pre class="block input">{ in }</pre>
+					}
+				}
+				if it.Output != "" {
+					<pre class="block output">{ clip(it.Output, 20000) }</pre>
+				}
+			default:
+				if input := PrettyJSON(m.Input); input != "" {
+					<pre class="block input">{ input }</pre>
+				}
+				if it.Output != "" {
+					<pre class="block output">{ clip(it.Output, 20000) }</pre>
+				}
 		}
 	</details>
 }
 
+// toolState marks a call that did not go through; a running one shows in
+// its line (see the st-running style), a done one needs nothing.
+templ toolState(status string) {
+	switch status {
+		case domain.ItemFailed:
+			<span class="tool-state bad">failed</span>
+		case domain.ItemDeclined:
+			<span class="tool-state warn">declined</span>
+		case domain.ItemCancelled:
+			<span class="tool-state">stopped</span>
+	}
+}
+
+// DiffBlock is one file of an edit as a diff; named names the file above
+// it, for an edit of several.
+templ DiffBlock(f fileDiff, named bool) {
+	<div class="block tdiff">
+		if named {
+			<div class="diff-file"><code>{ f.Path }</code> <span class="tool-note">{ diffStat(f.Add, f.Del) }</span></div>
+		}
+		for _, l := range f.Lines {
+			<div class={ toolDiffClass(l.Op) }><span class="dm">{ diffMark(l.Op) }</span>{ l.Text }</div>
+		}
+		if f.Clipped > 0 {
+			<div class="dl hunk">{ fmt.Sprintf("… %d more %s", f.Clipped, plural(f.Clipped, "line", "lines")) }</div>
+		}
+	</div>
+}
+
 templ Approval(a store.Approval) {
+	if qs := domain.Questions(a.ToolName, a.Input); qs != nil {
+		@questionCard(a, qs)
+	} else {
+		@permissionCard(a)
+	}
+}
+
+templ permissionCard(a store.Approval) {
 	<div id={ "ap-" + a.ID } class="item approval">
 		<div class="approval-head">
 			<span class="tag warn">approval</span>
@@ -320,7 +407,90 @@ templ Approval(a store.Approval) {
 	</div>
 }
 
+// questionCard is an AskUserQuestion waiting for the human: each question
+// with its options to pick (one, or several when it allows that) and a
+// field for an answer of their own. The submit button carries the allow
+// decision and skip the deny one, so the approval hotkeys work here too.
+templ questionCard(a store.Approval, qs []domain.Question) {
+	<form id={ "ap-" + a.ID } class="item approval question" data-on:submit__prevent={ "@post('/api/threads/" + a.ThreadID + "/approvals/" + a.ID + "/answer', {contentType: 'form'})" }>
+		for i, q := range qs {
+			{{ name := "q" + strconv.Itoa(i) }}
+			<fieldset class="q">
+				<legend class="approval-head">
+					if q.Header != "" {
+						<span class="tag warn">{ q.Header }</span>
+					}
+					<span class="q-text">{ q.Question }</span>
+					if q.MultiSelect {
+						<span class="dim q-hint">pick any</span>
+					}
+				</legend>
+				<div class="q-opts">
+					for _, o := range q.Options {
+						<label class="q-opt">
+							if q.MultiSelect {
+								<input type="checkbox" name={ name } value={ o.Label }/>
+							} else {
+								<input type="radio" name={ name } value={ o.Label }/>
+							}
+							<span class="q-opt-text">
+								<span class="q-label">{ o.Label }</span>
+								if o.Description != "" {
+									<span class="dim q-desc">{ o.Description }</span>
+								}
+							</span>
+						</label>
+					}
+				</div>
+				<input class="in q-other" type="text" name={ name + "-other" } autocomplete="off" placeholder={ otherHint(q) }/>
+			</fieldset>
+		}
+		<div class="approval-actions">
+			<button type="submit" class="btn primary" data-decision={ domain.DecisionAllow } title={ "Send the answers (" + keys.Display(Key("approve")) + ")" }>{ plural(len(qs), "send answer", "send answers") }</button>
+			<button type="button" class="btn warn" data-decision={ domain.DecisionDeny } title={ "Skip without answering (" + keys.Display(Key("deny")) + ")" } data-on:click={ approveURL(a, domain.DecisionDeny) }>skip</button>
+		</div>
+	</form>
+}
+
+func otherHint(q domain.Question) string {
+	if q.MultiSelect {
+		return "Something else, added to what you picked"
+	}
+	return "Or write your own answer"
+}
+
 templ ApprovalResolved(a store.Approval) {
+	if qs := domain.Questions(a.ToolName, a.Input); qs != nil {
+		@questionResolved(a, qs)
+	} else {
+		@permissionResolved(a)
+	}
+}
+
+templ questionResolved(a store.Approval, qs []domain.Question) {
+	<div id={ "ap-" + a.ID } class={ "item", "approval", "resolved", "question", "d-" + a.Decision }>
+		if len(a.Answers) == 0 {
+			<span class="tag dim">question</span>
+			<span class="dim">{ questionSkipped(a) }</span>
+		} else {
+			for _, q := range qs {
+				<div class="q-answer">
+					<span class="dim">{ q.Question }</span>
+					<span>{ a.Answers[q.Question] }</span>
+				</div>
+			}
+		}
+	</div>
+}
+
+func questionSkipped(a store.Approval) string {
+	if a.Decision == domain.DecisionDeny {
+		return "skipped"
+	}
+	return "not answered"
+}
+
+templ permissionResolved(a store.Approval) {
 	<div id={ "ap-" + a.ID } class={ "item", "approval", "resolved", "d-" + a.Decision }>
 		<span class="tag dim">approval</span>
 		<span class="mono">{ a.ToolName }</span>
@@ -361,4 +531,27 @@ func clip(s string, n int) string {
 		return s
 	}
 	return s[:n] + "\n… (truncated)"
+}
+
+// TurnFiles is the card over a turn's result line with the files the
+// turn's edit calls changed.
+templ TurnFiles(tf turnFiles) {
+	{{ add, del := tf.total() }}
+	<details class="turn-files" data-preserve-attr="open">
+		<summary>
+			@Icon("file-diff", "ui-icon")
+			<span>{ fmt.Sprintf("%d %s edited", len(tf.Files), plural(len(tf.Files), "file", "files")) }</span>
+			<span class="tf-stat"><span class="plus">{ fmt.Sprintf("+%d", add) }</span> <span class="minus">{ fmt.Sprintf("−%d", del) }</span></span>
+		</summary>
+		<div class="tf-list">
+			for _, f := range tf.Files {
+				<div class="tf-file">@tfRow(f)</div>
+			}
+		</div>
+	</details>
+}
+
+templ tfRow(f fileStat) {
+	<code class="tf-path">{ relPath(ctx, f.Path) }</code>
+	<span class="tf-stat"><span class="plus">{ fmt.Sprintf("+%d", f.Add) }</span> <span class="minus">{ fmt.Sprintf("−%d", f.Del) }</span></span>
 }

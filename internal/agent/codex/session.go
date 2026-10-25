@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"starcode/internal/agent"
+	"starcode/internal/agent/imagein"
 )
 
 // eventBuffer is the capacity of the channel returned by Events.
@@ -44,6 +45,9 @@ type session struct {
 	announced string
 	// approvals maps our approval id to the JSON-RPC id to answer.
 	approvals map[string]json.RawMessage
+	// questions are the requestUserInput requests waiting for answers,
+	// by approval id.
+	questions map[string]question
 	// sawText, sawThinking and sawOutput record which items already
 	// streamed, so item/completed does not repeat text we have shown.
 	sawText     map[string]bool
@@ -70,6 +74,7 @@ func newSession(c *client, threadID string, log *slog.Logger) *session {
 		threadID:     threadID,
 		out:          make(chan agent.Event, eventBuffer),
 		approvals:    make(map[string]json.RawMessage),
+		questions:    make(map[string]question),
 		sawText:      make(map[string]bool),
 		sawThinking:  make(map[string]bool),
 		sawOutput:    make(map[string]bool),
@@ -85,9 +90,65 @@ func (s *session) Events() <-chan agent.Event { return s.out }
 // Send starts a turn. It waits for the turn/start response so the turn id is
 // known before any of its items arrive.
 func (s *session) Send(ctx context.Context, text string) error {
+	return s.SendImages(ctx, text, nil)
+}
+
+// command runs the slash commands codex's app-server has methods for
+// (it takes turn text as a prompt, so "/review" would reach the model as
+// a word): /compact, and /review with an optional base branch, or with
+// instructions. ok is false for any other text.
+func (s *session) command(ctx context.Context, text string) (ok bool, err error) {
+	name, arg, _ := strings.Cut(strings.TrimSpace(text), " ")
+	arg = strings.TrimSpace(arg)
+	switch name {
+	case "/compact":
+		return true, s.Compact(ctx)
+	case "/review":
+		target := map[string]any{"type": "uncommittedChanges"}
+		switch {
+		case arg == "":
+		case !strings.ContainsAny(arg, " \t\n"):
+			target = map[string]any{"type": "baseBranch", "branch": arg}
+		default:
+			target = map[string]any{"type": "custom", "instructions": arg}
+		}
+		raw, err := s.c.call(ctx, "review/start", map[string]any{"threadId": s.threadID, "target": target, "delivery": "inline"})
+		if err != nil {
+			return true, err
+		}
+		var res struct {
+			Turn struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		}
+		json.Unmarshal(raw, &res)
+		if res.Turn.ID != "" {
+			s.ensureTurn(res.Turn.ID)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// SendImages is Send with the images at paths as localImage inputs, which
+// codex reads and scales itself. A type the model does not take is left
+// to the text.
+func (s *session) SendImages(ctx context.Context, text string, paths []string) error {
+	if len(paths) == 0 {
+		if ok, err := s.command(ctx, text); ok {
+			return err
+		}
+	}
+	input := []any{map[string]any{"type": "text", "text": text}}
+	for _, p := range paths {
+		if mime, err := imagein.Sniff(p); err != nil || !imagein.Supported(mime) {
+			continue
+		}
+		input = append(input, map[string]any{"type": "localImage", "path": p})
+	}
 	params := map[string]any{
 		"threadId": s.threadID,
-		"input":    []any{map[string]any{"type": "text", "text": text}},
+		"input":    input,
 	}
 	for k, v := range s.turnParams {
 		params[k] = v
@@ -137,9 +198,15 @@ func (s *session) Interrupt(ctx context.Context) error {
 	return err
 }
 
-// Resolve answers a pending approval request.
+// Resolve answers a pending approval request. Denying a question
+// answers it with nothing, which codex reads as the user skipping it.
 func (s *session) Resolve(ctx context.Context, approvalID string, decision agent.Decision) error {
 	s.mu.Lock()
+	if q, ok := s.questions[approvalID]; ok {
+		delete(s.questions, approvalID)
+		s.mu.Unlock()
+		return s.c.respond(q.rpcID, map[string]any{"answers": map[string]any{}})
+	}
 	id, ok := s.approvals[approvalID]
 	delete(s.approvals, approvalID)
 	s.mu.Unlock()
@@ -164,11 +231,16 @@ func (s *session) Close() error {
 	s.closing = true
 	pending := s.approvals
 	s.approvals = make(map[string]json.RawMessage)
+	asked := s.questions
+	s.questions = make(map[string]question)
 	s.mu.Unlock()
 
 	// Leave nothing for the server to wait on.
 	for _, id := range pending {
 		_ = s.c.respond(id, map[string]any{"decision": "decline"})
+	}
+	for _, q := range asked {
+		_ = s.c.respond(q.rpcID, map[string]any{"answers": map[string]any{}})
 	}
 	s.c.removeSession(s)
 	if !s.c.isDead() {
@@ -499,12 +571,8 @@ func (s *session) itemCompleted(it item) {
 			s.emitNotice(it.Text)
 		}
 
-	case "exitedReviewMode":
-		if it.Review != "" {
-			s.emitNotice(it.Review)
-		}
-
-	case "userMessage", "reasoningSection", "contextCompaction", "enteredReviewMode":
+	case "userMessage", "reasoningSection", "contextCompaction", "enteredReviewMode", "exitedReviewMode":
+		// A review's text also arrives as an agentMessage.
 		// Nothing to add.
 
 	default:
@@ -519,7 +587,8 @@ func (s *session) turnCompleted(params json.RawMessage) {
 			Status     string `json:"status"`
 			DurationMS int64  `json:"durationMs"`
 			Error      *struct {
-				Message string `json:"message"`
+				Message        string          `json:"message"`
+				CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
 			} `json:"error"`
 		} `json:"turn"`
 		Usage json.RawMessage `json:"usage"`
@@ -553,8 +622,12 @@ func (s *session) turnCompleted(params json.RawMessage) {
 		status = "error"
 	}
 	msg := ""
+	var limitReset time.Time
 	if p.Turn.Error != nil {
 		msg = p.Turn.Error.Message
+		if status == "error" && usageLimitHit(p.Turn.Error.CodexErrorInfo, msg) {
+			limitReset = s.c.fullReset()
+		}
 	}
 	in, out := tokensFrom(p.Usage)
 	s.mu.Lock()
@@ -577,6 +650,7 @@ func (s *session) turnCompleted(params json.RawMessage) {
 		DurationMS:   dur,
 		InputTokens:  in,
 		OutputTokens: out,
+		LimitReset:   limitReset,
 	}})
 }
 
@@ -620,12 +694,17 @@ func (s *session) tokenUsage(params json.RawMessage) {
 func (s *session) threadError(params json.RawMessage) {
 	var p struct {
 		Error struct {
-			Message string `json:"message"`
+			Message        string          `json:"message"`
+			CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
 		} `json:"error"`
 		Message string `json:"message"`
 	}
 	_ = json.Unmarshal(params, &p)
 	text := firstNonEmpty(p.Error.Message, p.Message, "codex reported an error")
+	var limitReset time.Time
+	if usageLimitHit(p.Error.CodexErrorInfo, text) {
+		limitReset = s.c.fullReset()
+	}
 
 	s.mu.Lock()
 	turnID := s.turnID
@@ -637,7 +716,7 @@ func (s *session) threadError(params json.RawMessage) {
 		return
 	}
 	s.emit(agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{
-		TurnID: turnID, Status: "error", Error: text,
+		TurnID: turnID, Status: "error", Error: text, LimitReset: limitReset,
 	}})
 }
 
@@ -650,6 +729,9 @@ func (s *session) handleServerRequest(msg wireMessage) {
 		toolName = "Bash"
 	case "item/fileChange/requestApproval":
 		toolName = "Edit"
+	case "item/tool/requestUserInput":
+		s.askUser(msg)
+		return
 	default:
 		s.c.declineRequest(msg, s)
 		return
@@ -916,4 +998,85 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// question is a requestUserInput request: the id to answer and codex's id
+// for each question, keyed by the question's text, which is what the
+// answers come back keyed by (see agent.Answerer).
+type question struct {
+	rpcID json.RawMessage
+	ids   map[string]string
+}
+
+// askUser turns codex's request_user_input into the question card Claude's
+// AskUserQuestion gets: the same tool name and input shape, so the app and
+// the page need nothing new. A secret question is asked like the others;
+// the answer goes into the transcript, so the card says so.
+func (s *session) askUser(msg wireMessage) {
+	var p struct {
+		ItemID    string `json:"itemId"`
+		TurnID    string `json:"turnId"`
+		Questions []struct {
+			ID       string `json:"id"`
+			Header   string `json:"header"`
+			Question string `json:"question"`
+			IsSecret bool   `json:"isSecret"`
+			Options  []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.Params, &p); err != nil || len(p.Questions) == 0 {
+		_ = s.c.respond(msg.ID, map[string]any{"answers": map[string]any{}})
+		return
+	}
+	s.ensureTurn(p.TurnID)
+	q := question{rpcID: msg.ID, ids: map[string]string{}}
+	var qs []map[string]any
+	for _, x := range p.Questions {
+		text := x.Question
+		if x.IsSecret {
+			text += " (the answer is kept in the transcript)"
+		}
+		// Two questions with the same text would share an answer.
+		for q.ids[text] != "" {
+			text += " "
+		}
+		q.ids[text] = x.ID
+		opts := []map[string]any{}
+		for _, o := range x.Options {
+			opts = append(opts, map[string]any{"label": o.Label, "description": o.Description})
+		}
+		qs = append(qs, map[string]any{"question": text, "header": x.Header, "options": opts, "multiSelect": false})
+	}
+	id := requestID(msg.ID)
+	s.mu.Lock()
+	s.questions[id] = q
+	s.mu.Unlock()
+	s.emit(agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{
+		ID:          id,
+		ToolID:      p.ItemID,
+		ToolName:    "AskUserQuestion",
+		Description: p.Questions[0].Question,
+		Input:       mustJSON(map[string]any{"questions": qs}),
+	}})
+}
+
+// Answer sends the reader's answers to a requestUserInput request.
+func (s *session) Answer(ctx context.Context, approvalID string, answers map[string]string) error {
+	s.mu.Lock()
+	q, ok := s.questions[approvalID]
+	delete(s.questions, approvalID)
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("codex: no pending question %q", approvalID)
+	}
+	out := map[string]any{}
+	for text, a := range answers {
+		if id := q.ids[text]; id != "" {
+			out[id] = map[string]any{"answers": []string{a}}
+		}
+	}
+	return s.c.respond(q.rpcID, map[string]any{"answers": out})
 }

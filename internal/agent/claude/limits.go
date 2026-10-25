@@ -74,6 +74,7 @@ func (a *Agent) Limits(ctx context.Context) (agent.Limits, error) {
 			return agent.Limits{}, err
 		}
 		limits.CheckedAt = time.Now()
+		limits.Resets = a.readResets(ctx)
 		a.lmu.Lock()
 		a.overageModel = scoped
 		a.lmu.Unlock()

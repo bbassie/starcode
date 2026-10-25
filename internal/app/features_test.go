@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -78,7 +76,7 @@ func (a *freshAgent) config(i int) agent.Config {
 func TestRewindForksTheConversation(t *testing.T) {
 	ctx := context.Background()
 	a, st, ag := newFreshApp(t, "")
-	id, err := a.CreateThread(ctx, "p1", "fresh-test", "", ThreadStart{})
+	id, err := a.CreateThread(ctx, "p1", "fresh-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +104,7 @@ func TestRewindForksTheConversation(t *testing.T) {
 		t.Fatalf("second prompt meta = %+v", m)
 	}
 
-	text, err := a.Rewind(ctx, id, prompts[1].ID, false)
+	text, err := a.Rewind(ctx, id, prompts[1].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +140,7 @@ func TestRewindForksTheConversation(t *testing.T) {
 	}
 
 	// Back to the first prompt: a fresh conversation.
-	if _, err := a.Rewind(ctx, id, left[0].ID, false); err != nil {
+	if _, err := a.Rewind(ctx, id, left[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	th, _ = st.Thread(ctx, id)
@@ -151,59 +149,10 @@ func TestRewindForksTheConversation(t *testing.T) {
 	}
 }
 
-// TestRewindRestoresWorktreeFiles checks the files come back with
-// "revert files too" in a worktree thread.
-func TestRewindRestoresWorktreeFiles(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is not installed")
-	}
-	ctx := context.Background()
-	repo := t.TempDir()
-	for _, args := range [][]string{{"init", "--quiet", "-b", "main"}, {"commit", "--quiet", "--allow-empty", "-m", "first"}} {
-		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	a, st, ag := newFreshApp(t, repo)
-	a.WorktreeRoot = filepath.Join(t.TempDir(), "wt")
-	id, err := a.CreateThread(ctx, "p1", "fresh-test", "", ThreadStart{Mode: "worktree", Base: "main"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	th, _ := st.Thread(ctx, id)
-	if th.Worktree == "" {
-		t.Fatal("no worktree")
-	}
-	file := filepath.Join(th.Worktree, "f.txt")
-	os.WriteFile(file, []byte("before\n"), 0o644)
-	if err := a.SendPrompt(ctx, id, "one"); err != nil {
-		t.Fatal(err)
-	}
-	s := ag.session(0)
-	receivePrompt(t, s.sent)
-	s.events <- agent.Event{Kind: agent.KindSessionInfo, SessionInfo: &agent.SessionInfo{ExternalID: "conv"}}
-	os.WriteFile(file, []byte("agent wrote this\n"), 0o644)
-	finishTurn(t, st, id, s, "a1")
-
-	prompt := userItems(t, st, id)[0]
-	th, _ = st.Thread(ctx, id)
-	if info := CanRewind(th, prompt, true, false); !info.OK || !info.Files {
-		t.Fatalf("CanRewind = %+v", info)
-	}
-	if _, err := a.Rewind(ctx, id, prompt.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(file); string(b) != "before\n" {
-		t.Fatalf("file after rewind = %q", b)
-	}
-}
-
 func TestSnoozeWakesOnTime(t *testing.T) {
 	ctx := context.Background()
 	a, st, _ := newFreshApp(t, "")
-	id, err := a.CreateThread(ctx, "p1", "fresh-test", "", ThreadStart{})
+	id, err := a.CreateThread(ctx, "p1", "fresh-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +196,7 @@ func TestSnoozeWakesOnTime(t *testing.T) {
 func TestSettleKeepsPlace(t *testing.T) {
 	ctx := context.Background()
 	a, st, _ := newFreshApp(t, "")
-	id, err := a.CreateThread(ctx, "p1", "fresh-test", "", ThreadStart{})
+	id, err := a.CreateThread(ctx, "p1", "fresh-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +236,7 @@ func TestRecoverResumesCutOffTurn(t *testing.T) {
 	ag := &freshAgent{}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a := New(st, bus.New(64), map[string]agent.Agent{"fresh-test": ag}, log)
-	id, _ := a.CreateThread(ctx, "p1", "fresh-test", "", ThreadStart{})
+	id, _ := a.CreateThread(ctx, "p1", "fresh-test", "")
 	if err := a.SendPrompt(ctx, id, "long job"); err != nil {
 		t.Fatal(err)
 	}
@@ -343,90 +292,18 @@ func TestProjectSettings(t *testing.T) {
 	if err := a.SetProjectSettings(ctx, "p1", ProjectSettings{Agent: "nope"}); err == nil {
 		t.Fatal("an unknown agent was taken")
 	}
-	if err := a.SetProjectSettings(ctx, "p1", ProjectSettings{Agent: "fresh-test", Model: "m", Mode: "yolo", Cleanup: "off"}); err != nil {
-		t.Fatal(err)
-	}
-	// The worktree toggle keeps the rest.
-	if err := a.SetProjectWorktrees(ctx, "p1", true); err != nil {
+	if err := a.SetProjectSettings(ctx, "p1", ProjectSettings{Agent: "fresh-test", Model: "m", Mode: "yolo"}); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := st.Project(ctx, "p1")
-	if !p.Worktrees || p.Agent != "fresh-test" || p.Model != "m" || p.Mode != "yolo" || p.Cleanup != "off" {
+	if p.Agent != "fresh-test" || p.Model != "m" || p.Mode != "yolo" {
 		t.Fatalf("project = %+v", p)
 	}
 	// Clearing the agent clears the model with it.
-	if err := a.SetProjectSettings(ctx, "p1", ProjectSettings{Worktrees: true, Model: "m"}); err != nil {
+	if err := a.SetProjectSettings(ctx, "p1", ProjectSettings{Model: "m"}); err != nil {
 		t.Fatal(err)
 	}
 	if p, _ := st.Project(ctx, "p1"); p.HasDefaults() || p.Model != "" {
 		t.Fatalf("project after clearing = %+v", p)
-	}
-}
-
-// TestCleanWorktrees runs the cleanup rules over a worktree thread: off
-// by default, kept while it holds work, removed once a settled thread's
-// commits are all in the default branch, kept when the project says so.
-func TestCleanWorktrees(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is not installed")
-	}
-	ctx := context.Background()
-	repo := t.TempDir()
-	for _, args := range [][]string{{"init", "--quiet", "-b", "main"}, {"commit", "--quiet", "--allow-empty", "-m", "first"}} {
-		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	a, st, _ := newFreshApp(t, repo)
-	a.WorktreeRoot = filepath.Join(t.TempDir(), "wt")
-	id, err := a.CreateThread(ctx, "p1", "fresh-test", "", ThreadStart{Mode: "worktree", Base: "main"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	th, _ := st.Thread(ctx, id)
-	onDisk := func() bool { _, err := os.Stat(th.Worktree); return err == nil }
-	if !onDisk() {
-		t.Fatal("no worktree")
-	}
-	a.ArchiveThread(ctx, id)
-	a.CleanWorktrees(ctx)
-	if !onDisk() {
-		t.Fatal("removed with the rules off")
-	}
-	st.SetSetting(ctx, "wt_clean_merged", "1")
-	os.WriteFile(filepath.Join(th.Worktree, "wip.txt"), []byte("wip"), 0o644)
-	a.CleanWorktrees(ctx)
-	if !onDisk() {
-		t.Fatal("removed a worktree with an untracked file")
-	}
-	os.Remove(filepath.Join(th.Worktree, "wip.txt"))
-	a.SetProjectSettings(ctx, "p1", ProjectSettings{Cleanup: "off"})
-	a.CleanWorktrees(ctx)
-	if !onDisk() {
-		t.Fatal("removed with the project's cleanup off")
-	}
-	a.SetProjectSettings(ctx, "p1", ProjectSettings{})
-	a.KeepWorktree = func(dir string) bool { return dir == th.Worktree }
-	a.CleanWorktrees(ctx)
-	if !onDisk() {
-		t.Fatal("removed a worktree KeepWorktree protects")
-	}
-	a.KeepWorktree = nil
-	a.CleanWorktrees(ctx)
-	if onDisk() {
-		t.Fatal("a settled, merged, clean worktree was kept")
-	}
-	// The thread keeps its worktree and branch; the next session puts it back.
-	th2, _ := st.Thread(ctx, id)
-	if th2.Worktree != th.Worktree || th2.WorktreeBranch == "" {
-		t.Fatalf("thread lost its worktree: %+v", th2)
-	}
-	if err := a.SendPrompt(ctx, id, "again"); err != nil {
-		t.Fatal(err)
-	}
-	if !onDisk() {
-		t.Fatal("the next prompt did not check the worktree out again")
 	}
 }

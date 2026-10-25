@@ -24,6 +24,9 @@ import (
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	view := r.URL.Query().Get("view")
 	threadID := r.URL.Query().Get("id")
+	if view == "thread" && threadID != "" {
+		r = s.withThreadDir(r, threadID)
+	}
 	usageDays, usageMetric := usageParams(r)
 	provSel, provTab := providerParams(r)
 	projSel := r.URL.Query().Get("p")
@@ -45,8 +48,20 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		Full     bool   `json:"full"`
 		MainV    string `json:"mainv"`
 		SideV    string `json:"sidev"`
+		// PID names the page for presence (push.go), and Vis is whether
+		// it was in view when the stream opened.
+		PID string `json:"pid"`
+		Vis bool   `json:"vis"`
 	}
 	datastar.ReadSignals(r, &sig)
+	if sig.PID != "" {
+		shown := ""
+		if view == "thread" {
+			shown = threadID
+		}
+		s.presence.open(sig.PID, shown, sig.Vis)
+		defer s.presence.close(sig.PID)
+	}
 
 	// Subscribe before the initial render so nothing slips between them.
 	ch := s.App.Bus.Subscribe(ctx)
@@ -69,6 +84,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if err := c.renderUpdateBanner(ctx); err != nil {
 		return
 	}
+	// A heartbeat right away tells the page it is connected again, which
+	// takes down its "reconnecting" pill without waiting 20s.
+	if err := sse.MarshalAndPatchSignals(map[string]any{"_hb": time.Now().UnixMilli()}); err != nil {
+		return
+	}
 
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
@@ -80,7 +100,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-heartbeat.C:
-			if err := sse.MarshalAndPatchSignals(map[string]any{"_hb": time.Now().Unix()}); err != nil {
+			if err := sse.MarshalAndPatchSignals(map[string]any{"_hb": time.Now().UnixMilli()}); err != nil {
 				return
 			}
 		case <-flush.C:
@@ -111,6 +131,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				}
 			case domain.BinaryUpdated:
 				err = c.renderUpdateBanner(ctx)
+			case domain.NotifyLevelChanged:
+				if view == "thread" && m.ThreadID == threadID {
+					err = c.renderHead(ctx, false)
+				}
+			case domain.AgentNotified:
+				err = c.sse.PatchElementTempl(views.NoteToast(m.Title + ": " + m.Text))
 			case domain.SeenChanged:
 				c.sideDirty, c.sideFull = true, true
 				c.homeDirty = view == "home"
@@ -162,7 +188,11 @@ type conn struct {
 	dirty map[string]bool
 	// tails is the streamed text per running item since its last full
 	// patch; see flushTails.
-	tails     map[string]*tail
+	tails map[string]*tail
+	// thought is a thinking item's text having streamed since the work
+	// header last showed it; thoughtAt when the header last did.
+	thought   bool
+	thoughtAt time.Time
 	gitDirty  bool
 	sideDirty bool
 	homeDirty bool
@@ -312,7 +342,7 @@ func (c *conn) renderProviders(ctx context.Context) error {
 }
 
 func (c *conn) renderUpdateBanner(ctx context.Context) error {
-	return c.sse.PatchElementTempl(views.UpdateBanner(c.s.bannerData(ctx, c.threadID)))
+	return c.sse.PatchElementTempl(views.UpdateBanner(c.s.bannerData(ctx)))
 }
 
 func (c *conn) renderSidebar(ctx context.Context) error {
@@ -418,9 +448,6 @@ func (c *conn) renderGit(ctx context.Context) error {
 	if err != nil {
 		return nil
 	}
-	if t, err := c.s.App.Store.Thread(ctx, c.threadID); err == nil {
-		p.Path = t.Dir(p)
-	}
 	d := views.GitData{Project: p, Status: gitx.Read(ctx, p.Path), ThreadID: c.threadID}
 	head, err := renderString(ctx, views.GitHeader(d))
 	if err != nil {
@@ -491,6 +518,9 @@ func (c *conn) flushTails(ctx context.Context) error {
 		}
 		text := t.pending.String()
 		t.pending.Reset()
+		if t.kind == domain.KindThinking {
+			c.thought = true
+		}
 		if t.capped {
 			continue
 		}
@@ -551,7 +581,13 @@ func (c *conn) flushDirty(ctx context.Context) error {
 	if err := c.flushTails(ctx); err != nil {
 		return err
 	}
+	// The running work header shows the newest line of a streaming
+	// thought; twice a second is enough to read it.
 	touchedWork := false
+	if c.thought && time.Since(c.thoughtAt) > 500*time.Millisecond {
+		c.thought, c.thoughtAt = false, time.Now()
+		touchedWork = true
+	}
 	parents := map[string]bool{}
 	for id := range c.dirty {
 		delete(c.dirty, id)
@@ -643,7 +679,11 @@ func (c *conn) renderPromptQueue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.sse.PatchElementTempl(views.PromptQueue(views.ThreadData{Thread: t, Queued: queued}))
+	scheduled, err := c.s.App.Store.Schedules(ctx, c.threadID)
+	if err != nil {
+		return err
+	}
+	return c.sse.PatchElementTempl(views.PromptQueue(views.ThreadData{Thread: t, Queued: queued, Scheduled: scheduled}))
 }
 
 func (c *conn) renderMessageRail(ctx context.Context) error {
@@ -677,7 +717,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 			// rare enough to cost a full morph.
 			return c.resync(ctx)
 		}
-	case domain.ThreadRenamed, domain.ThreadStatusChanged, domain.ThreadSettingsChanged, domain.AgentSessionBound, domain.ThreadArchived, domain.ThreadUnarchived, domain.ThreadSnoozed, domain.ThreadWoken, domain.ThreadPinned, domain.ThreadUnpinned, domain.ThreadWorktreeSet, domain.ThreadPRLinked, domain.ThreadPRUnlinked:
+	case domain.ThreadRenamed, domain.ThreadStatusChanged, domain.ThreadSettingsChanged, domain.ThreadBranched, domain.AgentSessionBound, domain.ThreadArchived, domain.ThreadUnarchived, domain.ThreadSnoozed, domain.ThreadWoken, domain.ThreadPinned, domain.ThreadUnpinned, domain.ThreadPRLinked, domain.ThreadPRUnlinked, domain.ThreadPRWatchSet, domain.ThreadPRWatchStopped:
 		c.sideDirty = true
 		c.rowDirty[ev.ThreadID] = true
 		// The project cards on the home page show the same glyphs and
@@ -698,13 +738,10 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 				}
 			}
 			// Settings and the bound session change what the chips show;
-			// the rest only moves the status. A worktree change moves the
-			// panel to the other checkout as well.
+			// the rest only moves the status.
 			switch p.(type) {
 			case domain.ThreadSettingsChanged, domain.AgentSessionBound:
 				return c.renderHead(ctx, true)
-			case domain.ThreadWorktreeSet:
-				c.gitDirty = true
 			}
 			return c.renderHead(ctx, false)
 		}
@@ -714,7 +751,14 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		if mine {
 			return c.sse.Redirect("/")
 		}
-	case domain.PromptQueued, domain.PromptDequeued:
+	case domain.PromptQueued, domain.PromptDequeued, domain.PromptEdited, domain.PromptsReordered:
+		if mine {
+			return c.renderPromptQueue(ctx)
+		}
+	case domain.ScheduleSet, domain.ScheduleRan, domain.ScheduleRemoved:
+		if c.view == "schedules" {
+			return c.renderAll(ctx)
+		}
 		if mine {
 			return c.renderPromptQueue(ctx)
 		}

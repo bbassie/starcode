@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/starfederation/datastar-go/datastar"
 
@@ -24,6 +25,7 @@ import (
 	"starcode/internal/gitx"
 	"starcode/internal/keys"
 	"starcode/internal/providers"
+	"starcode/internal/push"
 	"starcode/internal/store"
 	"starcode/internal/term"
 	usagex "starcode/internal/usage"
@@ -63,10 +65,16 @@ type Server struct {
 	limits    limitsCache
 	prs       prCache
 	files     fileListCache
+	sent      sentPrompts
 	assets    string
+	// Push sends Web Push messages; nil turns them off (push.go).
+	Push     *push.Sender
+	presence presence
+	// agentKey is the secret behind the agents' keys (agentapi.go).
+	agentOnce sync.Once
+	agentKey  []byte
 }
 
-var errUnknownBuild = errors.New("that build is not on the list any more")
 var errRestartUnavailable = errors.New("restart is not available in this build")
 
 func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.Store) *Server {
@@ -92,6 +100,13 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		w.Write([]byte(body))
 	})
+	// Mermaid (diagrams in replies, loaded on demand) is 3.5 MB of script
+	// and ships gzipped; every browser takes gzip.
+	s.mux.Handle("GET /static/mermaid.js", cacheStatic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Content-Encoding", "gzip")
+		http.ServeFileFS(w, r, static, "mermaid.js.gz")
+	})))
 	// The service worker (notifications) must be served from the root
 	// to control every page; it is never cached, so a rebuild replaces
 	// it on the next page load.
@@ -108,6 +123,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/prs/{owner}/{name}/{n}/thread", s.pullRequestPageThread)
 	s.mux.HandleFunc("GET /settings", s.settings)
 	s.mux.HandleFunc("GET /settings/appearance", s.appearance)
+	s.mux.HandleFunc("GET /settings/schedules", s.schedulesPage)
 	s.mux.HandleFunc("GET /settings/usage", s.usage)
 	s.mux.HandleFunc("GET /settings/providers", s.providersPage)
 	s.mux.HandleFunc("GET /settings/keys", s.keysPage)
@@ -149,35 +165,43 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/threads", s.newThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/send", s.send)
 	s.mux.HandleFunc("POST /api/threads/{id}/queue/{qid}/remove", s.removeQueuedPrompt)
+	s.mux.HandleFunc("POST /api/threads/{id}/queue/{qid}/edit", s.editQueuedPrompt)
+	s.mux.HandleFunc("POST /api/threads/{id}/queue/{qid}/move", s.moveQueuedPrompt)
 	s.mux.HandleFunc("POST /api/threads/{id}/interrupt", s.interrupt)
+	s.mux.HandleFunc("POST /api/threads/{id}/items/{item}/stop", s.stopSubagent)
 	s.mux.HandleFunc("POST /api/threads/{id}/compact", s.compactContext)
+	s.mux.HandleFunc("POST /api/threads/{id}/retitle", s.retitleThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/delete", s.deleteThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/archive", s.archiveThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/unarchive", s.unarchiveThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/pin", s.pinThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/unpin", s.pinThread)
+	s.mux.HandleFunc("POST /api/threads/{id}/unread", s.markUnread)
 	s.mux.HandleFunc("POST /api/threads/{id}/steer", s.steer)
-	s.mux.HandleFunc("POST /api/threads/{id}/worktree/remove", s.removeWorktree)
-	s.mux.HandleFunc("POST /api/threads/{id}/worktree/thread", s.newThreadInWorktree)
-	s.mux.HandleFunc("POST /api/projects/{id}/worktrees/toggle", s.setProjectWorktrees)
 	s.mux.HandleFunc("POST /api/limits/refresh", s.refreshLimits)
+	s.mux.HandleFunc("POST /api/limits/{name}/redeem", s.redeemReset)
 	s.mux.HandleFunc("POST /api/sidebar", s.setSidebarMode)
 	s.mux.HandleFunc("POST /api/pull-main", s.pullMain)
 	s.mux.HandleFunc("POST /api/settle", s.setSettle)
 	s.prActionRoutes()
 	s.slashRoutes()
-	s.worktreeRoutes()
 	s.threadCmdRoutes()
+	s.pushRoutes()
+	s.scheduleRoutes()
 	s.mux.HandleFunc("POST /api/threads/{id}/rename", s.renameThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/link", s.linkPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/unlink", s.unlinkPR)
+	s.mux.HandleFunc("POST /api/threads/{id}/pr/watch", s.watchPR)
+	s.mux.HandleFunc("POST /api/threads/{id}/pr/unwatch", s.unwatchPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/rules/revoke", s.revokeRule)
 	s.mux.HandleFunc("POST /api/drafts/{key}", s.saveDraft)
 	s.mux.HandleFunc("POST /api/threads/{id}/settings", s.setThreadSettings)
 	s.mux.HandleFunc("POST /api/threads/{id}/approvals/{aid}/{decision}", s.approve)
+	s.mux.HandleFunc("POST /api/threads/{id}/approvals/{aid}/answer", s.answer)
 	s.mux.HandleFunc("POST /api/theme", s.setTheme)
 	s.read("/api/git/{id}/refresh", s.gitRefresh)
 	s.read("/api/git/{id}/diff", s.gitDiff)
+	s.read("/api/git/{id}/find", s.gitFind)
 	s.read("/api/git/{id}/file", s.gitFile)
 	s.mux.HandleFunc("POST /api/git/{id}/file", s.saveGitFile)
 	s.mux.HandleFunc("GET /api/term/{id}/stream", s.termStream)
@@ -186,8 +210,6 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/term/{id}/kill", s.termKill)
 	s.mux.HandleFunc("GET /api/term/{id}/panes", s.termPanes)
 	s.Usage.SetRoots(s.usageRoots())
-	// The cleanup never removes the checkout this process runs from.
-	a.KeepWorktree = s.runsFrom
 	s.warm()
 	return s
 }
@@ -197,8 +219,8 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 func (s *Server) Watch(ctx context.Context) {
 	go s.watchProviders(ctx)
 	go s.watchPRs(ctx)
+	go s.watchPush(ctx)
 	if s.Update != nil {
-		s.Update.Lister = s.selfWorktrees
 		go s.Update.Watch(ctx, s.App.Bus.Publish)
 	}
 }
@@ -559,7 +581,7 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 	caps, capsErrs := s.capabilities(ctx)
 	branch, repo := "", ""
 	if p.Path != "" {
-		branch = gitx.Read(ctx, t.Dir(p)).Branch
+		branch = gitx.Read(ctx, p.Path).Branch
 	}
 	var pr store.PRState
 	if ref, ok := t.Linked(); ok {
@@ -574,6 +596,14 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 			repo = ref.Repo
 		}
 	}
-	return views.ThreadData{Thread: t, Project: p, Items: items, Queued: queued, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
+	var parent store.Thread
+	if t.Parent != "" {
+		parent, _ = s.App.Store.Thread(ctx, t.Parent)
+	}
+	scheduled, err := s.App.Store.Schedules(ctx, id)
+	if err != nil {
+		return views.ThreadData{}, err
+	}
+	return views.ThreadData{Thread: t, Project: p, Items: items, Parent: parent, Scheduled: scheduled, Notify: s.App.Store.NotifyLevel(ctx, id), Queued: queued, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
 		Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }

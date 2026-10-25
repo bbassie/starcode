@@ -61,8 +61,8 @@ func TestSlashItems(t *testing.T) {
 			t.Errorf("scanned item %d = %+v, want %+v", i, got, w)
 		}
 	}
-	if got := slashItems("codex", cfg, proj); got != nil {
-		t.Errorf("codex items = %+v, want none", got)
+	if got := slashItems("codex", cfg, proj); len(got) != len(codexCommands) {
+		t.Errorf("codex items = %+v, want its built-ins only", got)
 	}
 	if got := slashItems("claude", cfg, ""); len(got) != len(claudeCommands)+2 {
 		t.Errorf("without a project got %d items, want %d", len(got), len(claudeCommands)+2)

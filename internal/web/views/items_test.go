@@ -129,20 +129,6 @@ func TestContextWindowPrefersWhatTheAgentReported(t *testing.T) {
 	}
 }
 
-func TestToolSummaryPrefersDescription(t *testing.T) {
-	input, _ := json.Marshal(map[string]string{"command": "go test ./...", "description": "Run the test suite"})
-	m := toolMeta{Input: input, Summary: "go test ./..."}
-	if got := toolSummary("Bash", m); got != "Run the test suite" {
-		t.Fatalf("Bash summary = %q", got)
-	}
-	if got := toolSummary("Read", m); got != "go test ./..." {
-		t.Fatalf("Read summary = %q", got)
-	}
-	if got := toolSummary("Bash", toolMeta{Input: json.RawMessage("null"), Summary: "fallback"}); got != "fallback" {
-		t.Fatalf("null input summary = %q", got)
-	}
-}
-
 func TestPrettyJSONNull(t *testing.T) {
 	if got := PrettyJSON(json.RawMessage("null")); got != "" {
 		t.Fatalf("PrettyJSON(null) = %q", got)

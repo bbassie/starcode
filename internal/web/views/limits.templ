@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"net/url"
 	"starcode/internal/agent"
 	"time"
 )
@@ -18,6 +19,8 @@ type LimitsRow struct {
 	Pending     bool
 	Unsupported bool
 	Err         string
+	// Resets is the plan's banked resets, nil when there are none.
+	Resets *agent.ResetCredits
 }
 
 // LimitsSection heads the Usage page: how much of each plan's windows
@@ -35,6 +38,9 @@ templ LimitsSection(rows []LimitsRow) {
 					<div class="limits-name"><span class="agent-mark" style={ agentMarkStyle(r.Look.Color) }>@Brand(r.Look.Driver, "ui-icon")</span> <span>{ agentLabel(r) }</span></div>
 					if len(r.Windows) > 0 {
 						@LimitBars(r.Windows)
+						if r.Resets != nil && r.Resets.Available > 0 {
+							@bankedResets(r)
+						}
 						if r.Err != "" {
 							<p class="dim tiny-text">last read failed: { r.Err }</p>
 						}
@@ -51,6 +57,21 @@ templ LimitsSection(rows []LimitsRow) {
 			}
 		</div>
 	</section>
+}
+
+// bankedResets is the line under a plan's bars when it holds banked
+// resets, with the button that redeems the next one. Redeeming clears
+// the windows at once, so it asks first.
+templ bankedResets(r LimitsRow) {
+	<div class="limit-resets">
+		@Icon("rotate-ccw", "ui-icon")
+		<span>{ fmt.Sprintf("%d banked %s", r.Resets.Available, plural(r.Resets.Available, "reset", "resets")) }</span>
+		if !r.Resets.Expires.IsZero() {
+			<span class="dim">· next lapses <time data-local={ r.Resets.Expires.UTC().Format(time.RFC3339) }>{ r.Resets.Expires.UTC().Format("Jan 2 15:04") }</time></span>
+		}
+		<span class="spacer"></span>
+		<button class="btn tiny" type="button" data-indicator:_redeeming data-attr:disabled="$_redeeming" title="Use one banked reset: the plan's usage windows start over now" data-on:click={ "confirm(" + jsq("Use one of "+agentLabel(r)+"'s banked resets now? The usage windows start over, and the reset is spent.") + ") && @post('/api/limits/" + url.PathEscape(r.Agent) + "/redeem')" }>use one</button>
+	</div>
 }
 
 func agentLabel(r LimitsRow) string {

@@ -46,11 +46,6 @@ func (s *Server) projectRaw(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if tid := r.URL.Query().Get("tid"); tid != "" {
-		if t, err := s.App.Store.Thread(r.Context(), tid); err == nil && t.ProjectID == p.ID {
-			p.Path = t.Dir(p)
-		}
-	}
 	path := r.URL.Query().Get("path")
 	// Only what the panel previews. Anything else could be a type the
 	// browser runs as a page (.shtml, .xhtml, .xml) without the sandbox.

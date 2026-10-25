@@ -10,17 +10,14 @@ import (
 )
 
 // ProjectSettings is what a project sets for its new threads (see
-// store.Project): whether they get a worktree, the agent, model, effort
-// and permission mode they start with (Agent empty: none), and the
-// worktree cleanup override ("" or "off").
+// store.Project): the agent, model, effort and permission mode they
+// start with (Agent empty: none).
 type ProjectSettings struct {
-	Worktrees                  bool
 	Agent, Model, Effort, Mode string
-	Cleanup                    string
 }
 
 func settingsOf(p store.Project) ProjectSettings {
-	return ProjectSettings{Worktrees: p.Worktrees, Agent: p.Agent, Model: p.Model, Effort: p.Effort, Mode: p.Mode, Cleanup: p.Cleanup}
+	return ProjectSettings{Agent: p.Agent, Model: p.Model, Effort: p.Effort, Mode: p.Mode}
 }
 
 // SetProjectSettings replaces a project's settings. A newly named agent
@@ -38,14 +35,9 @@ func (a *App) SetProjectSettings(ctx context.Context, id string, ps ProjectSetti
 	} else if _, ok := a.Agent(ps.Agent); !ok && ps.Agent != p.Agent {
 		return fmt.Errorf("unknown agent %q", ps.Agent)
 	}
-	switch ps.Cleanup {
-	case "", "off":
-	default:
-		return fmt.Errorf("unknown cleanup setting %q", ps.Cleanup)
-	}
 	if settingsOf(p) == ps {
 		return nil
 	}
-	_, err = a.Store.Append(ctx, "", domain.ProjectSettingsChanged{ID: id, Worktrees: ps.Worktrees, Agent: ps.Agent, Model: ps.Model, Effort: ps.Effort, Mode: ps.Mode, Cleanup: ps.Cleanup})
+	_, err = a.Store.Append(ctx, "", domain.ProjectSettingsChanged{ID: id, Agent: ps.Agent, Model: ps.Model, Effort: ps.Effort, Mode: ps.Mode})
 	return err
 }

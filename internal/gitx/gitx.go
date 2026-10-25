@@ -5,10 +5,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -191,4 +195,150 @@ func pathBase(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// Slug turns a title into a file name: lower case, words joined with
+// dashes, at most 40 characters, "thread" when nothing is left.
+func Slug(title string) string {
+	s := slugRe.ReplaceAllString(strings.ToLower(title), "-")
+	s = strings.Trim(s, "-")
+	if len(s) > 40 {
+		s = strings.Trim(s[:40], "-")
+	}
+	if s == "" {
+		return "thread"
+	}
+	return s
+}
+
+// DiffHit is one line of the working tree's changes that matches a
+// search: the file, its line number (in the new file, or the old one for
+// a removed line), the line's diff mark ('+', '-' or ' ') and its text.
+type DiffHit struct {
+	Path string
+	Line int
+	Op   byte
+	Text string
+}
+
+// maxUntrackedRead caps how much of an untracked file FindInDiff reads.
+const maxUntrackedRead = 1 << 20
+
+// FindInDiff searches everything Diff would show for the changed files
+// of dir, untracked ones included, for q. The search ignores case unless
+// q has a capital letter. At most limit hits come back; more reports
+// whether there were others.
+func FindInDiff(ctx context.Context, dir, q string, limit int) (hits []DiffHit, more bool) {
+	if q == "" {
+		return nil, false
+	}
+	match := matcher(q)
+	add := func(h DiffHit) bool {
+		if !match(h.Text) {
+			return true
+		}
+		if len(hits) == limit {
+			more = true
+			return false
+		}
+		hits = append(hits, h)
+		return true
+	}
+	out, err := run(ctx, dir, "diff", "HEAD", "--no-color", "--no-ext-diff")
+	if err == nil {
+		for _, h := range parseDiff(out) {
+			if !add(h) {
+				return hits, more
+			}
+		}
+	}
+	untracked, err := run(ctx, dir, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return hits, more
+	}
+	for _, p := range strings.Split(untracked, "\x00") {
+		if p == "" {
+			continue
+		}
+		data, err := readHead(filepath.Join(dir, filepath.FromSlash(p)), maxUntrackedRead)
+		if err != nil || bytes.IndexByte(data, 0) >= 0 {
+			continue
+		}
+		for i, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+			if !add(DiffHit{Path: p, Line: i + 1, Op: '+', Text: line}) {
+				return hits, more
+			}
+		}
+	}
+	return hits, more
+}
+
+// matcher is the test FindInDiff applies: smart case, as in most editors.
+func matcher(q string) func(string) bool {
+	if strings.ToLower(q) != q {
+		return func(s string) bool { return strings.Contains(s, q) }
+	}
+	return func(s string) bool { return strings.Contains(strings.ToLower(s), q) }
+}
+
+// readHead reads at most n bytes of the file at path.
+func readHead(path string, n int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, n))
+}
+
+// hunkHead matches a unified diff hunk header: @@ -12,3 +14,5 @@.
+var hunkHead = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+
+// parseDiff reads the lines of a unified diff with their file and line
+// numbers. Headers and binary notices are skipped.
+func parseDiff(diff string) []DiffHit {
+	var out []DiffHit
+	var path string
+	oldLine, newLine := 0, 0
+	inHunk := false
+	for _, line := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			inHunk = false
+			path = ""
+		case !inHunk && strings.HasPrefix(line, "--- "):
+			if p, ok := strings.CutPrefix(line[4:], "a/"); ok {
+				path = p
+			}
+		case !inHunk && strings.HasPrefix(line, "+++ "):
+			// A deleted file has +++ /dev/null and keeps the old name.
+			if p, ok := strings.CutPrefix(line[4:], "b/"); ok {
+				path = p
+			}
+		case strings.HasPrefix(line, "@@"):
+			m := hunkHead.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			oldLine, _ = strconv.Atoi(m[1])
+			newLine, _ = strconv.Atoi(m[2])
+			inHunk = true
+		case inHunk && line != "" && path != "":
+			switch line[0] {
+			case '+':
+				out = append(out, DiffHit{Path: path, Line: newLine, Op: '+', Text: line[1:]})
+				newLine++
+			case '-':
+				out = append(out, DiffHit{Path: path, Line: oldLine, Op: '-', Text: line[1:]})
+				oldLine++
+			case ' ':
+				out = append(out, DiffHit{Path: path, Line: newLine, Op: ' ', Text: line[1:]})
+				oldLine++
+				newLine++
+			}
+		}
+	}
+	return out
 }

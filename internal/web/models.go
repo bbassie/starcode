@@ -53,7 +53,11 @@ func (c *capsCache) load() {
 	c.init()
 	for name, e := range f.Entries {
 		if time.Since(e.Fetched) < 24*time.Hour && len(e.Caps.Models) > 0 {
-			c.entries[name] = capsEntry{caps: e.Caps, fetched: e.Fetched}
+			// Served at once, but counted as stale, so the first read
+			// (warm, at startup) fetches the catalog again. The copy on
+			// disk was built by the binary before this one, whose reading
+			// of the CLI's list may have been different.
+			c.entries[name] = capsEntry{caps: e.Caps}
 		}
 	}
 }

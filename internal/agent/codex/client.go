@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"starcode/internal/agent"
 )
 
 // callTimeout bounds every request we send. turn/start returns as soon as the
@@ -81,6 +83,9 @@ type client struct {
 	dead     bool
 	deadErr  error
 	stopping bool
+	// windows are the account's limits as the last update gave them,
+	// for the reset time of a turn that hits one (see fullReset).
+	windows []agent.LimitWindow
 }
 
 func newClient(tr transport, log *slog.Logger) *client {
@@ -103,7 +108,9 @@ func (c *client) handshake(ctx context.Context) error {
 			"title":   clientName,
 			"version": clientVersion,
 		},
-		"capabilities": map[string]any{},
+		// Questions to the user (item/tool/requestUserInput) are
+		// experimental; codex sends them only to a client that opts in.
+		"capabilities": map[string]any{"experimentalApi": true},
 	}
 	if _, err := c.call(ctx, "initialize", params); err != nil {
 		return err
@@ -338,7 +345,7 @@ func (c *client) declineRequest(msg wireMessage, s *session) {
 		notice string
 	)
 	switch msg.Method {
-	case "mcpServer/elicitation/request", "item/tool/requestUserInput":
+	case "mcpServer/elicitation/request":
 		result = map[string]any{"action": "decline", "content": nil}
 		notice = "auto-declined " + msg.Method + ": starcode cannot collect this input"
 	case "item/permissions/requestApproval":

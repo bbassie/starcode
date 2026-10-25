@@ -381,6 +381,10 @@ func modeName(id string) string {
 		return "Accept edits"
 	case "plan":
 		return "Plan"
+	case "auto":
+		return "Auto"
+	case "auto-review":
+		return "Auto-review"
 	case "dontAsk":
 		return "Don't ask"
 	case "bypassPermissions":
@@ -418,6 +422,8 @@ func modeIcon(id string) string {
 		return "file-pen"
 	case "plan", "read-only":
 		return "eye"
+	case "auto", "auto-review":
+		return "sparkles"
 	case "dontAsk":
 		return "shield-off"
 	case "bypassPermissions", "full-access":
@@ -505,11 +511,12 @@ type SettingsPageData struct {
 	SettleDays   int
 	// Dense is this browser's one-line sidebar rows.
 	Dense bool
-	// Resume is whether a turn a restart cut off is resumed; CleanDays
-	// and CleanMerged are the automatic worktree cleanup rules.
+	// Resume is whether a turn a restart cut off is resumed, ResumeLimit
+	// one the plan's usage limit stopped.
 	Resume      bool
-	CleanDays   int
-	CleanMerged bool
+	ResumeLimit bool
+	// AgentTools is whether agents get the starcode tools.
+	AgentTools bool
 }
 
 // ThemeName is the display name of a theme id.
@@ -543,7 +550,7 @@ templ SettingsPage(d SettingsPageData) {
 			<div class="settings-shell">
 				@SettingsNav("general")
 				<div class="settings-content">
-					<section id="threads" class="settings-section" data-signals={ fmt.Sprintf("{sidebar: %q, dense: %t, settleMerged: %t, settleDays: %d, resume: %t, cleanDays: %d, cleanMerged: %t}", d.Sidebar, d.Dense, d.SettleMerged, d.SettleDays, d.Resume, d.CleanDays, d.CleanMerged) }>
+					<section id="threads" class="settings-section" data-signals={ fmt.Sprintf("{sidebar: %q, dense: %t, settleMerged: %t, settleDays: %d, resume: %t, resumeLimit: %t, agentTools: %t}", d.Sidebar, d.Dense, d.SettleMerged, d.SettleDays, d.Resume, d.ResumeLimit, d.AgentTools) }>
 						<header>
 							<h1>Threads</h1>
 							<p class="dim">How the sidebar lists threads and when they settle.</p>
@@ -587,27 +594,19 @@ templ SettingsPage(d SettingsPageData) {
 								</div>
 								<input id="resume" type="checkbox" data-bind:resume data-on:change="@post('/api/settle')"/>
 							</div>
-						</div>
-					</section>
-					<section id="worktrees" class="settings-section">
-						<header>
-							<h1>Worktree cleanup</h1>
-							<p class="dim">Removes the checkouts of threads that are done with. Only the ones starcode made, and only when nothing would be lost: no changed or untracked files, and no ignored ones besides node_modules. The branch and the thread stay, and the next prompt checks the branch out again. A project can turn this off under Settings > Projects.</p>
-						</header>
-						<div class="settings-card">
 							<div class="setting-row">
 								<div>
-									<label for="clean-days">Remove after</label>
-									<p class="dim">Days without activity in the thread; 0 turns this rule off.</p>
+									<label for="resume-limit">Resume turns after the usage limit resets</label>
+									<p class="dim">When a turn stops because the plan's usage ran out, the thread waits on the Snoozed shelf until the limit resets, and then starcode tells the agent to carry on. Waking the thread by hand cancels that.</p>
 								</div>
-								<span class="num-unit"><input id="clean-days" class="in num" type="number" min="0" max="365" step="1" inputmode="numeric" data-bind:clean-days data-on:change__debounce.500ms="@post('/api/settle')"/> <span class="dim">days</span></span>
+								<input id="resume-limit" type="checkbox" data-bind:resume-limit data-on:change="@post('/api/settle')"/>
 							</div>
 							<div class="setting-row">
 								<div>
-									<label for="clean-merged">Remove once merged</label>
-									<p class="dim">When the thread's pull request merges, or when a settled thread's commits are all in the default branch.</p>
+									<label for="agent-tools">Let agents use the starcode tools</label>
+									<p class="dim">Agents can rename their thread, link and watch its pull request, snooze it with a prompt for later, ask for your attention, read other threads, and start threads of their own that show under theirs. A thread an agent starts never gets a looser permission mode than its own. Applies to agent processes started from now on.</p>
 								</div>
-								<input id="clean-merged" type="checkbox" data-bind:clean-merged data-on:change="@post('/api/settle')"/>
+								<input id="agent-tools" type="checkbox" data-bind:agent-tools data-on:change="@post('/api/settle')"/>
 							</div>
 						</div>
 					</section>
@@ -624,7 +623,17 @@ templ SettingsPage(d SettingsPageData) {
 								</div>
 								// The state word comes from the layout's notify helpers;
 								// the button asks for permission, then toggles.
-								<button id="notify-btn" class="btn" type="button" data-init="el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)" data-on:click="(el.dataset.state === 'on' ? Promise.resolve(notifyDisable()) : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })">notifications</button>
+								<button id="notify-btn" class="btn" type="button" data-init="el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)" data-on:click="(el.dataset.state === 'on' ? notifyDisable() : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })">notifications</button>
+							</div>
+							<div class="setting-row">
+								<div>
+									<label for="busy-send">Sending while a turn runs</label>
+									<p class="dim">Queue puts the message after the running turn. Steer stops the turn and sends the message first, so the agent reads it right away. Ctrl+Enter (Cmd+Enter on a Mac) does the other one. Saved for this browser.</p>
+								</div>
+								<select id="busy-send" class="in" data-init="el.value = localStorage.getItem('busy-send') || 'queue'" data-on:change="el.value === 'steer' ? localStorage.setItem('busy-send', 'steer') : localStorage.removeItem('busy-send')">
+									<option value="queue">queue</option>
+									<option value="steer">steer</option>
+								</select>
 							</div>
 							<div class="setting-row">
 								<div>
@@ -724,6 +733,7 @@ templ settingsLinks(current string) {
 	<a class={ templ.KV("current", current == "general") } href="/settings">@Icon("settings", "ui-icon") General</a>
 	<a class={ templ.KV("current", current == "appearance") } href="/settings/appearance">@Icon("palette", "ui-icon") Appearance</a>
 	<a class={ templ.KV("current", current == "projects") } href="/settings/projects">@Icon("folder", "ui-icon") Projects</a>
+	<a class={ templ.KV("current", current == "schedules") } href="/settings/schedules">@Icon("calendar-clock", "ui-icon") Schedules</a>
 	<a class={ templ.KV("current", current == "usage") } href="/settings/usage">@Icon("chart-no-axes-combined", "ui-icon") Usage</a>
 	<a class={ templ.KV("current", current == "providers") } href="/settings/providers">@Icon("plug", "ui-icon") Providers</a>
 	<a class={ templ.KV("current", current == "keys") } href="/settings/keys">@Icon("keyboard", "ui-icon") Keys</a>
@@ -735,7 +745,7 @@ func settingsSection(view string) string {
 	switch view {
 	case "settings":
 		return "general"
-	case "appearance", "usage", "providers", "keys", "projects":
+	case "appearance", "usage", "providers", "keys", "projects", "schedules":
 		return view
 	}
 	return ""

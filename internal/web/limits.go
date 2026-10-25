@@ -2,6 +2,9 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"net/http"
 	"sort"
 	"sync"
@@ -11,6 +14,8 @@ import (
 	"starcode/internal/app"
 	"starcode/internal/domain"
 	"starcode/internal/web/views"
+
+	"github.com/starfederation/datastar-go/datastar"
 )
 
 // Subscription limits: what each instance's account has used of its
@@ -33,6 +38,9 @@ type limitsCache struct {
 	mu      sync.Mutex
 	entries map[string]limitEntry
 	probing map[string]bool
+	// claims is the request id of a reset claim per instance and grant,
+	// kept until Claude confirms it (see redeemReset).
+	claims map[string]string
 }
 
 // init makes the maps; called under mu by every writer.
@@ -40,6 +48,7 @@ func (c *limitsCache) init() {
 	if c.entries == nil {
 		c.entries = map[string]limitEntry{}
 		c.probing = map[string]bool{}
+		c.claims = map[string]string{}
 	}
 }
 
@@ -171,7 +180,7 @@ func sortWindows(ws []agent.LimitWindow) {
 }
 
 func sameLimits(a, b agent.Limits) bool {
-	if len(a.Windows) != len(b.Windows) {
+	if len(a.Windows) != len(b.Windows) || (a.Resets == nil) != (b.Resets == nil) || a.Resets != nil && *a.Resets != *b.Resets {
 		return false
 	}
 	for i := range a.Windows {
@@ -220,7 +229,7 @@ func (s *Server) limitsRows(ctx context.Context) []views.LimitsRow {
 			continue
 		}
 		e := s.limitsFor(ctx, in.Name, false)
-		row := views.LimitsRow{Agent: in.Name, Look: looks[in.Name], Windows: e.limits.Windows, CheckedAt: e.limits.CheckedAt, Pending: e.at.IsZero()}
+		row := views.LimitsRow{Agent: in.Name, Look: looks[in.Name], Windows: e.limits.Windows, CheckedAt: e.limits.CheckedAt, Pending: e.at.IsZero(), Resets: e.limits.Resets}
 		if e.err != nil {
 			row.Err = e.err.Error()
 			if e.err == errNoLimits {
@@ -250,4 +259,63 @@ func (s *Server) refreshLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	s.App.Bus.Publish(domain.LimitsChanged{})
 	s.ok(w, r)
+}
+
+// redeemReset spends one of instance {name}'s banked resets, then reads
+// the limits again so the bars show the fresh windows. A claim Claude
+// could not confirm keeps its request id, so pressing again asks about
+// the same claim instead of making a second one.
+func (s *Server) redeemReset(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.limits.mu.Lock()
+	s.limits.init()
+	rc := s.limits.entries[name].limits.Resets
+	s.limits.mu.Unlock()
+	if rc == nil || rc.NextID == "" {
+		s.fail(w, r, errors.New("no banked reset to use; refresh the limits"))
+		return
+	}
+	in, ok := s.Providers.Get(name)
+	if !ok {
+		s.fail(w, r, errors.New("unknown agent"))
+		return
+	}
+	ag, err := s.Providers.Build(in)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	rr, ok := ag.(agent.ResetRedeemer)
+	if !ok {
+		s.fail(w, r, errors.New("this agent has no resets to redeem"))
+		return
+	}
+	key := name + "\x00" + rc.NextID
+	s.limits.mu.Lock()
+	reqID := s.limits.claims[key]
+	if reqID == "" {
+		reqID = randomID()
+		s.limits.claims[key] = reqID
+	}
+	s.limits.mu.Unlock()
+	outcome, err := rr.RedeemReset(r.Context(), rc.NextID, reqID)
+	if err == nil {
+		s.limits.mu.Lock()
+		delete(s.limits.claims, key)
+		s.limits.mu.Unlock()
+	}
+	s.limitsFor(r.Context(), name, true)
+	s.App.Bus.Publish(domain.LimitsChanged{})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	datastar.NewSSE(w, r).PatchElementTempl(views.NoteToast(outcome))
+}
+
+// randomID is a request id for a reset claim.
+func randomID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }

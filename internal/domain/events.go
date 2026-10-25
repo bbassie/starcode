@@ -71,6 +71,12 @@ type ThreadCreated struct {
 	Title     string `json:"title"`
 	Agent     string `json:"agent"` // "claude" | "codex" | "fake"
 	Model     string `json:"model"`
+	// Parent is the thread whose agent spawned this one through the
+	// starcode tools, empty for a thread the reader opened. WakeParent
+	// sends the parent a prompt with this thread's reply whenever it
+	// finishes.
+	Parent     string `json:"parent,omitempty"`
+	WakeParent bool   `json:"wake_parent,omitempty"`
 }
 
 type ThreadRenamed struct {
@@ -94,6 +100,12 @@ type ThreadUnarchived struct{}
 // Snoozed shelf and comes back on its own when Until passes.
 type ThreadSnoozed struct {
 	Until time.Time `json:"until"`
+	// Resume is a snooze starcode made because the turn hit the plan's
+	// usage limit: when it runs out on time, the turn is resumed.
+	Resume bool `json:"resume,omitempty"`
+	// Prompt is sent to the thread when the snooze runs out on time: the
+	// agent snoozed itself to look at something again later.
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // ThreadWoken ends a snooze. Auto is the sweep waking it on time, which
@@ -114,28 +126,35 @@ type ThreadRewound struct {
 	ForkAt    string `json:"fork_at,omitempty"`
 }
 
-// ThreadWorktreeSet gives a thread a checkout of its own (see gitx
-// worktrees): the agent, the terminal and the panel work in Path from
-// then on. Empty Path puts it back on the project's main checkout.
+// ThreadBranched starts a thread as a branch of thread From, the first
+// event after its ThreadCreated. Its transcript arrives as copies of
+// From's items; the agent's first session forks SessionID at ForkAt, the
+// same way a rewind does, or starts fresh when SessionID is empty (a
+// handoff to another agent, or a branch before the first prompt).
+type ThreadBranched struct {
+	From      string `json:"from"`
+	SessionID string `json:"session_id,omitempty"`
+	ForkAt    string `json:"fork_at,omitempty"`
+}
+
+// ThreadWorktreeSet gave a thread a checkout of its own, back when
+// starcode made worktrees. Nothing appends it any more and nothing
+// applies it; it is only decoded so that old event logs still replay.
 type ThreadWorktreeSet struct {
 	Path   string `json:"path"`
 	Branch string `json:"branch,omitempty"`
 }
 
 // ProjectSettingsChanged is the per-project default for new threads:
-// whether they start in a worktree, and the agent, model, effort and
-// permission mode they start with (Agent empty: no default, a new thread
-// takes what the composer holds). Cleanup overrides the instance's
-// automatic worktree cleanup for the project: "" inherits, "off" keeps
-// its worktrees. Every event carries the whole set.
+// the agent, model, effort and permission mode they start with (Agent
+// empty: no default, a new thread takes what the composer holds). Every
+// event carries the whole set.
 type ProjectSettingsChanged struct {
-	ID        string `json:"id"`
-	Worktrees bool   `json:"worktrees"`
-	Agent     string `json:"agent,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Effort    string `json:"effort,omitempty"`
-	Mode      string `json:"mode,omitempty"`
-	Cleanup   string `json:"cleanup,omitempty"`
+	ID     string `json:"id"`
+	Agent  string `json:"agent,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	Mode   string `json:"mode,omitempty"`
 }
 
 // ThreadPinned keeps a thread at the top of its project's list; pinning
@@ -155,6 +174,58 @@ type ThreadPRLinked struct {
 }
 
 type ThreadPRUnlinked struct{}
+
+// ThreadPRWatchSet starts the watch on the thread's linked pull request,
+// or records where it stands: State is the app's bookkeeping (what the
+// agent was last told) as JSON. A link to another PR, or an unlink, ends
+// the watch.
+type ThreadPRWatchSet struct {
+	State json.RawMessage `json:"state"`
+}
+
+// ScheduleSet adds a scheduled prompt or replaces one with the same ID.
+// With ThreadID the prompt goes to that thread; without, every run opens
+// a new thread in ProjectID with Agent, Model, Effort and Mode (empty:
+// the project's defaults). At is the next run. Cron, in the zone TZ,
+// makes it repeat; without it the schedule is one prompt sent later. By
+// is the thread whose agent made it, empty for the reader.
+type ScheduleSet struct {
+	ID        string    `json:"id"`
+	ThreadID  string    `json:"thread_id,omitempty"`
+	ProjectID string    `json:"project_id"`
+	Prompt    string    `json:"prompt"`
+	Title     string    `json:"title,omitempty"`
+	At        time.Time `json:"at"`
+	Cron      string    `json:"cron,omitempty"`
+	TZ        string    `json:"tz,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
+	Model     string    `json:"model,omitempty"`
+	Effort    string    `json:"effort,omitempty"`
+	Mode      string    `json:"mode,omitempty"`
+	Paused    bool      `json:"paused,omitempty"`
+	By        string    `json:"by,omitempty"`
+}
+
+// ScheduleRan records a run: the thread it went to (Thread), what failed
+// (Error), and the next run, zero when there is none, which ends the
+// schedule.
+type ScheduleRan struct {
+	ID     string    `json:"id"`
+	Thread string    `json:"thread,omitempty"`
+	Error  string    `json:"error,omitempty"`
+	Next   time.Time `json:"next"`
+}
+
+// ScheduleRemoved deletes a schedule.
+type ScheduleRemoved struct {
+	ID string `json:"id"`
+}
+
+// ThreadPRWatchStopped ends the watch; Reason says why when starcode
+// stopped it, and is empty when the reader did.
+type ThreadPRWatchStopped struct {
+	Reason string `json:"reason,omitempty"`
+}
 
 // ThreadSettingsChanged updates how the thread's agent is launched. The
 // agent itself can only change before the first prompt; the rest applies
@@ -197,12 +268,23 @@ type PromptDequeued struct {
 	ID string `json:"id"`
 }
 
+// PromptEdited changes the text of a queued prompt.
+type PromptEdited struct {
+	ID   string `json:"id"`
+	Body string `json:"body"`
+}
+
+// PromptsReordered puts the thread's queued prompts in the order of IDs.
+type PromptsReordered struct {
+	IDs []string `json:"ids"`
+}
+
 // ItemStarted opens a new item in the transcript. Body may be empty and be
 // filled by ItemDelta events (assistant text, thinking, tool output).
 type ItemStarted struct {
 	ID string `json:"id"`
-	// Quiet is a line starcode writes for the record (a setup script
-	// finished, a worktree was cleaned up) that is not activity: the
+	// Quiet is a line starcode writes for the record (a branch was made,
+	// copied items) that is not activity: the
 	// thread keeps its place and does not go unread over it.
 	Quiet    bool            `json:"quiet,omitempty"`
 	Kind     string          `json:"kind"`
@@ -210,6 +292,9 @@ type ItemStarted struct {
 	Status   string          `json:"status,omitempty"`
 	Body     string          `json:"body,omitempty"`
 	Meta     json.RawMessage `json:"meta,omitempty"`
+	// At is when a copied item (a branch's transcript) first happened;
+	// zero for a new one.
+	At time.Time `json:"at,omitempty"`
 }
 
 // ItemDelta appends text to an item. Field selects which text: "body"
@@ -242,6 +327,39 @@ type ApprovalResolved struct {
 	ID       string `json:"id"`
 	Decision string `json:"decision"`
 	Auto     bool   `json:"auto,omitempty"` // resolved by a session rule
+	// Answers is set when the approval was a question to the human (see
+	// Questions): each question's text to what they picked or wrote.
+	Answers map[string]string `json:"answers,omitempty"`
+}
+
+// Question is one of the questions an AskUserQuestion call puts to the
+// human. Each has 2 to 4 options; the human may also write their own
+// answer.
+type Question struct {
+	Question    string           `json:"question"`
+	Header      string           `json:"header"`
+	Options     []QuestionOption `json:"options"`
+	MultiSelect bool             `json:"multiSelect"`
+}
+
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+// Questions returns the questions of an approval that asks the human
+// something instead of asking for permission, or nil for any other.
+func Questions(tool string, input json.RawMessage) []Question {
+	if tool != "AskUserQuestion" {
+		return nil
+	}
+	var in struct {
+		Questions []Question `json:"questions"`
+	}
+	if json.Unmarshal(input, &in) != nil {
+		return nil
+	}
+	return in.Questions
 }
 
 // RuleRevoked drops an "allow for session" rule (see RuleKey) from a
@@ -301,6 +419,20 @@ type LimitsChanged struct{}
 // available update changed, so sidebars and the providers page refresh.
 type ProvidersChanged struct{}
 
+// AgentNotified is bus-only: a thread's agent asked for the reader's
+// attention (the notify tool), which every open page shows.
+type AgentNotified struct {
+	ThreadID string `json:"thread_id"`
+	Title    string `json:"title"`
+	Text     string `json:"text"`
+}
+
+// NotifyLevelChanged is bus-only: the reader chose what thread ThreadID
+// pushes, which its header shows.
+type NotifyLevelChanged struct {
+	ThreadID string `json:"thread_id"`
+}
+
 // SeenChanged is bus-only: a thread was marked seen and its row should
 // lose the unread mark on every other page.
 type SeenChanged struct {
@@ -338,6 +470,8 @@ func TypeOf(p any) string {
 		return "thread.woken"
 	case ThreadRewound, *ThreadRewound:
 		return "thread.rewound"
+	case ThreadBranched, *ThreadBranched:
+		return "thread.branched"
 	case ThreadWorktreeSet, *ThreadWorktreeSet:
 		return "thread.worktree_set"
 	case ProjectSettingsChanged, *ProjectSettingsChanged:
@@ -350,6 +484,16 @@ func TypeOf(p any) string {
 		return "thread.pr_linked"
 	case ThreadPRUnlinked, *ThreadPRUnlinked:
 		return "thread.pr_unlinked"
+	case ThreadPRWatchSet, *ThreadPRWatchSet:
+		return "thread.pr_watch_set"
+	case ThreadPRWatchStopped, *ThreadPRWatchStopped:
+		return "thread.pr_watch_stopped"
+	case ScheduleSet, *ScheduleSet:
+		return "schedule.set"
+	case ScheduleRan, *ScheduleRan:
+		return "schedule.ran"
+	case ScheduleRemoved, *ScheduleRemoved:
+		return "schedule.removed"
 	case ThreadSettingsChanged, *ThreadSettingsChanged:
 		return "thread.settings"
 	case AgentSessionBound, *AgentSessionBound:
@@ -366,6 +510,10 @@ func TypeOf(p any) string {
 		return "prompt.queued"
 	case PromptDequeued, *PromptDequeued:
 		return "prompt.dequeued"
+	case PromptEdited, *PromptEdited:
+		return "prompt.edited"
+	case PromptsReordered, *PromptsReordered:
+		return "prompt.reordered"
 	case ItemStarted, *ItemStarted:
 		return "item.started"
 	case ItemDelta, *ItemDelta:
@@ -416,6 +564,8 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &ThreadWoken{}
 	case "thread.rewound":
 		p = &ThreadRewound{}
+	case "thread.branched":
+		p = &ThreadBranched{}
 	case "thread.worktree_set":
 		p = &ThreadWorktreeSet{}
 	case "project.settings_changed":
@@ -428,6 +578,16 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &ThreadPRLinked{}
 	case "thread.pr_unlinked":
 		p = &ThreadPRUnlinked{}
+	case "thread.pr_watch_set":
+		p = &ThreadPRWatchSet{}
+	case "thread.pr_watch_stopped":
+		p = &ThreadPRWatchStopped{}
+	case "schedule.set":
+		p = &ScheduleSet{}
+	case "schedule.ran":
+		p = &ScheduleRan{}
+	case "schedule.removed":
+		p = &ScheduleRemoved{}
 	case "thread.settings", "thread.agent":
 		p = &ThreadSettingsChanged{}
 	case "thread.session_bound":
@@ -444,6 +604,10 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &PromptQueued{}
 	case "prompt.dequeued":
 		p = &PromptDequeued{}
+	case "prompt.edited":
+		p = &PromptEdited{}
+	case "prompt.reordered":
+		p = &PromptsReordered{}
 	case "item.started":
 		p = &ItemStarted{}
 	case "item.delta":

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -112,26 +113,6 @@ func gh(ctx context.Context, dir string, args ...string) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
-}
-
-// PullRequestForBranch finds the pull request whose head is branch, open
-// or not: gh pr view takes a branch name. For a thread that works on a
-// branch of its own, this is how it gets linked to a PR someone opened
-// on GitHub rather than with gh pr create.
-func PullRequestForBranch(ctx context.Context, dir, branch string) (repo string, number int, url string, ok bool) {
-	raw, err := gh(ctx, dir, "pr", "view", branch, "--json", "number,url")
-	if err != nil {
-		return "", 0, "", false
-	}
-	var v struct {
-		Number int    `json:"number"`
-		URL    string `json:"url"`
-	}
-	if json.Unmarshal(raw, &v) != nil || v.Number == 0 {
-		return "", 0, "", false
-	}
-	repo, number, url, ok = FindPullURL(v.URL)
-	return repo, number, url, ok
 }
 
 func firstLine(s string) string {
@@ -280,6 +261,24 @@ type PRDetail struct {
 	Reviews      []Review
 	Threads      []ReviewThread
 	Checks       []Check
+	// HeadSHA is the head commit; Viewer the login gh reads as. Remarks
+	// is every comment and submitted review, oldest first, for the watch
+	// that wakes an agent on new ones.
+	HeadSHA string
+	Viewer  string
+	Remarks []Remark
+}
+
+// Remark is one comment on a pull request: on the conversation, on a
+// line of the diff (Path set), or a submitted review (State set).
+type Remark struct {
+	ID        string
+	Author    string
+	Body      string
+	URL       string
+	Path      string
+	State     string
+	CreatedAt time.Time
 }
 
 // Review is one submitted review; only the latest per reviewer is kept.
@@ -369,18 +368,20 @@ func (d PRDetail) AwaitingReReview() []Review {
 }
 
 const prDetailQuery = `query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      number title url headRefName baseRefName isDraft reviewDecision updatedAt body state
+      number title url headRefName headRefOid baseRefName isDraft reviewDecision updatedAt body state
       additions deletions changedFiles mergeable mergeStateStatus
       author { login }
       labels(first: 20) { nodes { name } }
       reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
-      reviews(last: 50) { nodes { author { login } state body url submittedAt } }
+      reviews(last: 50) { nodes { id author { login } state body url submittedAt } }
+      comments(last: 50) { nodes { id author { login } body url createdAt } }
       reviewThreads(first: 100) {
         nodes {
           isResolved isOutdated path line originalLine
-          comments(first: 50) { nodes { author { login } body url createdAt } }
+          comments(first: 50) { nodes { id author { login } body url createdAt } }
         }
       }
       commits(last: 1) {
@@ -410,12 +411,16 @@ func PullRequestDetail(ctx context.Context, dir, repo string, number int) (PRDet
 func decodePRDetail(raw []byte) (PRDetail, error) {
 	var resp struct {
 		Data struct {
+			Viewer struct {
+				Login string `json:"login"`
+			} `json:"viewer"`
 			Repository struct {
 				PullRequest *struct {
 					Number       int    `json:"number"`
 					Title        string `json:"title"`
 					URL          string `json:"url"`
 					Head         string `json:"headRefName"`
+					HeadSHA      string `json:"headRefOid"`
 					Base         string `json:"baseRefName"`
 					Draft        bool   `json:"isDraft"`
 					Review       string `json:"reviewDecision"`
@@ -442,8 +447,20 @@ func decodePRDetail(raw []byte) (PRDetail, error) {
 							} `json:"requestedReviewer"`
 						} `json:"nodes"`
 					} `json:"reviewRequests"`
+					Comments struct {
+						Nodes []struct {
+							ID     string `json:"id"`
+							Author struct {
+								Login string `json:"login"`
+							} `json:"author"`
+							Body      string `json:"body"`
+							URL       string `json:"url"`
+							CreatedAt string `json:"createdAt"`
+						} `json:"nodes"`
+					} `json:"comments"`
 					Reviews struct {
 						Nodes []struct {
+							ID     string `json:"id"`
 							Author struct {
 								Login string `json:"login"`
 							} `json:"author"`
@@ -462,6 +479,7 @@ func decodePRDetail(raw []byte) (PRDetail, error) {
 							OriginalLine *int   `json:"originalLine"`
 							Comments     struct {
 								Nodes []struct {
+									ID     string `json:"id"`
 									Author struct {
 										Login string `json:"login"`
 									} `json:"author"`
@@ -515,6 +533,7 @@ func decodePRDetail(raw []byte) (PRDetail, error) {
 		Body:      pr.Body,
 		Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles,
 		Mergeable: pr.Mergeable, MergeState: pr.MergeState,
+		HeadSHA: pr.HeadSHA, Viewer: resp.Data.Viewer.Login,
 	}
 	d.UpdatedAt, _ = time.Parse(time.RFC3339, pr.UpdatedAt)
 	for _, l := range pr.Labels.Nodes {
@@ -550,6 +569,30 @@ func decodePRDetail(raw []byte) (PRDetail, error) {
 		}
 	}
 	d.Review = reviewWord(pr.Review, d.Blocking, d.Requested)
+	for _, r := range pr.Reviews.Nodes {
+		// A pending review is a draft only its author sees; a plain
+		// "commented" review without words is the wrapper of line
+		// comments, which count on their own below.
+		if r.State == "PENDING" || r.State == "COMMENTED" && strings.TrimSpace(r.Body) == "" {
+			continue
+		}
+		rm := Remark{ID: r.ID, Author: r.Author.Login, Body: r.Body, URL: r.URL, State: r.State}
+		rm.CreatedAt, _ = time.Parse(time.RFC3339, r.SubmittedAt)
+		d.Remarks = append(d.Remarks, rm)
+	}
+	for _, c := range pr.Comments.Nodes {
+		rm := Remark{ID: c.ID, Author: c.Author.Login, Body: c.Body, URL: c.URL}
+		rm.CreatedAt, _ = time.Parse(time.RFC3339, c.CreatedAt)
+		d.Remarks = append(d.Remarks, rm)
+	}
+	for _, t := range pr.ReviewThreads.Nodes {
+		for _, c := range t.Comments.Nodes {
+			rm := Remark{ID: c.ID, Author: c.Author.Login, Body: c.Body, URL: c.URL, Path: t.Path}
+			rm.CreatedAt, _ = time.Parse(time.RFC3339, c.CreatedAt)
+			d.Remarks = append(d.Remarks, rm)
+		}
+	}
+	sort.SliceStable(d.Remarks, func(i, j int) bool { return d.Remarks[i].CreatedAt.Before(d.Remarks[j].CreatedAt) })
 	for _, t := range pr.ReviewThreads.Nodes {
 		rt := ReviewThread{Path: t.Path, Resolved: t.IsResolved, Outdated: t.IsOutdated}
 		if t.Line != nil {

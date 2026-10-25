@@ -8,14 +8,20 @@
 // picks the marked one, Escape closes, as does a click elsewhere or text
 // that no longer fits. A command pick puts the command in the prompt with
 // a space after it, so a command without an argument only needs send; a
-// pull request pick puts a link to it where the "#" was. The home page
-// has no thread and no menus.
+// pull request pick puts a link to it where the "#" was. An "@" at the
+// start of a word opens the project's files and the other threads (GET
+// /api/threads/<id>/atpick?q=); the server filters those, so every few
+// keystrokes refetch them. A pick puts @path or a link to the thread
+// where the "@" was. The home page has no thread and no menus.
 (() => {
 	const opener = /^\/[\w-]*$/;
 	const hash = /(?:^|\s)#([\w-]*)$/;
+	const at = /(?:^|\s)@([^\s@]*)$/;
+	const trigger = { pr: hash, at: at };
 	let ta = null;   // the prompt whose menu is open
 	let menu = null;
-	let mode = '';   // "slash" or "pr"
+	let mode = '';   // "slash", "pr" or "at"
+	let refetch = 0; // the "@" menu's pending refetch timer
 	let fetches = 0; // ignore a reply for a menu that closed meanwhile
 
 	const threadID = () => (location.pathname.match(/^\/threads\/([^/]+)/) || [])[1];
@@ -25,19 +31,26 @@
 		menu = ta = null;
 		mode = '';
 		fetches++;
+		clearTimeout(refetch);
 	};
 	const mark = (row) => {
 		for (const r of rows()) r.classList.toggle('sel', r === row);
 		row?.scrollIntoView({ block: 'nearest' });
 	};
-	// query is what the reader typed after the "/" or the "#".
+	// query is what the reader typed after the "/", the "#" or the "@".
 	const query = (t) => {
 		if (mode === 'slash') return t.value.slice(1).toLowerCase();
-		const m = hash.exec(t.value.slice(0, t.selectionStart));
+		const m = (trigger[mode] || hash).exec(t.value.slice(0, t.selectionStart));
 		return m ? m[1].toLowerCase() : '';
 	};
 	const filter = () => {
 		if (!menu || !ta) return;
+		if (mode === 'at') {
+			// The server filtered the rows; mark the first.
+			const vis = rows();
+			mark(vis.find((r) => r.classList.contains('sel')) || vis[0]);
+			return;
+		}
 		const q = query(ta);
 		let n = 0;
 		for (const r of menu.querySelectorAll('.opt')) {
@@ -60,21 +73,25 @@
 		const n = ++fetches;
 		let html = '';
 		try {
-			const res = await fetch('/api/threads/' + id + (want === 'pr' ? '/prpick' : '/commands'));
+			const path = want === 'pr' ? '/prpick' : want === 'at' ? '/atpick?q=' + encodeURIComponent(query(t)) : '/commands';
+			const res = await fetch('/api/threads/' + id + path);
 			if (res.ok) html = await res.text();
 		} catch (e) {}
 		if (n !== fetches || !html) return;
 		box.innerHTML = html;
 		// An agent without commands (Codex takes none over its app
 		// server) gets no menu rather than an empty one.
-		if (!box.querySelector('.opt')) { close(); return; }
+		if (!box.querySelector('.opt') && want !== 'at') { close(); return; }
 		box.classList.add('open');
 		filter();
 	};
 	// wanted is the menu the prompt's text calls for, if any.
 	const wanted = (t) => {
 		if (opener.test(t.value)) return 'slash';
-		if (t.selectionStart === t.selectionEnd && hash.test(t.value.slice(0, t.selectionStart))) return 'pr';
+		if (t.selectionStart !== t.selectionEnd) return '';
+		const before = t.value.slice(0, t.selectionStart);
+		if (hash.test(before)) return 'pr';
+		if (at.test(before)) return 'at';
 		return '';
 	};
 
@@ -83,8 +100,11 @@
 		if (!(t instanceof HTMLTextAreaElement) || !t.classList.contains('prompt')) return;
 		const want = wanted(t);
 		if (!want) { if (ta === t) close(); return; }
-		if (ta === t && mode === want && menu && menu.isConnected) filter();
-		else { close(); open(t, want); }
+		if (ta === t && mode === want && menu && menu.isConnected) {
+			if (want !== 'at') { filter(); return; }
+			clearTimeout(refetch);
+			refetch = setTimeout(() => { if (ta === t && mode === 'at') open(t, 'at'); }, 120);
+		} else { close(); open(t, want); }
 	});
 
 	// Capture phase: the prompt's own keydown (Enter sends) and the page's
@@ -105,9 +125,11 @@
 			const sel = vis.find((r) => r.classList.contains('sel')) || vis[0];
 			// Nothing matches, or a bare "#" (a heading, say): close and
 			// let Enter do what it does.
-			if (!sel || (mode === 'pr' && !query(ta))) { close(); return; }
+			if (!sel || (mode !== 'slash' && !query(ta))) { close(); return; }
 			take();
-			if (mode === 'pr') prPick(sel); else slashPick(sel);
+			if (mode === 'pr') prPick(sel);
+			else if (mode === 'at') atPick(sel);
+			else slashPick(sel);
 		}
 	}, true);
 
@@ -139,16 +161,23 @@
 
 	// prPick swaps the "#" and what follows it for a markdown link to the
 	// pull request, which reads as #123 and gives the agent the address.
-	window.prPick = (el) => {
+	window.prPick = (el) => swap(el, hash, el.dataset.link);
+
+	// atPick swaps the "@" and what follows it for the row's @path or
+	// thread link.
+	window.atPick = (el) => swap(el, at, el.dataset.ins);
+
+	// swap replaces the trigger (re) before the caret with text.
+	const swap = (el, re, text) => {
 		const form = el.closest('form');
 		const t = form && form.querySelector('textarea.prompt');
 		close();
 		if (!t) return;
 		const before = t.value.slice(0, t.selectionStart);
-		const m = hash.exec(before);
+		const m = re.exec(before);
 		if (!m) return;
 		const start = before.length - m[1].length - 1;
-		const link = el.dataset.link + ' ';
-		put(t, t.value.slice(0, start) + link + t.value.slice(t.selectionStart), start + link.length);
+		const ins = text + ' ';
+		put(t, t.value.slice(0, start) + ins + t.value.slice(t.selectionStart), start + ins.length);
 	};
 })();

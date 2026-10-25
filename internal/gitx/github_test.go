@@ -47,8 +47,9 @@ func TestDecodePRs(t *testing.T) {
 }
 
 func TestDecodePRDetailAndFixPrompt(t *testing.T) {
-	raw := []byte(`{"data":{"repository":{"pullRequest":{
-	  "number": 7, "title": "Add panes", "url": "https://github.com/o/r/pull/7", "headRefName": "panes", "baseRefName": "main",
+	raw := []byte(`{"data":{"viewer": {"login": "me"}, "repository":{"pullRequest":{
+	  "number": 7, "title": "Add panes", "url": "https://github.com/o/r/pull/7", "headRefName": "panes", "headRefOid": "abc123", "baseRefName": "main",
+	  "comments": {"nodes": [{"id": "IC1", "author": {"login": "bot"}, "body": "Coverage down.", "url": "ic1", "createdAt": "2026-09-05T00:30:00Z"}]},
 	  "isDraft": false, "reviewDecision": "CHANGES_REQUESTED", "updatedAt": "2026-09-06T05:00:00Z", "body": "Splits the terminal.",
 	  "additions": 120, "deletions": 8, "changedFiles": 3, "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY",
 	  "author": {"login": "bb"}, "labels": {"nodes": [{"name": "ui"}]},
@@ -91,6 +92,18 @@ func TestDecodePRDetailAndFixPrompt(t *testing.T) {
 	}
 	if len(d.Checks) != 3 || d.Checks[0].Status != "failure" || d.Checks[1].Status != "skipped" || d.Checks[2].Status != "pending" || d.PR.Checks != "failure" {
 		t.Errorf("checks = %+v, rollup %q", d.Checks, d.PR.Checks)
+	}
+	if d.HeadSHA != "abc123" || d.Viewer != "me" {
+		t.Errorf("head %q, viewer %q", d.HeadSHA, d.Viewer)
+	}
+	// Remarks: every review with words or a verdict, the conversation
+	// comment and the line comments, oldest first.
+	var who []string
+	for _, r := range d.Remarks {
+		who = append(who, r.Author+":"+r.Path+":"+r.State)
+	}
+	if got := strings.Join(who, " "); got != "bb::COMMENTED bot:: rev::CHANGES_REQUESTED rev:term.js: rev:term.go: bb:term.js: rev::COMMENTED other::APPROVED" {
+		t.Errorf("remarks = %s", got)
 	}
 	prompt := d.FixPrompt()
 	for _, want := range []string{"pull request #7", "`panes`", "@rev:\n    Please cap the panes.", "1. term.js:40", "@rev: No upper bound here.", "- test (https://ci/1)", "merge conflicts with `main`"} {

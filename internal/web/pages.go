@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -29,7 +30,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 	pt.Sidebar = views.Sidebar(side)
 	pt.Projects = side.Projects
 	pt.Git = views.GitPanel(views.GitData{})
-	pt.Update = views.UpdateBanner(s.bannerData(ctx, p.ThreadID))
+	pt.Update = views.UpdateBanner(s.bannerData(ctx))
 	switch p.View {
 	case "thread":
 		d, err := s.threadData(ctx, p.ThreadID)
@@ -40,9 +41,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 		pt.Thread = &d
 		pt.Main = views.Thread(d)
 		if d.Project.ID != "" {
-			// The panel shows the thread's checkout, which may be a worktree.
 			pp := d.Project
-			pp.Path = d.Thread.Dir(pp)
 			g := views.GitData{Project: pp, Status: gitx.Read(ctx, pp.Path), ThreadID: d.Thread.ID}
 			// A stream that reconnects says which detail the page had
 			// open; the editor's text is still in the page's signals.
@@ -60,12 +59,14 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 			}
 			pt.Git = views.GitPanel(g)
 		}
+	case "schedules":
+		pt.Main = views.SchedulesPage(s.schedulesData(ctx, side))
 	case "appearance":
 		pt.Main = views.AppearancePage(views.SettingsPageData{Theme: p.Theme, Themes: Themes})
 	case "settings":
 		st := s.App.Store
 		pt.Main = views.SettingsPage(views.SettingsPageData{Theme: p.Theme, Themes: Themes, PairURL: p.PairURL, PairQR: pairQR(p.PairURL), Sidebar: p.Sidebar, Dense: p.Dense, SettleMerged: st.SettleMerged(ctx), SettleDays: st.SettleIdleDays(ctx),
-			Resume: st.ResumeAfterRestart(ctx), CleanDays: st.WorktreeCleanDays(ctx), CleanMerged: st.WorktreeCleanMerged(ctx)})
+			Resume: st.ResumeAfterRestart(ctx), ResumeLimit: st.ResumeAfterLimit(ctx), AgentTools: st.AgentTools(ctx)})
 	case "projects":
 		pt.Main = views.ProjectsPage(s.projectsData(ctx, side.Projects, p.ProjectSel))
 	case "providers":
@@ -124,6 +125,7 @@ func (s *Server) homeData(ctx context.Context, side views.SidebarData) views.Hom
 // rows before seq, prepended as one element, and the button removed.
 func (s *Server) earlierItems(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	r = s.withThreadDir(r, id)
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
 	items, err := s.App.Store.Items(r.Context(), id)
 	if err != nil {
@@ -154,5 +156,25 @@ func (s *Server) page(ctx context.Context, title string, p views.Page) templ.Com
 		s.Log.Warn("page render", "view", p.View, "err", err)
 		pt = views.Parts{}
 	}
-	return views.Layout(title, p, pt)
+	if pt.Thread == nil {
+		return views.Layout(title, p, pt)
+	}
+	dir := pt.Thread.Project.Path
+	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
+		return views.Layout(title, p, pt).Render(views.WithDir(ctx, dir), w)
+	})
+}
+
+// withThreadDir is r with the thread's folder in its context, so the
+// views show the paths in its tool calls relative to it.
+func (s *Server) withThreadDir(r *http.Request, threadID string) *http.Request {
+	t, err := s.App.Store.Thread(r.Context(), threadID)
+	if err != nil {
+		return r
+	}
+	p, err := s.App.Store.Project(r.Context(), t.ProjectID)
+	if err != nil {
+		return r
+	}
+	return r.WithContext(views.WithDir(r.Context(), p.Path))
 }

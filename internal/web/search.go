@@ -48,7 +48,6 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	if view == "thread" && q != "" {
 		if t, err := s.App.Store.Thread(ctx, threadID); err == nil {
 			if p, ok := byID[t.ProjectID]; ok {
-				p.Path = t.Dir(p)
 				d.Files = gitx.MatchFiles(s.projectFileList(ctx, p), q, 8)
 				d.FileProject = p
 			}
@@ -108,7 +107,7 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 		)
 		// The sort above put the thread's project first.
 		if len(ps) > 0 && ps[0].ID == t.ProjectID {
-			out = append(out, views.Command{Label: "Open in VS Code", Icon: "brand-vscode", Action: views.VSCodeOpen(t.Dir(ps[0])), Key: views.Key("vscode")})
+			out = append(out, views.Command{Label: "Open in VS Code", Icon: "brand-vscode", Action: views.VSCodeOpen(ps[0].Path), Key: views.Key("vscode")})
 		}
 		out = append(out, views.Command{Label: "Delete thread", Icon: "trash-2", Action: "confirm('Delete this thread?') && @post('/api/threads/" + t.ID + "/delete')"})
 	}

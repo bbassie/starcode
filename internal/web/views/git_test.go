@@ -177,3 +177,42 @@ func TestPRReviewCard(t *testing.T) {
 		t.Error("merged PR card still offers merge or approve")
 	}
 }
+
+func TestDiffFindRender(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,2 @@\n package a\n-func Old() {}\n+func NewOld() {}\n"
+	var b strings.Builder
+	d := GitData{Project: store.Project{ID: "p1"}, Selected: "a.go", Diff: diff, Find: "old", FindLine: 2, FindOp: "add"}
+	if err := GitDetail(d).Render(context.Background(), &b); err != nil {
+		t.Fatal(err)
+	}
+	html := b.String()
+	for _, want := range []string{
+		`<span class="del">-func <mark>Old</mark>() {}</span>`,
+		`<span class="add" id="diff-target" data-init="el.scrollIntoView({block: 'center'})">+func New<mark>Old</mark>() {}</span>`,
+		`<span class=""> package a</span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %q in\n%s", want, html)
+		}
+	}
+
+	b.Reset()
+	hits := []gitx.DiffHit{{Path: "a.go", Line: 2, Op: '+', Text: "\tfunc NewOld() {}"}, {Path: "a.go", Line: 2, Op: '-', Text: "func Old() {}"}}
+	if err := GitFindResults("p1", "old", hits, true).Render(context.Background(), &b); err != nil {
+		t.Fatal(err)
+	}
+	html = b.String()
+	for _, want := range []string{
+		`<li class="find-file mono ellipsis" title="a.go">a.go</li>`,
+		`<span class="find-text mono ellipsis">func New<mark>Old</mark>() {}</span>`,
+		`/api/git/p1/diff?path=a.go&amp;find=old&amp;line=2&amp;op=del`,
+		"showing the first 2 matches",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %q in\n%s", want, html)
+		}
+	}
+	if strings.Count(html, "find-file") != 1 {
+		t.Error("the file heads once for its hits")
+	}
+}
