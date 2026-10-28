@@ -106,6 +106,28 @@ func TestAgentToolsOnOwnThread(t *testing.T) {
 	}
 }
 
+// list_threads filters by state and says when a snoozed thread returns
+// and, across projects, which project each thread is in.
+func TestListThreadsByState(t *testing.T) {
+	ctx := context.Background()
+	s, id := agentServer(t)
+	other, err := s.App.CreateThread(ctx, "p1", "fake", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := call(t, s, id, "snooze", map[string]any{"minutes": 60}); r.IsError {
+		t.Fatal(r.Text)
+	}
+	snoozed := call(t, s, other, "list_threads", map[string]any{"state": "snoozed", "all_projects": true}).Text
+	if !strings.Contains(snoozed, id) || strings.Contains(snoozed, other) || !strings.Contains(snoozed, "snoozed until") || !strings.Contains(snoozed, "[project p]") {
+		t.Fatalf("snoozed:\n%s", snoozed)
+	}
+	active := call(t, s, other, "list_threads", map[string]any{"state": "active"}).Text
+	if strings.Contains(active, id) || !strings.Contains(active, other) {
+		t.Fatalf("active:\n%s", active)
+	}
+}
+
 func TestSpawnAndWait(t *testing.T) {
 	ctx := context.Background()
 	s, id := agentServer(t)

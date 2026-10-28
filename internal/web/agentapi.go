@@ -336,22 +336,24 @@ func init() {
 				}
 				return "Cancelled.", nil
 			}),
-		tool("list_threads", "List starcode threads (other conversations, yours included) with their id, status and title, newest activity first.",
+		tool("list_threads", "List starcode threads (other conversations, yours included) with their id, state and title, newest activity first. A snoozed thread shows when it comes back.",
 			schema(map[string][2]string{
 				"query":        {"string", "only threads whose title contains this"},
-				"all_projects": {"boolean", "include other projects (default: only your project)"},
+				"state":        {"string", "only threads in this state: active (not settled or snoozed), snoozed, settled, or a status such as running or idle"},
+				"all_projects": {"boolean", "include other projects (default: only your project); each line then names its project"},
 				"limit":        {"integer", "at most this many (default 20)"},
 			}),
 			func(s *Server, ctx context.Context, t store.Thread, args json.RawMessage) (string, error) {
 				a, err := decode[struct {
 					Query       string
+					State       string
 					AllProjects bool `json:"all_projects"`
 					Limit       int
 				}](args)
 				if err != nil {
 					return "", err
 				}
-				return s.listThreads(ctx, t, a.Query, a.AllProjects, a.Limit)
+				return s.listThreads(ctx, t, a.Query, a.State, a.AllProjects, a.Limit)
 			}),
 		tool("read_thread", "Read another thread's conversation: the prompts and the agent's replies, without tool calls. A prompt that links /threads/<id> means that thread.",
 			schema(map[string][2]string{
@@ -532,7 +534,7 @@ func (s *Server) describeThread(ctx context.Context, t store.Thread, self bool) 
 	return b.String()
 }
 
-func (s *Server) listThreads(ctx context.Context, caller store.Thread, q string, all bool, limit int) (string, error) {
+func (s *Server) listThreads(ctx context.Context, caller store.Thread, q, want string, all bool, limit int) (string, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
@@ -540,7 +542,18 @@ func (s *Server) listThreads(ctx context.Context, caller store.Thread, q string,
 	if err != nil {
 		return "", err
 	}
+	projects := map[string]string{}
+	if all {
+		ps, err := s.App.Store.Projects(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, p := range ps {
+			projects[p.ID] = p.Name
+		}
+	}
 	q = strings.ToLower(strings.TrimSpace(q))
+	want = strings.ToLower(strings.TrimSpace(want))
 	var b strings.Builder
 	n := 0
 	for _, t := range ts {
@@ -559,9 +572,18 @@ func (s *Server) listThreads(ctx context.Context, caller store.Thread, q string,
 		} else if t.Snoozed() {
 			state = "snoozed"
 		}
+		if want != "" && want != state && (want != "active" || state == "settled" || state == "snoozed") {
+			continue
+		}
 		mark := ""
 		if t.ID == caller.ID {
 			mark = " (you)"
+		}
+		if state == "snoozed" {
+			mark += " (snoozed until " + t.SnoozedUntil.UTC().Format("2006-01-02 15:04 UTC") + ")"
+		}
+		if all {
+			mark += " [project " + projects[t.ProjectID] + "]"
 		}
 		fmt.Fprintf(&b, "%s  %-18s %s%s\n", t.ID, state, t.Title, mark)
 		n++
