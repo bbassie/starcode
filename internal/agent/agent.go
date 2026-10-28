@@ -227,7 +227,10 @@ type ApprovalRequested struct {
 	ToolID      string // the ToolStarted this belongs to, if any
 	ToolName    string
 	Description string
-	Input       json.RawMessage
+	// Reason is why the agent asked, when its own checks say: Claude asks
+	// even in bypass mode when a safety check or an ask rule fires.
+	Reason string
+	Input  json.RawMessage
 }
 
 // ContextUsage says how much of the model's context window the

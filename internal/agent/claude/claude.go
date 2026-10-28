@@ -1343,6 +1343,9 @@ type controlRequest struct {
 	Description string          `json:"description"`
 	Input       json.RawMessage `json:"input"`
 	ToolUseID   string          `json:"tool_use_id"`
+	// DecisionReason is set when a safety check or an ask rule made the
+	// CLI ask, bypass mode included. It may carry terminal colours.
+	DecisionReason string `json:"decision_reason"`
 }
 
 // parseLine turns one JSONL line from the CLI into agent events. Lines that
@@ -1662,9 +1665,23 @@ func parseControlRequest(out *outLine, st *state) []agent.Event {
 			ToolID:      req.ToolUseID,
 			ToolName:    name,
 			Description: req.Description,
+			Reason:      approvalReason(req.DecisionReason, req.Description),
 			Input:       req.Input,
 		},
 	}}
+}
+
+// ansiEscape matches the CLI's terminal colour and style sequences.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+
+// approvalReason is the CLI's decision_reason fit for the page: escapes
+// gone, and empty when it only repeats the description.
+func approvalReason(reason, description string) string {
+	reason = strings.TrimSpace(ansiEscape.ReplaceAllString(reason, ""))
+	if reason == strings.TrimSpace(description) {
+		return ""
+	}
+	return reason
 }
 
 // parseRateLimit turns a rate_limit_event into a notice when the CLI is

@@ -395,6 +395,9 @@ templ permissionCard(a store.Approval) {
 			<span class="mono">{ a.ToolName }</span>
 			<span class="dim ellipsis">{ a.Description }</span>
 		</div>
+		if a.Reason != "" {
+			<p class="approval-reason">@Icon("triangle-alert", "ui-icon") <span>{ a.Reason }</span></p>
+		}
 		{{ input := PrettyJSON(a.Input) }}
 		if input != "" {
 			<pre class="block input">{ clip(input, 4000) }</pre>

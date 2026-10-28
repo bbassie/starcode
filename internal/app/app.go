@@ -1436,7 +1436,7 @@ func (a *App) pump(l *live) {
 			ap := *e.Approval
 			// A question always waits for the human; no rule can answer it.
 			auto := domain.Questions(ap.ToolName, ap.Input) == nil && slices.Contains(a.SessionRules(ctx, tid), domain.RuleKey(ap.ToolName, ap.Input))
-			req := domain.ApprovalRequested{ID: ap.ID, ItemID: itemID(ap.ToolID), ToolName: ap.ToolName, Description: ap.Description, Input: ap.Input}
+			req := domain.ApprovalRequested{ID: ap.ID, ItemID: itemID(ap.ToolID), ToolName: ap.ToolName, Description: ap.Description, Reason: ap.Reason, Input: ap.Input}
 			if auto {
 				if err := l.sess.Resolve(ctx, ap.ID, agent.Allow); err != nil {
 					log.Error("auto-resolve", "err", err)

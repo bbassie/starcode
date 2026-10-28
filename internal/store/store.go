@@ -157,6 +157,7 @@ type Approval struct {
 	ItemID      string
 	ToolName    string
 	Description string
+	Reason      string // why the agent asked, when it said
 	Input       json.RawMessage
 	Decision    string
 	Answers     map[string]string // a question's answers, see domain.Questions
@@ -584,8 +585,8 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		if in == "" {
 			in = "{}"
 		}
-		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO approvals(id,thread_id,item_id,tool_name,description,input,decision,created_at) VALUES(?,?,?,?,?,?,'',?)`,
-			p.ID, ev.ThreadID, p.ItemID, p.ToolName, p.Description, in, ts)
+		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO approvals(id,thread_id,item_id,tool_name,description,reason,input,decision,created_at) VALUES(?,?,?,?,?,?,?,'',?)`,
+			p.ID, ev.ThreadID, p.ItemID, p.ToolName, p.Description, p.Reason, in, ts)
 		return err
 	case domain.ApprovalResolved:
 		answers := ""
@@ -985,7 +986,7 @@ func scanItem(sc interface{ Scan(...any) error }) (Item, error) {
 	return it, err
 }
 
-const approvalCols = `id,thread_id,item_id,tool_name,description,input,decision,answers,created_at,resolved_at`
+const approvalCols = `id,thread_id,item_id,tool_name,description,reason,input,decision,answers,created_at,resolved_at`
 
 // PendingApprovals returns unresolved approvals for a thread, oldest first.
 func (s *Store) PendingApprovals(ctx context.Context, threadID string) ([]Approval, error) {
@@ -1027,7 +1028,7 @@ func (s *Store) Approval(ctx context.Context, threadID, id string) (Approval, er
 func scanApproval(sc interface{ Scan(...any) error }) (Approval, error) {
 	var a Approval
 	var in, ans, c, r string
-	err := sc.Scan(&a.ID, &a.ThreadID, &a.ItemID, &a.ToolName, &a.Description, &in, &a.Decision, &ans, &c, &r)
+	err := sc.Scan(&a.ID, &a.ThreadID, &a.ItemID, &a.ToolName, &a.Description, &a.Reason, &in, &a.Decision, &ans, &c, &r)
 	a.Input = json.RawMessage(in)
 	if ans != "" {
 		json.Unmarshal([]byte(ans), &a.Answers)

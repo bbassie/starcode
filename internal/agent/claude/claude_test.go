@@ -323,6 +323,21 @@ func TestParseApprovalRequest(t *testing.T) {
 	}
 }
 
+// A safety check makes the CLI ask even in bypass mode, and says why in
+// decision_reason, with terminal colours. The card shows it plain, and
+// not when it only repeats the description.
+func TestParseApprovalReason(t *testing.T) {
+	st := newState(nil)
+	line := `{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -r $X/build"},"description":"Remove build","decision_reason":"\u001b[33mDangerous rm on a path built from a variable\u001b[39m","tool_use_id":"toolu_r"}}`
+	ev := one(t, feed(st, line), agent.KindApproval).Approval
+	if ev.Reason != "Dangerous rm on a path built from a variable" {
+		t.Errorf("Reason = %q", ev.Reason)
+	}
+	if got := approvalReason("Remove build", "Remove build"); got != "" {
+		t.Errorf("a reason that repeats the description = %q", got)
+	}
+}
+
 // A background subagent's can_use_tool still waits after the main turn
 // ends, so its approval survives the result; a main-thread one does not,
 // and an interrupt takes both.

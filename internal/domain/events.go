@@ -320,6 +320,7 @@ type ApprovalRequested struct {
 	ItemID      string          `json:"item_id"` // tool item this concerns, may be empty
 	ToolName    string          `json:"tool_name"`
 	Description string          `json:"description,omitempty"`
+	Reason      string          `json:"reason,omitempty"` // why the agent asked, see agent.ApprovalRequested
 	Input       json.RawMessage `json:"input,omitempty"`
 }
 
