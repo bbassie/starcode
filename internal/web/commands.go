@@ -514,6 +514,7 @@ func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
 	var sig struct {
 		SettleMerged bool `json:"settleMerged"`
 		SettleDays   int  `json:"settleDays"`
+		SettleKeepPR bool `json:"settleKeepPr"`
 		Resume       bool `json:"resume"`
 		ResumeLimit  bool `json:"resumeLimit"`
 		AgentTools   bool `json:"agentTools"`
@@ -529,6 +530,7 @@ func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
 	}
 	for k, v := range map[string]string{
 		"settle_merged":        flag(sig.SettleMerged),
+		"settle_keep_pr":       flag(sig.SettleKeepPR),
 		"resume_after_restart": flag(sig.Resume),
 		"resume_after_limit":   flag(sig.ResumeLimit),
 		"agent_tools":          flag(sig.AgentTools),
@@ -539,11 +541,12 @@ func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	before := s.App.Store.SettleIdleDays(ctx)
+	keptBefore := s.App.Store.SettleKeepPR(ctx)
 	if err := s.App.Store.SetSetting(ctx, "settle_idle_days", strconv.Itoa(days)); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	if days != before {
+	if days != before || (keptBefore && !sig.SettleKeepPR) {
 		go s.App.SettleIdle(context.Background())
 	}
 	s.ok(w, r)

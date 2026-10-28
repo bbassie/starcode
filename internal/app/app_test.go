@@ -822,6 +822,52 @@ func TestSettleIdleArchivesOldThreads(t *testing.T) {
 	}
 }
 
+// With settle_keep_pr on, the idle sweep keeps a thread whose pull
+// request is open or not read yet, and settles one whose PR merged.
+func TestSettleIdleKeepsOpenPRs(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "settle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: newQueueSession()}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	mk := func(pr int) string {
+		id, err := a.CreateThread(ctx, "p1", "queue-test", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pr > 0 {
+			if _, err := st.Append(ctx, id, domain.ThreadPRLinked{Repo: "o/r", Number: pr}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	open, unread, merged, none := mk(1), mk(2), mk(3), mk(0)
+	if err := st.SavePRStates(ctx, []store.PRState{
+		{PR: store.PR{Repo: "o/r", Number: 1}, State: "open"},
+		{PR: store.PR{Repo: "o/r", Number: 3}, State: "merged"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.SetSetting(ctx, "settle_keep_pr", "1")
+	a.settleIdle(ctx, time.Now().Add(4*24*time.Hour))
+	for id, want := range map[string]bool{open: false, unread: false, merged: true, none: true} {
+		th, err := st.Thread(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if th.Archived != want {
+			t.Errorf("thread %s archived = %v, want %v", id, th.Archived, want)
+		}
+	}
+}
+
 // Queued prompts can be edited and moved, a steered prompt goes first,
 // and the queue drains in the new order.
 func TestQueueEditMoveSteer(t *testing.T) {

@@ -157,9 +157,23 @@ func (a *App) settleIdle(ctx context.Context, now time.Time) {
 		a.Log.Warn("settle idle threads", "err", err)
 		return
 	}
+	// With settle_keep_pr on, a thread waiting on review stays. A PR the
+	// poll has not read yet counts as open.
+	var prs map[store.PR]store.PRState
+	if a.Store.SettleKeepPR(ctx) {
+		if prs, err = a.Store.PRStates(ctx); err != nil {
+			a.Log.Warn("settle idle threads", "err", err)
+			return
+		}
+	}
 	for _, t := range ts {
 		if t.Archived || t.Pinned || t.Snoozed() || t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval || !t.QuietSince().Before(cutoff) {
 			continue
+		}
+		if pr, ok := t.Linked(); ok && prs != nil {
+			if st := prs[pr].State; st != "merged" && st != "closed" {
+				continue
+			}
 		}
 		if err := a.ArchiveThread(ctx, t.ID); err != nil {
 			a.Log.Warn("settle idle thread", "thread", t.ID, "err", err)

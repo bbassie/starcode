@@ -1372,6 +1372,13 @@ func (s *Store) SettleIdleDays(ctx context.Context) int {
 	return n
 }
 
+// SettleKeepPR is whether the idle sweep leaves alone a thread whose
+// pull request is still open (setting settle_keep_pr, off by default).
+// A merge or close still settles it through SettleMerged.
+func (s *Store) SettleKeepPR(ctx context.Context) bool {
+	return s.Setting(ctx, "settle_keep_pr", "0") == "1"
+}
+
 // ResumeAfterRestart is whether a turn a restart cut off is resumed on
 // the next start (setting resume_after_restart, on by default).
 func (s *Store) ResumeAfterRestart(ctx context.Context) bool {
