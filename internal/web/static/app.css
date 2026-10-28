@@ -279,7 +279,9 @@ button .ui-icon { display: block; margin: auto; }
 .st-error { color: var(--err); }
 .st-idle { color: var(--fg-dim); }
 .st-done { color: var(--ok); }
-.st-failed, .st-declined, .st-interrupted { color: var(--err); }
+.st-failed, .st-declined { color: var(--err); }
+/* A stop is the reader's choice, not a failure: neutral, with the stop icon. */
+.st-interrupted { color: var(--fg-dim); }
 @keyframes blink { to { opacity: 0.25; } }
 .side-foot { display: flex; align-items: center; gap: 2px; padding: 8px; border-top: var(--border-w) solid var(--border); }
 .side-settings { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; min-height: var(--tap); padding: 7px 9px; border-radius: var(--radius-sm); color: var(--fg-dim); }
@@ -578,7 +580,7 @@ details.item.thinking .tool-line { font-style: italic; }
 .item.result { color: var(--fg-dim); font-size: 0.9em; }
 .result-line { display: flex; gap: 8px; align-items: baseline; }
 .item.result.st-done .tag { color: var(--ok); }
-.item.result.st-interrupted .tag, .item.result.st-error .tag { color: var(--err); }
+.item.result.st-error .tag { color: var(--err); }
 .item.result pre { font-family: var(--font-ui); font-size: 1em; }
 /* A turn's changed files: a folded card over its result line. */
 .turn-files { margin-bottom: 6px; border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-2); font-size: 1.05em; color: var(--fg); }
