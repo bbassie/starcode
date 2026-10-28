@@ -1189,6 +1189,18 @@ templ Layout(title string, p Page, parts Parts) {
 				// around el, for the rows in the model sheet that show the
 				// effort and mode chips' labels while those chips are hidden.
 				// A morph can run it while el is out of its form.
+				// effortStep is the effort hotkeys: click the next or
+				// previous level in the composer's effort menu for the
+				// current agent (the one data-show leaves visible), wrapping
+				// at the ends. A level the menu does not list starts from
+				// the end the step points away from.
+				window.effortStep = (dir) => {
+					const pick = [...document.querySelectorAll('form.composer .pick-effort')].find((p) => p.style.display !== 'none');
+					const opts = pick ? [...pick.querySelectorAll('.opt[data-value]')] : [];
+					if (!opts.length) return;
+					const i = opts.findIndex((o) => o.classList.contains('sel'));
+					opts[i < 0 ? (dir > 0 ? 0 : opts.length - 1) : (i + dir + opts.length) % opts.length].click();
+				};
 				window.pickOf = (el, kind, agent) => [...(el.closest('form')?.querySelectorAll('.pick-' + kind) || [])].find((p) => p.dataset.agent === agent) || el;
 				window.pickFocus = (el) => setTimeout(() => {
 					// After a rail switch the open menu is another agent's, so

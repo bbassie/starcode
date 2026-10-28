@@ -16,7 +16,8 @@ import (
 )
 
 // Action is one thing a key can do. Where says which pages offer it, for
-// the settings page; the views decide the actual set per page.
+// the settings page; the views decide the actual set per page. An empty
+// Default leaves the action unbound until the reader picks keys for it.
 type Action struct {
 	ID      string
 	Label   string
@@ -44,6 +45,8 @@ var Actions = []Action{
 	{ID: "approve-session", Label: "Allow for session", Desc: "Allow it and every later request like it in this thread", Default: "alt+shift+y", Where: "threads with an approval waiting"},
 	{ID: "deny", Label: "Deny", Desc: "Answer the oldest waiting approval with deny", Default: "alt+n", Where: "threads with an approval waiting"},
 	{ID: "undo", Label: "Undo", Desc: "Take back the last settle, unpin or snooze while its notice shows", Default: "mod+z", Where: "everywhere, outside text boxes"},
+	{ID: "effort-up", Label: "More reasoning effort", Desc: "Step the composer's effort up one level, wrapping at the top", Where: "pages with a composer"},
+	{ID: "effort-down", Label: "Less reasoning effort", Desc: "Step the composer's effort down one level, wrapping at the bottom", Where: "pages with a composer"},
 	{ID: "stash", Label: "Stash the prompt", Desc: "Put the composer's text aside, or bring a stashed prompt back when it is empty", Default: "mod+s", Where: "pages with a composer, outside the file editor"},
 }
 
@@ -137,7 +140,7 @@ func (s *Store) Set(id, combo string) error {
 		return err
 	}
 	for _, b := range s.All() {
-		if b.ID != id && b.Combo == c {
+		if b.ID != id && b.Combo != "" && b.Combo == c {
 			return fmt.Errorf("%s is already %s", Display(c), b.Label)
 		}
 	}
@@ -244,6 +247,9 @@ func Normalize(combo string) (string, error) {
 
 // Display writes a combo for a message: "Ctrl+Shift+K".
 func Display(combo string) string {
+	if combo == "" {
+		return "not set"
+	}
 	parts := strings.Split(combo, "+")
 	if strings.HasSuffix(combo, "++") {
 		parts = append(parts[:len(parts)-2], "+")

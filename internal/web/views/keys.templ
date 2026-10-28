@@ -49,7 +49,11 @@ templ KeysSection(d KeysPageData) {
 						<p class="dim">{ b.Desc } <span class="key-where">· { b.Where }</span></p>
 					</div>
 					<div class="key-cell">
-						@Keys(b.Combo)
+						if b.Combo == "" {
+							<span class="dim tiny-text key-unset">not set</span>
+						} else {
+							@Keys(b.Combo)
+						}
 						<span class="key-recording dim tiny-text">press keys… <kbd>esc</kbd> cancels</span>
 						<button type="button" class="btn tiny key-change" title="Press the new keys after clicking">change</button>
 						if b.Custom {

@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	pathpkg "path"
+	"slices"
 	"starcode/internal/domain"
 	"starcode/internal/keys"
 	"starcode/internal/store"
@@ -311,9 +312,14 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 		Hotkey{Combo: Key("undo"), Label: "Undo the last settle, unpin or snooze", Action: "document.querySelector('#toast .toast-undo')?.click()", Skip: "input, textarea, select, [contenteditable]"},
 	)
 	if p.View == "thread" || p.View == "home" {
-		hk = append(hk, Hotkey{Combo: Key("stash"), Label: "Stash the prompt, or bring one back", Action: "document.querySelector('form.composer .stash-btn')?.click()", Skip: ".editor, .git-editor"})
+		hk = append(hk,
+			Hotkey{Combo: Key("stash"), Label: "Stash the prompt, or bring one back", Action: "document.querySelector('form.composer .stash-btn')?.click()", Skip: ".editor, .git-editor"},
+			Hotkey{Combo: Key("effort-up"), Label: "More reasoning effort", Action: "effortStep(1)"},
+			Hotkey{Combo: Key("effort-down"), Label: "Less reasoning effort", Action: "effortStep(-1)"},
+		)
 	}
-	return hk
+	// Unbound actions have no combo and no button.
+	return slices.DeleteFunc(hk, func(h Hotkey) bool { return h.Combo == "" })
 }
 
 // HotkeyButtons is the hidden set of buttons the key handler clicks.

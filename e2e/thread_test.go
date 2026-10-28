@@ -351,3 +351,26 @@ func TestButtonPending(t *testing.T) {
 	e.waitIdle(id)
 	wait(p, `() => !document.querySelector('.pending')`)
 }
+
+// effortStep, the effort hotkeys' action, picks the next level of the
+// current agent's effort menu and wraps at the ends. The keys are
+// unbound by default, so the test calls it directly.
+func TestEffortStep(t *testing.T) {
+	e := newEnv(t)
+	id := e.thread()
+	p := e.page("/threads/"+id, false)
+	effort := func() string {
+		th, err := e.store.Thread(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return th.Effort
+	}
+	// The fake's levels are default, low and high.
+	for _, want := range []string{"low", "high", ""} {
+		p.MustEval(`() => effortStep(1)`)
+		e.until("effort "+want, func() bool { return effort() == want })
+	}
+	p.MustEval(`() => effortStep(-1)`)
+	e.until("effort wraps back to high", func() bool { return effort() == "high" })
+}
