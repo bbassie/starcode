@@ -923,3 +923,35 @@ func TestQueueEditMoveSteer(t *testing.T) {
 		t.Fatalf("next sent %q", got)
 	}
 }
+
+// RestartSession refuses during a turn; between turns it closes the
+// process, and the next prompt starts a fresh session.
+func TestRestartSession(t *testing.T) {
+	ctx := context.Background()
+	ag := newRestartAgent(false)
+	a, st, threadID := newRestartApp(t, ag)
+
+	if err := a.SendPrompt(ctx, threadID, "first"); err != nil {
+		t.Fatal(err)
+	}
+	first := startedSession(t, ag)
+	receivePrompt(t, first.sent)
+	if err := a.RestartSession(ctx, threadID); err == nil {
+		t.Fatal("restarted during a turn")
+	}
+	first.events <- agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{TurnID: "turn-1", Status: "done"}}
+	waitStatus(t, st, threadID, domain.StatusIdle)
+
+	if err := a.RestartSession(ctx, threadID); err != nil {
+		t.Fatal(err)
+	}
+	if notes := systemNotes(t, st, threadID); len(notes) != 1 || !strings.HasPrefix(notes[0], "agent session restarted") {
+		t.Fatalf("notes = %q", notes)
+	}
+	if err := a.SendPrompt(ctx, threadID, "second"); err != nil {
+		t.Fatal(err)
+	}
+	if got := receivePrompt(t, startedSession(t, ag).sent); got != "second" {
+		t.Fatalf("prompt on the fresh session = %q", got)
+	}
+}

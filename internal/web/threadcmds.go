@@ -24,6 +24,7 @@ import (
 func (s *Server) threadCmdRoutes() {
 	s.mux.HandleFunc("POST /api/threads/{id}/snooze", s.snoozeThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/wake", s.wakeThread)
+	s.mux.HandleFunc("POST /api/threads/{id}/restart-session", s.restartSession)
 	s.mux.HandleFunc("POST /api/threads/{id}/rewind/{item}", s.rewindThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/branch", s.branchThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/handoff", s.handOffThread)
@@ -75,6 +76,16 @@ func (s *Server) snoozeThread(w http.ResponseWriter, r *http.Request) {
 
 // wakeThread ends a snooze by hand. The undo of a wake is not offered:
 // the snooze time is gone with it.
+// restartSession closes the thread's agent process; the next prompt
+// starts a fresh one that resumes the conversation.
+func (s *Server) restartSession(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.RestartSession(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
 func (s *Server) wakeThread(w http.ResponseWriter, r *http.Request) {
 	if err := s.App.Wake(r.Context(), r.PathValue("id")); err != nil {
 		s.fail(w, r, err)

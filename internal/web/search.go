@@ -104,6 +104,7 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 		out = append(out,
 			views.Command{Label: "Toggle terminal", Icon: "terminal", Action: "$term = !$term", Key: views.Key("terminal")},
 			views.Command{Label: "Toggle changes panel", Icon: "git-compare-arrows", Action: "$git = !$git", Key: views.Key("changes")},
+			views.Command{Label: "Restart agent session (load new skills, plugins and MCP servers)", Icon: "rotate-cw", Action: "@post('/api/threads/" + t.ID + "/restart-session')"},
 		)
 		// The sort above put the thread's project first.
 		if len(ps) > 0 && ps[0].ID == t.ProjectID {

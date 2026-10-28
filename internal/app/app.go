@@ -1321,6 +1321,24 @@ func (a *App) session(ctx context.Context, t store.Thread) (*live, error) {
 	return l, nil
 }
 
+// RestartSession closes the thread's agent process between turns, so the
+// next prompt starts a fresh one that resumes the conversation. That is
+// how a thread picks up skills, plugins, MCP servers or settings added
+// since its process started. A note in the transcript says so.
+func (a *App) RestartSession(ctx context.Context, id string) error {
+	t, err := a.Store.Thread(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval {
+		return errors.New("the agent is working; restart its session after the turn ends")
+	}
+	a.closeSession(id)
+	_, err = a.Store.Append(ctx, id, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem,
+		Body: "agent session restarted: the next prompt starts a fresh process that resumes this conversation and loads new skills, plugins and MCP servers"})
+	return err
+}
+
 func (a *App) closeSession(threadID string) {
 	a.mu.Lock()
 	l := a.sessions[threadID]
