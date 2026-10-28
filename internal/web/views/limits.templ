@@ -82,19 +82,45 @@ func agentLabel(r LimitsRow) string {
 }
 
 // LimitBars draws the windows: a label, a bar in the context meter's
-// colours, the percentage and the reset.
+// colours, the percentage and the reset. A tick on the bar marks the
+// even pace, how much a steady rate would have used by now, when the
+// window's length is known.
 templ LimitBars(ws []agent.LimitWindow) {
+	{{ now := time.Now() }}
 	<div class="limit-bars">
 		for _, w := range ws {
 			{{ pct := int(w.Percent + 0.5) }}
-			<div class="limit-row" title={ fmt.Sprintf("%s: %d%% used", w.Label, pct) }>
+			{{ pace, hasPace := w.Elapsed(now) }}
+			<div class="limit-row" title={ limitTitle(w.Label, pct, pace, hasPace) }>
 				<span class="limit-label ellipsis">{ w.Label }</span>
-				<span class={ "ctx-track", "limit-track", contextLevel(pct) }><span class="ctx-fill" style={ barWidth(pct) }></span></span>
+				<span class={ "ctx-track", "limit-track", contextLevel(pct) }>
+					<span class="ctx-fill" style={ barWidth(pct) }></span>
+					if hasPace {
+						<span class="limit-pace" style={ fmt.Sprintf("left: %.1f%%", pace*100) }></span>
+					}
+				</span>
 				<span class="limit-pct">{ fmt.Sprintf("%d%%", pct) }</span>
 				<span class="dim limit-reset">{ resetsText(w.ResetsAt) }</span>
 			</div>
 		}
 	</div>
+}
+
+// limitTitle is a bar's tooltip: the share used and, when known, how
+// that compares with an even pace (within 5 points counts as on pace).
+func limitTitle(label string, pct int, pace float64, hasPace bool) string {
+	t := fmt.Sprintf("%s: %d%% used", label, pct)
+	if !hasPace {
+		return t
+	}
+	even := int(pace*100 + 0.5)
+	switch gap := pct - even; {
+	case gap > 5:
+		return fmt.Sprintf("%s, ahead of the even pace (%d%%)", t, even)
+	case gap < -5:
+		return fmt.Sprintf("%s, under the even pace (%d%%)", t, even)
+	}
+	return fmt.Sprintf("%s, on the even pace (%d%%)", t, even)
 }
 
 // resetsText says when a window resets: "resets in 2h 10m" within a day,

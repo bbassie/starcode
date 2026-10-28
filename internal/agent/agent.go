@@ -309,6 +309,20 @@ type LimitWindow struct {
 	Label    string    // "Session", "Weekly", "Weekly · Fable"
 	Percent  float64   // 0..100 used
 	ResetsAt time.Time // zero when unknown
+	// Length is how long the window runs from start to reset, zero when
+	// unknown. With ResetsAt it gives the even pace: how much of the
+	// window has passed, so how much would be used at a steady rate.
+	Length time.Duration
+}
+
+// Elapsed is the share of the window that has passed at now, 0..1, and
+// false when the window's length or reset is unknown.
+func (w LimitWindow) Elapsed(now time.Time) (float64, bool) {
+	if w.Length <= 0 || w.ResetsAt.IsZero() {
+		return 0, false
+	}
+	share := float64(w.Length-w.ResetsAt.Sub(now)) / float64(w.Length)
+	return min(max(share, 0), 1), true
 }
 
 // Asker is an agent that can answer a one-off prompt with no tools and

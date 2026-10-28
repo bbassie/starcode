@@ -1620,7 +1620,8 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .limit-bars { display: flex; flex-direction: column; gap: 6px; }
 .limit-row { display: grid; grid-template-columns: minmax(64px, 1fr) 2fr auto minmax(0, auto); align-items: center; gap: 8px; font-size: 0.9em; }
 .limit-label { color: var(--fg-dim); }
-.limit-track { display: block; }
+.limit-track { display: block; position: relative; }
+.limit-pace { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--fg); opacity: 0.55; }
 .limit-pct { font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
 .limit-reset { font-size: 0.85em; white-space: nowrap; }
 .ctx-limits-head { margin-top: 4px; }

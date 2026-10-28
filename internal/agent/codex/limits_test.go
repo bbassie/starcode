@@ -19,7 +19,7 @@ func TestLimitWindows(t *testing.T) {
 		}
 		for i := range want {
 			g, w := got[i], want[i]
-			if g.ID != w.ID || g.Kind != w.Kind || g.Label != w.Label || g.Percent != w.Percent || !g.ResetsAt.Equal(w.ResetsAt) {
+			if g.ID != w.ID || g.Kind != w.Kind || g.Label != w.Label || g.Percent != w.Percent || !g.ResetsAt.Equal(w.ResetsAt) || g.Length != w.Length {
 				t.Errorf("window %d = %+v, want %+v", i, g, w)
 			}
 		}
@@ -32,8 +32,8 @@ func TestLimitWindows(t *testing.T) {
 			Secondary: &rateLimitWindow{UsedPercent: pct(3), ResetsAt: 1758500000, WindowDurationMins: mins(10080)},
 		})
 		check(t, got,
-			agent.LimitWindow{ID: "primary", Kind: "session", Label: "Session", Percent: 12, ResetsAt: time.Unix(1758000000, 0)},
-			agent.LimitWindow{ID: "secondary", Kind: "weekly", Label: "Weekly", Percent: 3, ResetsAt: time.Unix(1758500000, 0)},
+			agent.LimitWindow{ID: "primary", Kind: "session", Label: "Session", Percent: 12, ResetsAt: time.Unix(1758000000, 0), Length: 5 * time.Hour},
+			agent.LimitWindow{ID: "secondary", Kind: "weekly", Label: "Weekly", Percent: 3, ResetsAt: time.Unix(1758500000, 0), Length: 7 * 24 * time.Hour},
 		)
 	})
 	t.Run("older CLI without durations or limit id", func(t *testing.T) {
@@ -53,9 +53,9 @@ func TestLimitWindows(t *testing.T) {
 	})
 	t.Run("duration beats the plan", func(t *testing.T) {
 		got := limitWindows(rateLimitSnapshot{PlanType: "go", Primary: &rateLimitWindow{UsedPercent: pct(7), WindowDurationMins: mins(300)}})
-		check(t, got, agent.LimitWindow{ID: "primary", Kind: "session", Label: "Session", Percent: 7})
+		check(t, got, agent.LimitWindow{ID: "primary", Kind: "session", Label: "Session", Percent: 7, Length: 5 * time.Hour})
 		got = limitWindows(rateLimitSnapshot{PlanType: "plus", Primary: &rateLimitWindow{UsedPercent: pct(7), WindowDurationMins: mins(monthMins)}})
-		check(t, got, agent.LimitWindow{ID: "primary", Kind: "monthly", Label: "Monthly", Percent: 7})
+		check(t, got, agent.LimitWindow{ID: "primary", Kind: "monthly", Label: "Monthly", Percent: 7, Length: monthMins * time.Minute})
 	})
 	t.Run("another metered limit is ignored", func(t *testing.T) {
 		if got := limitWindows(rateLimitSnapshot{LimitID: "spark", Primary: &rateLimitWindow{UsedPercent: pct(7)}}); got != nil {

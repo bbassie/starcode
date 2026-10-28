@@ -166,14 +166,19 @@ func usageLimits(raw json.RawMessage) (agent.Limits, string, error) {
 			}
 		default:
 			kind := l.Group
+			var length time.Duration
 			switch kind {
-			case "session", "weekly", "monthly":
+			case "session":
+				length = sessionLength
+			case "weekly":
+				length = weekLength
+			case "monthly":
 			default:
 				kind = "other"
 			}
 			limits.Windows = append(limits.Windows, agent.LimitWindow{
 				ID: l.Kind, Kind: kind, Label: strings.ReplaceAll(l.Kind, "_", " "),
-				Percent: clampPercent(*l.Percent), ResetsAt: reset,
+				Percent: clampPercent(*l.Percent), ResetsAt: reset, Length: length,
 			})
 		}
 	}
@@ -247,19 +252,26 @@ func limitWindowFromEvent(info rateLimitInfo, scopedModel string) (agent.LimitWi
 }
 
 func sessionWindow(percent float64, reset time.Time) agent.LimitWindow {
-	return agent.LimitWindow{ID: "session", Kind: "session", Label: "Session", Percent: clampPercent(percent), ResetsAt: reset}
+	return agent.LimitWindow{ID: "session", Kind: "session", Label: "Session", Percent: clampPercent(percent), ResetsAt: reset, Length: sessionLength}
 }
 
 func weeklyWindow(percent float64, reset time.Time) agent.LimitWindow {
-	return agent.LimitWindow{ID: "weekly", Kind: "weekly", Label: "Weekly", Percent: clampPercent(percent), ResetsAt: reset}
+	return agent.LimitWindow{ID: "weekly", Kind: "weekly", Label: "Weekly", Percent: clampPercent(percent), ResetsAt: reset, Length: weekLength}
 }
 
 func scopedWindow(model string, percent float64, reset time.Time) agent.LimitWindow {
 	return agent.LimitWindow{
 		ID: "weekly_" + slug(model), Kind: "weekly", Label: "Weekly · " + model,
-		Percent: clampPercent(percent), ResetsAt: reset,
+		Percent: clampPercent(percent), ResetsAt: reset, Length: weekLength,
 	}
 }
+
+// Claude's plans run a 5-hour session and a 7-day week. The CLI reports
+// only the reset, so the lengths are fixed here for the even-pace mark.
+const (
+	sessionLength = 5 * time.Hour
+	weekLength    = 7 * 24 * time.Hour
+)
 
 // slug lowercases a display name and turns every run of other characters
 // into one underscore: "Fable" is "fable", "Opus 4.6" is "opus_4_6".

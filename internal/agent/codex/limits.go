@@ -97,8 +97,10 @@ func limitWindows(snap rateLimitSnapshot) []agent.LimitWindow {
 			continue
 		}
 		mins := p.fallback
+		var length time.Duration // only a reported length; the fallback is a guess
 		if p.w.WindowDurationMins != nil {
 			mins = *p.w.WindowDurationMins
+			length = time.Duration(mins) * time.Minute
 		}
 		kind, label := "session", "Session"
 		switch {
@@ -114,6 +116,7 @@ func limitWindows(snap rateLimitSnapshot) []agent.LimitWindow {
 		out = append(out, agent.LimitWindow{
 			ID: p.id, Kind: kind, Label: label,
 			Percent: min(max(*p.w.UsedPercent, 0), 100), ResetsAt: reset,
+			Length: length,
 		})
 	}
 	return out
