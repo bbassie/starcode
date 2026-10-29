@@ -764,7 +764,7 @@ func PRsList(d PRsPageData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "</p><p class=\"dim pad tiny-text\">The page needs the GitHub CLI (gh) on PATH and signed in.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 55, "</p><p class=\"dim pad tiny-text\">Reading the pull requests from GitHub failed; the refresh button tries again. The page needs the GitHub CLI (gh) on PATH and signed in.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

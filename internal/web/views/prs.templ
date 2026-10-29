@@ -238,7 +238,7 @@ templ PRsList(d PRsPageData) {
 	<div id="prpage-list" class="prpage-list" data-effect="$prv; $mainv; prsApply(el, $prq, $prstate, $prinv, $prauthor, $prlabel, $prdraft, $prreview, $prchecks, $prfproj, $prsort)">
 		if d.Err != "" {
 			<p class="dim pad">{ d.Err }</p>
-			<p class="dim pad tiny-text">The page needs the GitHub CLI (gh) on PATH and signed in.</p>
+			<p class="dim pad tiny-text">Reading the pull requests from GitHub failed; the refresh button tries again. The page needs the GitHub CLI (gh) on PATH and signed in.</p>
 		} else if !d.Loaded {
 			@prSkeleton()
 		} else {

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -1143,37 +1144,74 @@ type PRBoard struct {
 // boardFields are what the page shows of each pull request.
 const boardFields = prStateFields + ` additions deletions createdAt author { login avatarUrl(size: 40) } labels(first: 10) { nodes { name } } assignees(first: 10) { nodes { login } }`
 
-// FetchPRBoard reads the page in one GraphQL call: six searches, open
-// and done (merged or closed) for each of the user's own, others' that
-// involve them, and others' in repos. Done ones are fewer, so a long
-// history does not push an open one out. dir only matters for which
-// GitHub host gh talks to.
+// FetchPRBoard reads the page: six searches, open and done (merged or
+// closed) for each of the user's own, others' that involve them, and
+// others' in repos. Done ones are fewer, so a long history does not push
+// an open one out. Each search is its own GraphQL call and they run side
+// by side: as one call they took about ten seconds, which is where
+// GitHub's gateway gives up with a 502. A call that fails is tried once
+// more. dir only matters for which GitHub host gh talks to.
 func FetchPRBoard(ctx context.Context, dir string, repos []string) (PRBoard, error) {
-	var q strings.Builder
-	q.WriteString("query { viewer { login }")
-	search := func(name, query string, n int) {
-		fmt.Fprintf(&q, " %s: search(query: %q, type: ISSUE, first: %d) { nodes { ... on PullRequest { %s } } }", name, query+" sort:updated-desc", n, boardFields)
+	type search struct {
+		name, query string
+		n           int
 	}
-	search("authoredOpen", "is:pr is:open author:@me", 50)
-	search("authoredDone", "is:pr is:closed author:@me", 30)
-	search("involvedOpen", "is:pr is:open involves:@me -author:@me", 50)
-	search("involvedDone", "is:pr is:closed involves:@me -author:@me", 30)
+	searches := []search{
+		{"authoredOpen", "is:pr is:open author:@me", 50},
+		{"authoredDone", "is:pr is:closed author:@me", 30},
+		{"involvedOpen", "is:pr is:open involves:@me -author:@me", 50},
+		{"involvedDone", "is:pr is:closed involves:@me -author:@me", 30},
+	}
 	if len(repos) > 0 {
 		in := "repo:" + strings.Join(repos, " repo:")
-		search("reposOpen", "is:pr is:open -author:@me "+in, 50)
-		search("reposDone", "is:pr is:closed -author:@me "+in, 30)
+		searches = append(searches, search{"reposOpen", "is:pr is:open -author:@me " + in, 50}, search{"reposDone", "is:pr is:closed -author:@me " + in, 30})
 	}
-	q.WriteString(" }")
-	raw, err := gh(ctx, dir, "api", "graphql", "-f", "query="+q.String())
+	raws := make([][]byte, len(searches))
+	errs := make([]error, len(searches))
+	var wg sync.WaitGroup
+	for i, s := range searches {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			q := fmt.Sprintf("query { viewer { login } %s: search(query: %q, type: ISSUE, first: %d) { nodes { ... on PullRequest { %s } } } }", s.name, s.query+" sort:updated-desc", s.n, boardFields)
+			for try := 0; try < 2; try++ {
+				raws[i], errs[i] = gh(ctx, dir, "api", "graphql", "-f", "query="+q)
+				if errs[i] == nil || ctx.Err() != nil {
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	// One answer for decodePRBoard: the searches' data side by side.
+	data := map[string]json.RawMessage{}
+	var gqlErrs []json.RawMessage
+	for i, raw := range raws {
+		if errs[i] != nil {
+			return PRBoard{}, errs[i]
+		}
+		var resp struct {
+			Data   map[string]json.RawMessage `json:"data"`
+			Errors []json.RawMessage          `json:"errors"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return PRBoard{}, err
+		}
+		for k, v := range resp.Data {
+			data[k] = v
+		}
+		gqlErrs = append(gqlErrs, resp.Errors...)
+	}
+	merged, err := json.Marshal(map[string]any{"data": data, "errors": gqlErrs})
 	if err != nil {
 		return PRBoard{}, err
 	}
-	return decodePRBoard(raw)
+	return decodePRBoard(merged)
 }
 
 func decodePRBoard(raw []byte) (PRBoard, error) {
 	var resp struct {
-		Data map[string]json.RawMessage `json:"data"`
+		Data   map[string]json.RawMessage `json:"data"`
 		Errors []struct {
 			Message string `json:"message"`
 		} `json:"errors"`

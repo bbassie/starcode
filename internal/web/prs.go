@@ -580,6 +580,12 @@ func (s *Server) myPRs(ctx context.Context, repos map[string]store.Project, refr
 		}
 		sort.Strings(names)
 		list, err := gitx.FetchPRBoard(ctx, s.prDir(ctx), names)
+		if err != nil && !e.at.IsZero() && e.err == "" {
+			// A failed read (GitHub answers 502 now and then) keeps the
+			// list the page has; the next visit or refresh tries again.
+			s.Log.Warn("read pull requests", "err", err)
+			return e
+		}
 		e = myPRsEntry{at: time.Now(), list: list}
 		if err != nil {
 			e.err = err.Error()
