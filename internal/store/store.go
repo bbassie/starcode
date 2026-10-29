@@ -36,10 +36,24 @@ type Project struct {
 	// start with; Agent empty means the project sets nothing and a new
 	// thread takes the composer's choice.
 	Agent, Model, Effort, Mode string
+	// Scratch is a folder starcode made for one thread started without a
+	// project (App.CreateScratchThread).
+	Scratch bool
 }
 
 // HasDefaults is whether the project names what its new threads run on.
 func (p Project) HasDefaults() bool { return p.Agent != "" }
+
+// Named is ps without the scratch folders: the projects the reader added.
+func Named(ps []Project) []Project {
+	out := make([]Project, 0, len(ps))
+	for _, p := range ps {
+		if !p.Scratch {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 type Thread struct {
 	ID                string
@@ -354,7 +368,7 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 	}
 	switch p := deref(ev.Payload).(type) {
 	case domain.ProjectAdded:
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO projects(id,path,name,created_at) VALUES(?,?,?,?)`, p.ID, p.Path, p.Name, ts)
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO projects(id,path,name,created_at,scratch) VALUES(?,?,?,?,?)`, p.ID, p.Path, p.Name, ts, p.Scratch)
 		return err
 	case domain.ProjectRemoved:
 		_, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id=?`, p.ID)
@@ -792,12 +806,12 @@ func (s *Store) Project(ctx context.Context, id string) (Project, error) {
 	return p, err
 }
 
-const projectCols = `id,path,name,created_at,agent,model,effort,mode`
+const projectCols = `id,path,name,created_at,agent,model,effort,mode,scratch`
 
 func scanProject(sc interface{ Scan(...any) error }) (Project, error) {
 	var p Project
 	var ts string
-	err := sc.Scan(&p.ID, &p.Path, &p.Name, &ts, &p.Agent, &p.Model, &p.Effort, &p.Mode)
+	err := sc.Scan(&p.ID, &p.Path, &p.Name, &ts, &p.Agent, &p.Model, &p.Effort, &p.Mode, &p.Scratch)
 	p.CreatedAt, _ = time.Parse(timeFmt, ts)
 	return p, err
 }

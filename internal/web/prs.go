@@ -243,7 +243,7 @@ func (s *Server) pageDetailData(ctx context.Context, repo string, n int, d gitx.
 	if err != nil {
 		return views.PRDetailData{}, err
 	}
-	data := views.PRDetailData{Detail: d, Loaded: true, Page: true, Repo: repo, Base: "/api/prs/" + repo + "/" + strconv.Itoa(n), Projects: ps}
+	data := views.PRDetailData{Detail: d, Loaded: true, Page: true, Repo: repo, Base: "/api/prs/" + repo + "/" + strconv.Itoa(n), Projects: store.Named(ps)}
 	if p, ok := s.projectRepos(ctx, ps)[repo]; ok {
 		data.Project, data.ProjectID = p, p.ID
 	}
@@ -551,6 +551,7 @@ func (s *Server) settleMerged(ctx context.Context, pr store.PR) {
 // project, so gh picks the same host it does in the panel.
 func (s *Server) prDir(ctx context.Context) string {
 	ps, err := s.App.Store.Projects(ctx)
+	ps = store.Named(ps)
 	if err != nil || len(ps) == 0 {
 		return ""
 	}

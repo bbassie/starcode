@@ -1205,7 +1205,8 @@ templ Layout(title string, p Page, parts Parts) {
 				window.pickFocus = (el) => setTimeout(() => {
 					// After a rail switch the open menu is another agent's, so
 					// look for the one that is actually on screen.
-					const menu = [...el.closest('form').querySelectorAll('.pick-menu')].find((m) => m.getClientRects().length);
+					// The home page's project menu sits outside the form.
+					const menu = [...(el.closest('form') || el.closest('.pick')).querySelectorAll('.pick-menu')].find((m) => m.getClientRects().length);
 					if (!menu || matchMedia('(pointer: coarse)').matches) return;
 					(menu.querySelector('input') || menu.querySelector('.opt.sel') || menu.querySelector('.opt'))?.focus();
 				});

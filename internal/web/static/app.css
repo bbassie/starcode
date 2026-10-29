@@ -949,10 +949,7 @@ body.scrolled-up .jump { display: inline-flex; }
 .opt-custom { border-top: var(--border-w) solid var(--line-soft); border-radius: 0; margin-top: 4px; padding-top: 10px; }
 /* The effort and mode rows in the model sheet only exist on a phone. */
 .pick-more { display: none; }
-.composer.start { width: 100%; margin: 0 0 28px; }
-/* The home page opens on a question over the composer, centred like an
-   empty chat. */
-.home .items-inner > h1.h { margin: clamp(24px, 12vh, 120px) 0 20px; text-align: center; font-size: 1.6em; font-weight: 600; }
+.composer.start { width: 100%; margin: 0; }
 
 /* Context meter: how full the model's window is, as a ring in a chip
    beside the pickers. The chip opens a card (a pick-menu like the
@@ -982,12 +979,20 @@ body.scrolled-up .jump { display: inline-flex; }
 
 /* ---- home ---- */
 
-.project-card { border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); padding: 8px; }
-.project-card > header { display: flex; align-items: center; gap: 10px; padding: 4px 8px 8px; min-width: 0; }
-.project-name { font-weight: 600; }
-.project-card .dim.ellipsis { flex: 1; }
-.project-card > p { padding: 0 8px 4px; }
-.empty { padding: 40px 0; text-align: center; }
+/* A new thread, like an empty chat: the question and the composer in the
+   middle of the page, a little above centre. */
+.home-inner { min-height: 100%; justify-content: center; padding-bottom: 12vh; }
+.home-hero { position: relative; text-align: center; margin-bottom: 14px; }
+.hero-title { font-size: 1.65em; font-weight: 400; margin: 0 0 4px; letter-spacing: -0.01em; }
+.hero-proj { font: inherit; font-weight: 600; color: inherit; background: none; border: 0; padding: 0 3px; margin: 0 -3px; border-radius: var(--radius-sm); cursor: pointer; }
+.hero-proj:hover { background: var(--bg-3); }
+.hero-sub { margin: 0; }
+.hero-link { font: inherit; font-size: 0.92em; color: var(--fg-dim); background: none; border: 0; padding: 2px 4px; cursor: pointer; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; transition: color 0.12s, text-decoration-color 0.12s; }
+.hero-link:hover { color: var(--fg); text-decoration-color: currentColor; }
+.hero-link.strong { color: var(--fg); font-weight: 600; }
+.hero-menu { top: calc(100% + 6px); bottom: auto; left: 50%; transform: translateX(-50%); width: 300px; min-width: 0; }
+.hero-menu .opt { min-height: 32px; padding-top: 4px; padding-bottom: 4px; }
+.proj-init.scratch { background: none; color: var(--fg-dim); font-size: 1em; }
 
 /* ---- settings ---- */
 
@@ -1534,7 +1539,6 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   .segmented a { min-height: 36px; }
   .turn-files > summary { min-height: var(--tap); }
   .crumb-title { min-height: 36px; }
-  .project-card > header .btn { min-height: 36px; }
   .prov-color { width: 32px; height: 32px; }
   /* The switch keeps its size and gets a bigger target around it. */
   .switch::before { content: ""; position: absolute; inset: -10px -6px; }
@@ -1583,6 +1587,7 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
     right: 8px;
     width: auto;
     max-width: none;
+    transform: none;
     box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.5), var(--shadow);
   }
   .pick-list { max-height: 50dvh; }
@@ -1793,9 +1798,6 @@ details.item.agent[open] > summary::after { transform: rotate(90deg); }
 #sidebar.dense .thread-row:not(.compact) .row-main { flex: 1; min-width: 0; }
 #sidebar.dense .dense-only { display: inline-grid; }
 #sidebar.dense .row-actions { top: 50%; transform: translateY(-50%); }
-/* Project cards on the home page: one line per thread. */
-.home-row a { flex-direction: row; min-height: 36px; align-items: center; }
-.home-row .row-main { flex: 1; }
 
 /* ---- undo, snooze, stash, rewind, quote, previews ---- */
 

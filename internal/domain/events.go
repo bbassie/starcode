@@ -59,6 +59,9 @@ type ProjectAdded struct {
 	ID   string `json:"id"`
 	Path string `json:"path"`
 	Name string `json:"name"`
+	// Scratch marks the folder starcode made for one thread started
+	// without a project; the project lists leave it out.
+	Scratch bool `json:"scratch,omitempty"`
 }
 
 type ProjectRemoved struct {

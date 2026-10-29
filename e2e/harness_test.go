@@ -119,6 +119,7 @@ func newEnv(t *testing.T) *env {
 	fk := fake.New()
 	fk.Delay = 10 * time.Millisecond
 	a := app.New(st, bus.New(1024), map[string]agent.Agent{"fake": fk}, log)
+	a.ScratchDir = filepath.Join(data, "scratch")
 	h := web.New(a, log, "", filepath.Join(data, "attachments"), prov)
 	srv := httptest.NewServer(h)
 	// Cleanups run last first: pages close, then the streams they held

@@ -149,6 +149,7 @@ func run() (string, error) {
 	}
 	a := app.New(st, b, agents, log)
 	a.AttachDir = filepath.Join(*data, "attachments")
+	a.ScratchDir = filepath.Join(*data, "scratch")
 	if err := a.Recover(context.Background()); err != nil {
 		return "", err
 	}

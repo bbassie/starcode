@@ -36,7 +36,7 @@ func (s *Server) schedulesData(ctx context.Context, side views.SidebarData) view
 	for _, t := range side.Threads {
 		threads[t.ID] = t
 	}
-	return views.SchedulesData{Schedules: scs, Projects: side.Projects, Threads: threads, Agents: s.agentNames(), Looks: s.agentLooks()}
+	return views.SchedulesData{Schedules: scs, Projects: store.Named(side.Projects), Threads: threads, Agents: s.agentNames(), Looks: s.agentLooks()}
 }
 
 func (s *Server) scheduleCmd(run func(ctx context.Context, id string) error) http.HandlerFunc {

@@ -6,7 +6,7 @@ I built it because I wanted something like [T3 Code](https://github.com/pingdotg
 
 ## What it does
 
-- Threads per project, with Claude Code and Codex as drivers. Several CLI installs can sit side by side (Settings > Providers), each with its own config dir and colour. A project can name the agent, model and permission mode its new threads start with (Settings > Projects).
+- Threads per project, with Claude Code and Codex as drivers. Several CLI installs can sit side by side (Settings > Providers), each with its own config dir and colour. A project can name the agent, model and permission mode its new threads start with (Settings > Projects). A thread can also start without a project: it gets a folder of its own under `~/.starcode/scratch`, named for the day and the prompt.
 - Settle a thread, pin it, snooze it until later or mark it unread again. Each of those shows an undo for a few seconds, and Ctrl+Z takes it.
 - Rewind: drop a prompt and everything after it, and get the prompt back to edit. The agent forgets those turns too; the files stay as they are.
 - Branch a thread, from its end or from before any prompt: the new thread gets a fork of the agent's conversation and works in the same checkout. The original stays as it is.

@@ -3,39 +3,33 @@ package views
 import (
 	"fmt"
 	"starcode/internal/store"
-	"time"
+	"strings"
 )
 
 type HomeData struct {
+	// Projects are the reader's own, in the sidebar's order.
 	Projects []store.Project
-	Threads  []store.Thread
-	Looks    map[string]AgentLook
-	Seen     map[string]time.Time
 	Settings SettingsData
-	PRs      map[store.PR]store.PRState
 	// Stashed is how many prompts the stash holds.
 	Stashed int
 }
 
-// Home is the projects overview: a composer that starts a thread with its
-// first prompt, then every project with its recent threads.
+// Home is a new thread, like an empty chat: a question with the project
+// in it over the composer that starts the thread with its first prompt.
+// The project is picked in the question; with none picked the thread
+// gets a folder of its own (App.CreateScratchThread).
 templ Home(d HomeData) {
 	<main id="main" class="home">
 		<header id="mainhead" class="mainhead">
 			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
-			<nav class="crumbs"><span>All projects</span></nav>
-			<span class="spacer"></span>
-			<button class="btn ghost" data-on:click="$addproj = !$addproj; $nav = true">@Icon("folder-plus", "ui-icon") add project</button>
+			<nav class="crumbs"><span>New thread</span></nav>
 		</header>
 		<div id="items" class="items">
-			<div class="items-inner">
-				if len(d.Projects) > 0 {
-					<h1 class="h">What should we work on?</h1>
-					<form
-						class="composer start"
-						data-signals={ signalsJSON(d.Settings.Agent, d.Settings.Model, d.Settings.Effort, d.Settings.Mode, fmt.Sprintf("project: %q", d.Projects[0].ID)) }
-						data-on:submit={ "evt.preventDefault(); @post('/api/threads', " + withSignal("_attach") + ")" }
-					>
+			// The signals sit on the wrapper: the question over the form
+			// reads $project too.
+			<div class="items-inner home-inner" data-signals={ signalsJSON(d.Settings.Agent, d.Settings.Model, d.Settings.Effort, d.Settings.Mode, fmt.Sprintf("project: %q", firstProject(d.Projects))) }>
+				@HomeHero(d.Projects)
+				<form class="composer start" data-on:submit={ "evt.preventDefault(); @post('/api/threads', " + withSignal("_attach") + ")" }>
 						<div class="prompt-box">
 							<textarea
 								class="prompt"
@@ -54,44 +48,68 @@ templ Home(d HomeData) {
 						@AttachStrip()
 						<div class="composer-row">
 							@AttachButton()
-							@ProjectPick(d.Projects)
 							@Chips(d.Settings, "", false)
 							<span class="spacer"></span>
 							<button class="btn round primary" type="submit" title="Start thread">@Icon("arrow-up", "ui-icon")</button>
 						</div>
-					</form>
-				} else {
-					<div class="empty">
-						<h1 class="h">Welcome to starcode</h1>
-						<p class="dim">Add a project folder to get started: use the + in the sidebar and paste an absolute path.</p>
-					</div>
-				}
-				for _, p := range d.Projects {
-					<section class="project-card">
-						<header>
-							<span class="project-name">{ p.Name }</span>
-							<span class="dim tiny-text ellipsis">{ p.Path }</span>
-							<span class="spacer"></span>
-							<button class="btn ghost" data-on:click={ "@post('/api/projects/" + p.ID + "/threads')" }>@Icon("plus", "ui-icon") new thread</button>
-							<button class="btn icon ghost tiny dim" data-on:click={ "confirm('Remove project " + p.Name + " from starcode? Files are not touched.') && @post('/api/projects/" + p.ID + "/remove')" } title="Remove project from starcode" aria-label="Remove project">@Icon("x", "ui-icon")</button>
-						</header>
-						<ul class="threads">
-							{{ n := 0 }}
-							for _, t := range d.Threads {
-								if t.ProjectID == p.ID && listed(t) && n < 5 {
-									{{ n++ }}
-									@HomeRow(t, d.Looks[t.Agent], unread(t, "", d.Seen), prOf(t, d.PRs))
-								}
-							}
-						</ul>
-						if n == 0 {
-							<p class="dim">No threads yet.</p>
-						}
-					</section>
-				}
+				</form>
 			</div>
 		</div>
 	</main>
+}
+
+// firstProject is the project the home composer starts on: the first in
+// the sidebar's order, or none.
+func firstProject(ps []store.Project) string {
+	if len(ps) == 0 {
+		return ""
+	}
+	return ps[0].ID
+}
+
+// HomeHero is the question over the home composer. With a project it
+// asks what to build in it, the name a button that opens the project
+// menu, and offers to start without one; with none it says so, and that
+// opens the menu too. One .pick holds both, so the menu and pickLabel
+// are shared.
+templ HomeHero(projects []store.Project) {
+	{{ first := firstProject(projects) }}
+	// ?project= (the sidebar's new-thread button) picks that project the
+	// way a click on its row would, defaults and all.
+	<div class="pick home-hero" data-init="(id => id !== null && [...el.querySelectorAll('.opt[data-value]')].find((o) => o.dataset.value === id)?.click())(new URLSearchParams(location.search).get('project'))" data-on:click__outside="$pick == 'project' && !evt.target.closest('.home-hero') && ($pick = '')" data-on:keydown="pickKey(evt, el) && ($pick = '')">
+		<h1 class="hero-title">
+			<span data-show="$project != ''" data-preserve-attr="style" style={ hiddenUnless(first != "") }>What should we build in <button type="button" class="hero-proj" title="Pick the project" data-on:click={ pickToggle("project") } data-text="pickLabel(el, $project)">{ projectName(projects, first) }</button>?</span>
+			<span data-show="$project == ''" data-preserve-attr="style" style={ hiddenUnless(first == "") }>What should we work on?</span>
+		</h1>
+		<p class="hero-sub">
+			<button type="button" class="hero-link" data-show="$project != ''" data-preserve-attr="style" style={ hiddenUnless(first != "") } data-on:click="$project = ''; $pick = ''">or start without a project</button>
+			<button type="button" class="hero-link strong" data-show="$project == ''" data-preserve-attr="style" style={ hiddenUnless(first == "") } data-on:click={ pickToggle("project") }>No project</button>
+		</p>
+		<div class="pick-menu hero-menu" data-show="$pick == 'project'" data-preserve-attr="style" style="display: none">
+			<label class="pick-search">
+				@Icon("search", "ui-icon")
+				<input type="text" placeholder="Search projects…" data-bind:pickq autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" enterkeyhint="done"/>
+			</label>
+			<div class="pick-list" role="listbox">
+				<button type="button" class={ "opt", templ.KV("sel", first == "") } role="option" data-value="" data-short="No project" data-show="$pickq == ''" data-preserve-attr="style" data-class:sel="$project == ''" data-on:click={ pickSet("project", "", "") }>
+					<span class="proj-init scratch">@Icon("message-square-dashed", "ui-icon")</span>
+					<span class="opt-text"><span class="opt-name"><span class="ellipsis">No project</span></span></span>
+					@Icon("check", "ui-icon opt-check")
+				</button>
+				for _, p := range projects {
+					<button type="button" class={ "opt", templ.KV("sel", p.ID == first) } role="option" data-value={ p.ID } data-k={ strings.ToLower(p.Name + " " + p.Path) } data-show="$pickq == '' || el.dataset.k.includes($pickq.toLowerCase())" data-preserve-attr="style" data-class:sel={ "$project == " + jsq(p.ID) } data-on:click={ pickSet("project", p.ID, projectPicked(p)) } title={ p.Path }>
+						@ProjMark(p, "")
+						<span class="opt-text"><span class="opt-name"><span class="ellipsis">{ p.Name }</span></span></span>
+						@Icon("check", "ui-icon opt-check")
+					</button>
+				}
+				<button type="button" class="opt opt-custom" data-on:click="$pick = ''; $addproj = true; $nav = true">
+					@Icon("folder-plus", "ui-icon opt-icon")
+					<span class="opt-text"><span class="opt-name">Add project</span></span>
+				</button>
+			</div>
+		</div>
+	</div>
 }
 
 // FirstOr picks the default agent for new threads: the fake one when it
@@ -111,27 +129,6 @@ func FirstOr(xs []string, def string) string {
 	return def
 }
 
-// HomeRow is a thread on a project card: one line, since the sidebar
-// already lists every thread in full. No id: the sidebar's rows own those.
-templ HomeRow(t store.Thread, look AgentLook, isUnread bool, pr store.PRState) {
-	<li class={ "thread-row", "home-row", "st-" + t.Status, templ.KV("unread", isUnread) } data-id={ t.ID }>
-		<a href={ templ.SafeURL("/threads/" + t.ID) }>
-			<span class="row-main">
-				<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
-				if t.Pinned {
-					<span class="pin-mark" title="Pinned">@Icon("pin", "ui-icon")</span>
-				}
-				<span class="ellipsis">{ t.Title }</span>
-				if pr.Number > 0 {
-					@PRChip(pr, "")
-				}
-				<span class="agent-mark" style={ agentMarkStyle(look.Color) } title={ t.Agent }>@Brand(look.Driver, "ui-icon")</span>
-				<span class="dim tiny-text" data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span>
-			</span>
-		</a>
-	</li>
-}
-
 // projectPicked is what picking a project in the home composer does
 // besides naming it: a project with defaults of its own (Settings >
 // Projects) sets the chips to them.
@@ -140,30 +137,4 @@ func projectPicked(p store.Project) string {
 		return ""
 	}
 	return "$agent = " + jsq(p.Agent) + "; $model = " + jsq(p.Model) + "; $effort = " + jsq(p.Effort) + "; $mode = " + jsq(p.Mode)
-}
-
-// ProjectPick is the home composer's project chip: the same menu as the
-// setting pickers, over the $project signal.
-templ ProjectPick(projects []store.Project) {
-	<div class="pick" data-on:click__outside="$pick == 'project' && !evt.target.closest('.pick') && ($pick = '')" data-on:keydown="pickKey(evt, el) && ($pick = '')">
-		<button type="button" class="chip" title="Project" data-on:click={ pickToggle("project") } data-class:open="$pick == 'project'">
-			<span class="chip-icon">@Icon("folder", "ui-icon")</span>
-			<span class="chip-label" data-text="pickLabel(el, $project)">{ projects[0].Name }</span>
-			@Icon("chevron-down", "ui-icon chip-caret")
-		</button>
-		<div class="pick-menu" data-show="$pick == 'project'" data-preserve-attr="style" style="display: none">
-			<div class="pick-list" role="listbox">
-				<div class="pick-head">Project</div>
-				for i, p := range projects {
-					<button type="button" class={ "opt", templ.KV("sel", i == 0) } role="option" data-value={ p.ID } data-class:sel={ "$project == " + jsq(p.ID) } data-on:click={ pickSet("project", p.ID, projectPicked(p)) }>
-						<span class="opt-text">
-							<span class="opt-name"><span class="ellipsis">{ p.Name }</span></span>
-							<span class="opt-desc" title={ p.Path }>{ p.Path }</span>
-						</span>
-						@Icon("check", "ui-icon opt-check")
-					</button>
-				}
-			</div>
-		</div>
-	</div>
 }

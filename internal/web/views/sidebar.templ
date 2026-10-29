@@ -130,7 +130,7 @@ templ Sidebar(d SidebarData) {
 	// The inline style is the swipe drag position; a refresh mid-swipe must not wipe it.
 	<aside id="sidebar" class={ templ.KV("dense", d.Dense) } data-class:open="$nav" data-preserve-attr="style">
 		<div class="side-brand">
-			<a class="brand" href="/" title="Projects overview">@Icon("star", "brand-mark") starcode</a>
+			<a class="brand" href="/" title="New thread">@Icon("star", "brand-mark") starcode</a>
 			<span class="spacer"></span>
 			<button class="btn icon ghost" data-on:click="$nav = false" aria-label="Close navigation">@Icon("x", "ui-icon")</button>
 		</div>
@@ -141,8 +141,12 @@ templ Sidebar(d SidebarData) {
 			</label>
 			<button class="btn icon ghost" type="button" title="Search threads and messages, run a command (Ctrl+K)" aria-label="Search and commands" data-on:click="runHotkey('mod+k')">@Icon("command", "ui-icon")</button>
 			<button class="btn icon ghost" data-on:click="$addproj = !$addproj" title="Add project folder" aria-label="Add project folder">@Icon("folder-plus", "ui-icon")</button>
+			// The new-thread page with this thread's project picked, like
+			// T3 Code's.
 			if pid := newThreadProject(d); pid != "" {
-				<button class="btn icon ghost" data-on:click={ "@post('/api/projects/" + pid + "/threads')" } title={ "New thread in " + byID[pid].Name } aria-label="New thread">@Icon("square-pen", "ui-icon")</button>
+				<a class="btn icon ghost" href={ templ.SafeURL("/?project=" + pid) } data-on:click="$nav = false" title={ "New thread in " + byID[pid].Name } aria-label="New thread">@Icon("square-pen", "ui-icon")</a>
+			} else {
+				<a class="btn icon ghost" href="/" data-on:click="$nav = false" title="New thread" aria-label="New thread">@Icon("square-pen", "ui-icon")</a>
 			}
 		</div>
 		<form class="side-add" data-show="$addproj" data-preserve-attr="style" style="display: none" data-on:submit="evt.preventDefault(); @post('/api/projects'); $addproj = false">
@@ -151,7 +155,7 @@ templ Sidebar(d SidebarData) {
 		</form>
 		<nav class="side-scroll">
 			if d.Mode == "project" {
-				for _, p := range d.Projects {
+				for _, p := range store.Named(d.Projects) {
 					// Open on a fresh page; a morph keeps whatever the reader set
 					// by clicking, and a filter opens every project so a match is
 					// never hidden. The count is the threads listed under it.
@@ -161,7 +165,7 @@ templ Sidebar(d SidebarData) {
 					<details id={ "proj-" + p.ID } class="project" open data-preserve-attr="open" data-init="el.open = true" data-effect="$q != '' && (el.open = true)">
 						<summary class="project-head">
 							@Icon("chevron-right", "ui-icon project-caret")
-							<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>
+							@ProjMark(p, "")
 							<span class="ellipsis" title={ p.Path }>{ p.Name }</span>
 							<span class="dim tiny-text project-count">{ fmt.Sprintf("%d", countListed(d.Threads, p.ID)) }</span>
 							<span class="spacer"></span>
@@ -177,6 +181,21 @@ templ Sidebar(d SidebarData) {
 						</ul>
 					</details>
 				}
+				if scratch := scratchThreads(d.Threads, byID); len(scratch) > 0 {
+					<details id="proj-scratch" class="project" open data-preserve-attr="open" data-init="el.open = true" data-effect="$q != '' && (el.open = true)">
+						<summary class="project-head">
+							@Icon("chevron-right", "ui-icon project-caret")
+							<span class="proj-init scratch">@Icon("message-square-dashed", "ui-icon")</span>
+							<span class="ellipsis">No project</span>
+							<span class="dim tiny-text project-count">{ fmt.Sprintf("%d", len(scratch)) }</span>
+						</summary>
+						<ul class="threads">
+							for _, t := range scratch {
+								@ThreadRow(t, byID[t.ProjectID], t.ID == d.Current, false, d.Looks[t.Agent], unread(t, d.Current, d.Seen), prOf(t, d.PRs))
+							}
+						</ul>
+					</details>
+				}
 			} else {
 				<ul class="threads inbox">
 					for _, t := range inboxOrder(d.Threads) {
@@ -186,7 +205,7 @@ templ Sidebar(d SidebarData) {
 					}
 				</ul>
 			}
-			if len(d.Projects) == 0 {
+			if len(store.Named(d.Projects)) == 0 {
 				<p class="dim pad">No projects yet. Add a folder with the button above.</p>
 			}
 			if snoozed := snoozedThreads(d.Threads); len(snoozed) > 0 {
@@ -258,13 +277,21 @@ func SidebarOrder(d SidebarData) string {
 	var b strings.Builder
 	b.WriteString(d.Mode)
 	if d.Mode == "project" {
+		byID := map[string]store.Project{}
 		for _, p := range d.Projects {
+			byID[p.ID] = p
+		}
+		for _, p := range store.Named(d.Projects) {
 			b.WriteString("/" + p.ID)
 			for _, t := range inboxOrder(d.Threads) {
 				if t.ProjectID == p.ID && listed(t) {
 					b.WriteString("," + t.ID)
 				}
 			}
+		}
+		b.WriteString("/scratch")
+		for _, t := range scratchThreads(d.Threads, byID) {
+			b.WriteString("," + t.ID)
 		}
 	} else {
 		for _, t := range inboxOrder(d.Threads) {
@@ -315,15 +342,32 @@ const settledShown = 10
 // newThreadProject is the project the search row's new-thread button
 // uses: the current thread's, else the first.
 func newThreadProject(d SidebarData) string {
+	named := store.Named(d.Projects)
 	for _, t := range d.Threads {
 		if t.ID == d.Current {
-			return t.ProjectID
+			for _, p := range named {
+				if p.ID == t.ProjectID {
+					return p.ID
+				}
+			}
 		}
 	}
-	if len(d.Projects) > 0 {
-		return d.Projects[0].ID
+	if len(named) > 0 {
+		return named[0].ID
 	}
 	return ""
+}
+
+// scratchThreads are the listed threads started without a project, in
+// inbox order.
+func scratchThreads(ts []store.Thread, byID map[string]store.Project) []store.Thread {
+	var out []store.Thread
+	for _, t := range inboxOrder(ts) {
+		if byID[t.ProjectID].Scratch && listed(t) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // inboxOrder puts what needs a look first: threads waiting for an
@@ -428,6 +472,16 @@ func initials(name string) string {
 	return string(out)
 }
 
+// ProjMark is the project's mark: its initials on its hue, or for a
+// thread started without a project a dashed speech bubble.
+templ ProjMark(p store.Project, class string) {
+	if p.Scratch {
+		<span class={ "proj-init", "scratch", class } title={ p.Name }>@Icon("message-square-dashed", "ui-icon")</span>
+	} else {
+		<span class={ "proj-init", class } style={ initialsStyle(p.Name) } title={ p.Name }>{ initials(p.Name) }</span>
+	}
+}
+
 func initialsStyle(name string) string {
 	h := 0
 	for _, c := range name {
@@ -450,7 +504,7 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 		<a href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$nav = false">
 			<span class="row-top">
 				if showProject {
-					<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>
+					@ProjMark(p, "")
 					<span class="dim tiny-text ellipsis">{ p.Name }</span>
 				}
 				<span class="spacer"></span>
@@ -458,7 +512,7 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 			</span>
 			<span class="row-main">
 				if showProject {
-					<span class="proj-init dense-only" style={ initialsStyle(p.Name) } title={ p.Name }>{ initials(p.Name) }</span>
+					@ProjMark(p, "dense-only")
 				}
 				<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
 				if t.Pinned {
@@ -501,7 +555,7 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 templ rowTip(t store.Thread, p store.Project, look AgentLook) {
 	<div class="row-tip" hidden>
 		<div class="row-tip-title">{ t.Title }</div>
-		<div class="row-tip-line"><span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span> <span class="ellipsis">{ p.Name }</span></div>
+		<div class="row-tip-line">@ProjMark(p, "") <span class="ellipsis">{ p.Name }</span></div>
 		<div class="row-tip-line"><span class="agent-mark" style={ agentMarkStyle(look.Color) }>@Brand(look.Driver, "ui-icon")</span> <span class="ellipsis">{ modelShown(t) + " · " + agentLabelOf(look, t.Agent) }</span></div>
 		if t.Status == domain.StatusError && t.StatusDetail != "" {
 			<div class="row-tip-line err">@Icon("circle-alert", "ui-icon") <span class="ellipsis">{ t.StatusDetail }</span></div>
@@ -533,7 +587,7 @@ templ SettledRow(t store.Thread, p store.Project, current bool, pr store.PRState
 		}
 	>
 		<a href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$nav = false" title={ p.Name + ": " + t.Title }>
-			<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>
+			@ProjMark(p, "")
 			<span class="ellipsis">{ t.Title }</span>
 			if pr.Number > 0 {
 				@PRChip(pr, "")
@@ -557,7 +611,7 @@ templ SnoozedRow(t store.Thread, p store.Project, current bool) {
 		data-show="$q == '' || el.dataset.k.includes($q.toLowerCase())"
 	>
 		<a href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$nav = false" title={ p.Name + ": " + t.Title }>
-			<span class="proj-init" style={ initialsStyle(p.Name) }>{ initials(p.Name) }</span>
+			@ProjMark(p, "")
 			<span class="ellipsis">{ t.Title }</span>
 			<span class="dim tiny-text row-age" title="Wakes then">@Icon("alarm-clock", "ui-icon") <time data-local={ t.SnoozedUntil.UTC().Format(time.RFC3339) }>{ t.SnoozedUntil.UTC().Format("Jan 2 15:04") }</time></span>
 		</a>

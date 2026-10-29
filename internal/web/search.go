@@ -53,7 +53,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	for _, c := range s.commands(ctx, view, threadID, ps) {
+	for _, c := range s.commands(ctx, view, threadID, store.Named(ps)) {
 		if q == "" || strings.Contains(strings.ToLower(c.Label), strings.ToLower(q)) {
 			d.Commands = append(d.Commands, c)
 		}
@@ -113,7 +113,7 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 		out = append(out, views.Command{Label: "Delete thread", Icon: "trash-2", Action: "confirm('Delete this thread?') && @post('/api/threads/" + t.ID + "/delete')"})
 	}
 	out = append(out,
-		views.Command{Label: "Projects overview", Icon: "star", Href: "/"},
+		views.Command{Label: "New thread", Icon: "square-pen", Href: "/"},
 		views.Command{Label: "Settings", Icon: "settings", Href: "/settings", Key: views.Key("settings")},
 		views.Command{Label: "Settings: usage", Icon: "chart-no-axes-combined", Href: "/settings/usage"},
 		views.Command{Label: "Settings: providers", Icon: "plug", Href: "/settings/providers"},

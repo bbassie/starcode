@@ -224,7 +224,14 @@ func (s *Server) createThread(w http.ResponseWriter, r *http.Request, projectID,
 		m := s.defaultMode(r.Context(), agent)
 		mode = &m
 	}
-	id, err := s.App.CreateThread(r.Context(), projectID, agent, model)
+	// No project: a folder of the thread's own (App.CreateScratchThread).
+	var id string
+	var err error
+	if projectID == "" {
+		id, err = s.App.CreateScratchThread(r.Context(), agent, model, prompt)
+	} else {
+		id, err = s.App.CreateThread(r.Context(), projectID, agent, model)
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return

@@ -28,7 +28,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 		return pt, err
 	}
 	pt.Sidebar = views.Sidebar(side)
-	pt.Projects = side.Projects
+	pt.Projects = store.Named(side.Projects)
 	pt.Git = views.GitPanel(views.GitData{})
 	pt.Update = views.UpdateBanner(s.bannerData(ctx))
 	switch p.View {
@@ -68,7 +68,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 		pt.Main = views.SettingsPage(views.SettingsPageData{Theme: p.Theme, Themes: Themes, PairURL: p.PairURL, PairQR: pairQR(p.PairURL), Sidebar: p.Sidebar, Dense: p.Dense, SettleMerged: st.SettleMerged(ctx), SettleDays: st.SettleIdleDays(ctx), SettleKeepPR: st.SettleKeepPR(ctx),
 			Resume: st.ResumeAfterRestart(ctx), ResumeLimit: st.ResumeAfterLimit(ctx), AgentTools: st.AgentTools(ctx)})
 	case "projects":
-		pt.Main = views.ProjectsPage(s.projectsData(ctx, side.Projects, p.ProjectSel))
+		pt.Main = views.ProjectsPage(s.projectsData(ctx, store.Named(side.Projects), p.ProjectSel))
 	case "providers":
 		pt.Main = views.ProvidersPage(s.providersData(ctx, p.ProviderSel, p.ProviderTab, false))
 	case "keys":
@@ -103,22 +103,23 @@ func pairQR(link string) string {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 }
 
-// homeData is the projects overview built from the sidebar's reads,
-// which list the same projects and threads.
+// homeData is the new-thread page built from the sidebar's reads, which
+// list the same projects.
 func (s *Server) homeData(ctx context.Context, side views.SidebarData) views.HomeData {
 	caps, capsErrs := s.capabilities(ctx)
 	set := s.homeSettings(caps, capsErrs)
 	// The composer starts on the first project; its defaults, when it
 	// has them, are what the chips show (picking another project swaps
 	// them, see views.projectPicked).
-	if len(side.Projects) > 0 {
-		if p := side.Projects[0]; p.HasDefaults() {
+	named := store.Named(side.Projects)
+	if len(named) > 0 {
+		if p := named[0]; p.HasDefaults() {
 			if _, ok := s.App.Agent(p.Agent); ok {
 				set.Agent, set.Model, set.Effort, set.Mode = p.Agent, p.Model, p.Effort, p.Mode
 			}
 		}
 	}
-	return views.HomeData{Projects: side.Projects, Threads: side.Threads, Looks: s.agentLooks(), Seen: side.Seen, PRs: side.PRs, Settings: set, Stashed: s.App.Store.StashCount(ctx)}
+	return views.HomeData{Projects: named, Settings: set, Stashed: s.App.Store.StashCount(ctx)}
 }
 
 // earlierItems answers the "earlier" button of a cut transcript: the

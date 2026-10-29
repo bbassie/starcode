@@ -47,6 +47,9 @@ type App struct {
 	// AttachDir is where prompt attachments are saved, one directory per
 	// thread; a handoff writes the conversation it hands over there.
 	AttachDir string
+	// ScratchDir holds a folder per thread started without a project
+	// (CreateScratchThread); empty turns that off.
+	ScratchDir string
 
 	// idleTimeout is how long a session may sit between turns before
 	// reapIdle closes its process; stop ends the sweeper.
@@ -514,6 +517,52 @@ func (a *App) RemoveProject(ctx context.Context, id string) error {
 
 // ---- threads ----
 
+// CreateScratchThread opens a thread that has no project: it gets a new
+// folder of its own under ScratchDir, named for the day and the prompt,
+// as a project marked scratch so the lists leave it out. Everything that
+// works on a project's folder (the agent, the terminal, the panel) then
+// works on that one.
+func (a *App) CreateScratchThread(ctx context.Context, agentName, model, prompt string) (string, error) {
+	if a.ScratchDir == "" {
+		return "", errors.New("starting without a project is not set up here")
+	}
+	if _, ok := a.Agent(agentName); !ok {
+		return "", fmt.Errorf("unknown agent %q", agentName)
+	}
+	pid := newID()
+	parts := []string{time.Now().Format("2006-01-02")}
+	if w := folderWords(prompt); w != "" {
+		parts = append(parts, w)
+	}
+	dir := filepath.Join(a.ScratchDir, strings.Join(append(parts, pid[:6]), "-"))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if _, err := a.Store.Append(ctx, "", domain.ProjectAdded{ID: pid, Path: dir, Name: "No project", Scratch: true}); err != nil {
+		return "", err
+	}
+	return a.CreateThread(ctx, pid, agentName, model)
+}
+
+// folderWords is the first few words of a prompt as a folder name:
+// lower case letters and digits joined by dashes.
+func folderWords(prompt string) string {
+	var words []string
+	for _, w := range strings.FieldsFunc(strings.ToLower(prompt), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	}) {
+		words = append(words, w)
+		if len(words) == 4 {
+			break
+		}
+	}
+	out := strings.Join(words, "-")
+	if len(out) > 40 {
+		out = strings.TrimRight(out[:40], "-")
+	}
+	return out
+}
+
 // CreateThread opens a thread on a project. It works in the project's
 // checkout.
 func (a *App) CreateThread(ctx context.Context, projectID, agentName, model string) (string, error) {
@@ -676,8 +725,26 @@ func (a *App) setLiveMode(ctx context.Context, l *live, mode string) error {
 
 func (a *App) DeleteThread(ctx context.Context, id string) error {
 	a.closeSession(id)
-	_, err := a.Store.Append(ctx, id, domain.ThreadDeleted{})
-	return err
+	t, _ := a.Store.Thread(ctx, id)
+	if _, err := a.Store.Append(ctx, id, domain.ThreadDeleted{}); err != nil {
+		return err
+	}
+	// A scratch project goes with its last thread; its folder stays on
+	// disk, since what the agent wrote there may still be wanted.
+	if p, err := a.Store.Project(ctx, t.ProjectID); err == nil && p.Scratch {
+		ts, err := a.Store.Threads(ctx)
+		if err != nil {
+			return err
+		}
+		for _, o := range ts {
+			if o.ProjectID == p.ID {
+				return nil
+			}
+		}
+		_, err = a.Store.Append(ctx, "", domain.ProjectRemoved{ID: p.ID})
+		return err
+	}
+	return nil
 }
 
 // LimitsUpdate is bus-only: the windows an agent reported mid-turn for
