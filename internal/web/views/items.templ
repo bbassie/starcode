@@ -19,6 +19,24 @@ type toolMeta struct {
 	Summary string          `json:"summary"`
 	// Parent is the Task tool call whose subagent made this item.
 	Parent string `json:"parent"`
+	// Approval is how the human, or a session rule, answered the call's
+	// approval; the store sets it when the approval is resolved.
+	Approval *itemApproval `json:"approval"`
+}
+
+type itemApproval struct {
+	Decision string            `json:"decision"`
+	Auto     bool              `json:"auto"`
+	Answers  map[string]string `json:"answers"`
+}
+
+// QuestionsOf is the questions a tool call put to the human, nil for any
+// other call. Such a call is part of the conversation, not of the work.
+func QuestionsOf(it store.Item) []domain.Question {
+	if it.Kind != domain.KindTool {
+		return nil
+	}
+	return domain.Questions(it.ToolName, meta(it).Input)
 }
 
 // ParentOf is the item id a subagent's item sits under, "" at top level.
@@ -200,7 +218,9 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 				<pre class="wrap dim">{ it.Body }</pre>
 			</details>
 		case domain.KindTool:
-			if IsAgentTool(it) {
+			if qs := QuestionsOf(it); qs != nil {
+				@Question(it, qs)
+			} else if IsAgentTool(it) {
 				@AgentTool(it, kids)
 			} else {
 				@Tool(it)
@@ -313,7 +333,12 @@ templ Tool(it store.Item) {
 			if v.Note != "" {
 				<span class="tool-note">{ v.Note }</span>
 			}
-			@toolState(it.Status)
+			if a := m.Approval; a != nil && !a.Auto {
+				// The human's answer says more than the status it led to.
+				<span class={ "tool-state", templ.KV("warn", a.Decision == domain.DecisionDeny) } title="Your answer to the approval">{ decisionLabel(a.Decision) }</span>
+			} else {
+				@toolState(it.Status)
+			}
 			// The time the call started, on hover (the layout's clock
 			// script writes it in the reader's zone).
 			<span class="dim tiny-text row-ts" data-ts={ it.CreatedAt.UTC().Format(time.RFC3339) }></span>
@@ -472,19 +497,15 @@ func otherHint(q domain.Question) string {
 	return "Or write your own answer"
 }
 
-templ ApprovalResolved(a store.Approval) {
-	if qs := domain.Questions(a.ToolName, a.Input); qs != nil {
-		@questionResolved(a, qs)
-	} else {
-		@permissionResolved(a)
-	}
-}
-
-templ questionResolved(a store.Approval, qs []domain.Question) {
-	<div id={ "ap-" + a.ID } class={ "item", "approval", "resolved", "question", "d-" + a.Decision }>
-		if len(a.Answers) == 0 {
+// Question is an AskUserQuestion call in the transcript: the questions
+// and what the human answered. While it waits, the card under the
+// transcript (Approval) takes the answers.
+templ Question(it store.Item, qs []domain.Question) {
+	{{ a := meta(it).Approval }}
+	<div id={ "it-" + it.ID } class={ "item", "approval", "resolved", "question", templ.KV("d-"+approvalDecision(a), a != nil) }>
+		if a == nil || len(a.Answers) == 0 {
 			<span class="tag dim">question</span>
-			<span class="dim">{ questionSkipped(a) }</span>
+			<span class="dim">{ questionState(it, a) }</span>
 		} else {
 			for _, q := range qs {
 				<div class="q-answer">
@@ -496,19 +517,21 @@ templ questionResolved(a store.Approval, qs []domain.Question) {
 	</div>
 }
 
-func questionSkipped(a store.Approval) string {
-	if a.Decision == domain.DecisionDeny {
+func approvalDecision(a *itemApproval) string {
+	if a == nil {
+		return ""
+	}
+	return a.Decision
+}
+
+func questionState(it store.Item, a *itemApproval) string {
+	switch {
+	case a == nil && it.Status == domain.ItemRunning:
+		return "waiting for your answer"
+	case a != nil && a.Decision == domain.DecisionDeny:
 		return "skipped"
 	}
 	return "not answered"
-}
-
-templ permissionResolved(a store.Approval) {
-	<div id={ "ap-" + a.ID } class={ "item", "approval", "resolved", "d-" + a.Decision }>
-		<span class="tag dim">approval</span>
-		<span class="mono">{ a.ToolName }</span>
-		<span class="dim">{ decisionLabel(a.Decision) }</span>
-	</div>
 }
 
 func approveURL(a store.Approval, decision string) string {

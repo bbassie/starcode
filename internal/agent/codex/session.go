@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -205,6 +206,7 @@ func (s *session) Resolve(ctx context.Context, approvalID string, decision agent
 	if q, ok := s.questions[approvalID]; ok {
 		delete(s.questions, approvalID)
 		s.mu.Unlock()
+		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: q.toolID, Status: "declined", Output: "The user skipped the questions."}})
 		return s.c.respond(q.rpcID, map[string]any{"answers": map[string]any{}})
 	}
 	id, ok := s.approvals[approvalID]
@@ -1006,11 +1008,15 @@ func firstNonEmpty(vals ...string) string {
 type question struct {
 	rpcID json.RawMessage
 	ids   map[string]string
+	// toolID is the AskUserQuestion call the question shows as in the
+	// transcript, which carries the answers once given.
+	toolID string
 }
 
 // askUser turns codex's request_user_input into the question card Claude's
-// AskUserQuestion gets: the same tool name and input shape, so the app and
-// the page need nothing new. A secret question is asked like the others;
+// AskUserQuestion gets: the same tool name and input shape, and a tool
+// call of that name for it to belong to, so the app and the page need
+// nothing new. A secret question is asked like the others;
 // the answer goes into the transcript, so the card says so.
 func (s *session) askUser(msg wireMessage) {
 	var p struct {
@@ -1051,15 +1057,19 @@ func (s *session) askUser(msg wireMessage) {
 		qs = append(qs, map[string]any{"question": text, "header": x.Header, "options": opts, "multiSelect": false})
 	}
 	id := requestID(msg.ID)
+	// An id of its own: codex's itemId may name a call it reports too.
+	q.toolID = "ask-" + id
+	input := mustJSON(map[string]any{"questions": qs})
 	s.mu.Lock()
 	s.questions[id] = q
 	s.mu.Unlock()
+	s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: q.toolID, Name: "AskUserQuestion", Input: input}})
 	s.emit(agent.Event{Kind: agent.KindApproval, Approval: &agent.ApprovalRequested{
 		ID:          id,
-		ToolID:      p.ItemID,
+		ToolID:      q.toolID,
 		ToolName:    "AskUserQuestion",
 		Description: p.Questions[0].Question,
-		Input:       mustJSON(map[string]any{"questions": qs}),
+		Input:       input,
 	}})
 }
 
@@ -1073,10 +1083,14 @@ func (s *session) Answer(ctx context.Context, approvalID string, answers map[str
 		return fmt.Errorf("codex: no pending question %q", approvalID)
 	}
 	out := map[string]any{}
+	var said []string
 	for text, a := range answers {
 		if id := q.ids[text]; id != "" {
 			out[id] = map[string]any{"answers": []string{a}}
+			said = append(said, fmt.Sprintf("%q=%q", text, a))
 		}
 	}
+	sort.Strings(said)
+	s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: q.toolID, Status: "done", Output: "The user answered: " + strings.Join(said, ", ")}})
 	return s.c.respond(q.rpcID, map[string]any{"answers": out})
 }

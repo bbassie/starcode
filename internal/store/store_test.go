@@ -856,3 +856,48 @@ func TestStash(t *testing.T) {
 		t.Fatalf("second take = %v", err)
 	}
 }
+
+// An answered approval lands on its tool call's meta, survives a later
+// update of the call's meta, and comes back the same on replay.
+func TestApprovalOnItemMeta(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if _, err := s.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: "/tmp/x", Name: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "t1",
+		domain.ThreadCreated{ID: "t1", ProjectID: "p1", Title: "new thread", Agent: "fake"},
+		domain.ItemStarted{ID: "i1", Kind: domain.KindTool, ToolName: "AskUserQuestion", Status: domain.ItemRunning, Meta: []byte(`{"summary":"q"}`)},
+		domain.ApprovalRequested{ID: "a1", ItemID: "i1", ToolName: "AskUserQuestion", Input: []byte(`{}`)},
+		domain.ApprovalResolved{ID: "a1", Decision: domain.DecisionAllow, Answers: map[string]string{"Colour?": "Grey"}},
+		domain.ItemCompleted{ID: "i1", Status: domain.ItemRunning, Meta: []byte(`{"summary":"q2"}`)},
+	); err != nil {
+		t.Fatal(err)
+	}
+	check := func() {
+		t.Helper()
+		it, err := s.Item(ctx, "i1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m struct {
+			Summary  string
+			Approval struct {
+				Decision string
+				Auto     bool
+				Answers  map[string]string
+			}
+		}
+		if err := json.Unmarshal(it.Meta, &m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Summary != "q2" || m.Approval.Decision != domain.DecisionAllow || m.Approval.Auto || m.Approval.Answers["Colour?"] != "Grey" {
+			t.Fatalf("meta = %s", it.Meta)
+		}
+	}
+	check()
+	if _, err := s.Replay(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check()
+}

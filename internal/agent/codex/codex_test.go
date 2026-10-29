@@ -887,15 +887,19 @@ func TestStartAddsStarcodeTools(t *testing.T) {
 	}
 }
 
-// request_user_input becomes the AskUserQuestion card, and the answers go
-// back keyed by codex's question ids.
+// request_user_input becomes an AskUserQuestion call with its card, and
+// the answers go back keyed by codex's question ids and end the call.
 func TestRequestUserInput(t *testing.T) {
 	_, f, s := harness(t)
 	events := s.Events()
 	f.send(`{"id":80,"method":"item/tool/requestUserInput","params":{"threadId":"thr_1","turnId":"turn_1","itemId":"call_9","isBlocking":true,"questions":[{"id":"q_db","header":"Database","question":"Which database?","options":[{"label":"sqlite","description":"one file"},{"label":"postgres","description":"a server"}]}]}}`)
 	expectKind(t, events, agent.KindTurnStarted)
+	call := expectKind(t, events, agent.KindToolStarted).ToolStarted
 	ev := expectKind(t, events, agent.KindApproval)
 	ap := ev.Approval
+	if call.Name != "AskUserQuestion" || ap.ToolID != call.ID || string(call.Input) != string(ap.Input) {
+		t.Fatalf("call %+v for approval %+v", call, ap)
+	}
 	qs := domain.Questions(ap.ToolName, ap.Input)
 	if len(qs) != 1 || qs[0].Question != "Which database?" || len(qs[0].Options) != 2 {
 		t.Fatalf("questions %+v from %s", qs, ap.Input)
@@ -910,6 +914,9 @@ func TestRequestUserInput(t *testing.T) {
 	}
 	if err := <-errc; err != nil {
 		t.Fatal(err)
+	}
+	if done := expectKind(t, events, agent.KindToolCompleted).ToolCompleted; done.ID != call.ID || done.Status != "done" || !strings.Contains(done.Output, `"Which database?"="sqlite"`) {
+		t.Fatalf("call ended %+v", done)
 	}
 }
 

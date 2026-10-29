@@ -84,10 +84,14 @@ type Block struct {
 	Work []store.Item
 }
 
-func IsWork(kind string) bool {
-	switch kind {
-	case domain.KindThinking, domain.KindTool, domain.KindSystem:
+// IsWork is whether an item is agent activity, which folds into "worked
+// for" blocks. A question to the human is conversation and stays out.
+func IsWork(it store.Item) bool {
+	switch it.Kind {
+	case domain.KindThinking, domain.KindSystem:
 		return true
+	case domain.KindTool:
+		return QuestionsOf(it) == nil
 	}
 	return false
 }
@@ -99,11 +103,11 @@ func GroupItems(items []store.Item) []Block {
 	var out []Block
 	for i := range items {
 		it := items[i]
-		if IsWork(it.Kind) && len(out) > 0 && out[len(out)-1].Item == nil {
+		if IsWork(it) && len(out) > 0 && out[len(out)-1].Item == nil {
 			out[len(out)-1].Work = append(out[len(out)-1].Work, it)
 			continue
 		}
-		if IsWork(it.Kind) {
+		if IsWork(it) {
 			out = append(out, Block{Work: []store.Item{it}})
 			continue
 		}

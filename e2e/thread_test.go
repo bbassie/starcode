@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-rod/rod/lib/input"
 
+	"starcode/internal/app"
 	"starcode/internal/domain"
 	"starcode/internal/store"
 )
@@ -324,13 +325,36 @@ func TestAskUserQuestion(t *testing.T) {
 	if got := ap().Answers; !maps.Equal(got, want) {
 		t.Fatalf("answers = %v, want %v", got, want)
 	}
-	wait(p, `() => document.querySelectorAll('.approval.resolved .q-answer').length === 2`)
+	// The card goes; the call in the transcript shows the answers, live
+	// and on a fresh load alike.
+	answered := `() => !document.querySelector('form.approval.question') && document.querySelectorAll('[id^="it-"].question .q-answer').length === 2`
+	wait(p, answered)
 	e.waitIdle(id)
 	for _, it := range e.items(id, domain.KindTool) {
 		if it.ToolName == "AskUserQuestion" && !strings.Contains(it.Output, `"Which pages need it?"="Home, Settings, Sidebar"`) {
 			t.Fatalf("tool output = %q", it.Output)
 		}
 	}
+	wait(e.page("/threads/"+id, true), answered)
+}
+
+// An approval's card is gone once answered; the call it was for says
+// what the answer was.
+func TestApprovalShowsOnTheCall(t *testing.T) {
+	e := newEnv(t)
+	id := e.thread()
+	if err := e.app.SetThreadSettings(context.Background(), id, app.ThreadSettings{Agent: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	p := e.page("/threads/"+id, true)
+	if err := e.app.SendPrompt(context.Background(), id, "go"); err != nil {
+		t.Fatal(err)
+	}
+	click(p.MustElement(`.item.approval [data-decision="allow"]`))
+	e.waitIdle(id)
+	allowed := `() => !document.querySelector('.item.approval') && [...document.querySelectorAll('.item.tool.k-command .tool-state')].some(s => s.textContent === 'allowed')`
+	wait(p, allowed)
+	wait(e.page("/threads/"+id, true), allowed)
 }
 
 // TestButtonPending sends a prompt with the send button and checks the

@@ -595,8 +595,10 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 			args = append(args, p.Body)
 		}
 		if len(p.Meta) > 0 {
-			q += `, meta=?`
-			args = append(args, string(p.Meta))
+			// The approval the store put on the item outlives an agent's
+			// later word on the call's input.
+			q += `, meta=CASE WHEN meta->'$.approval' IS NULL THEN ? ELSE json_set(?, '$.approval', meta->'$.approval') END`
+			args = append(args, string(p.Meta), string(p.Meta))
 		}
 		q += ` WHERE id=?`
 		args = append(args, p.ID)
@@ -622,6 +624,17 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 			answers = string(b)
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE approvals SET decision=?, answers=?, resolved_at=? WHERE thread_id=? AND id=?`, p.Decision, answers, ts, ev.ThreadID, p.ID)
+		if err != nil {
+			return err
+		}
+		// The tool call shows how it was answered, so the transcript
+		// needs no row of its own for that.
+		var answersJSON any
+		if answers != "" {
+			answersJSON = answers
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE items SET meta=json_set(meta, '$.approval', json_object('decision', ?, 'auto', json(?), 'answers', json(?))) WHERE id=(SELECT item_id FROM approvals WHERE thread_id=? AND id=?)`,
+			p.Decision, strconv.FormatBool(p.Auto), answersJSON, ev.ThreadID, p.ID)
 		if err != nil || p.Decision != domain.DecisionAllowSession || p.Auto {
 			return err
 		}

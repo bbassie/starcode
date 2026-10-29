@@ -243,8 +243,8 @@ type conn struct {
 	// it along. The store is ahead of the events this connection has
 	// handled, and the bus repeats what happened between subscribing and
 	// the first render, so an item's start can arrive after the page has
-	// it; appending it then would show it twice. Approvals are in it as
-	// "ap-" and their id, with no seq.
+	// it; appending it then would show it twice. Approval cards on the
+	// page are in it as "ap-" and their id, with no seq.
 	shown map[string]int64
 }
 
@@ -287,7 +287,9 @@ func (c *conn) render(ctx context.Context, withDetail bool) error {
 		c.shown = map[string]int64{}
 		c.mark(pt.Thread.Items...)
 		for _, a := range pt.Thread.Approvals {
-			c.shown["ap-"+a.ID] = 0
+			if a.Decision == "" {
+				c.shown["ap-"+a.ID] = 0
+			}
 		}
 		c.work = ""
 		if blocks := views.GroupItems(pt.Thread.Items); len(blocks) > 0 && blocks[len(blocks)-1].Item == nil {
@@ -634,7 +636,7 @@ func (c *conn) flushDirty(ctx context.Context) error {
 		if err := c.patchItem(ctx, it); err != nil {
 			return err
 		}
-		if views.IsWork(it.Kind) {
+		if views.IsWork(it) {
 			touchedWork = true
 		}
 		// A subagent's step landing changes its Task's summary line.
@@ -846,7 +848,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 				return err
 			}
 		}
-		if !views.IsWork(it.Kind) {
+		if !views.IsWork(it) {
 			// Closes any open work block; its header is refreshed with the
 			// final duration.
 			if c.work != "" {
@@ -912,8 +914,16 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 			if err != nil {
 				return nil
 			}
-			if err := c.sse.PatchElementTempl(views.ApprovalResolved(a)); err != nil {
-				return err
+			// The answer shows on the tool call (the store put it in its
+			// meta), so the card goes, as it is gone on a fresh load.
+			if _, ok := c.shown["ap-"+a.ID]; ok {
+				delete(c.shown, "ap-"+a.ID)
+				if err := c.sse.RemoveElement("#ap-" + a.ID); err != nil {
+					return err
+				}
+			}
+			if _, ok := c.shown[a.ItemID]; ok {
+				c.dirty[a.ItemID] = true
 			}
 			if p.Decision == domain.DecisionAllowSession && !p.Auto {
 				// The composer lists the session rules; a new one just landed.
