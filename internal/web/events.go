@@ -89,6 +89,15 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if err := sse.MarshalAndPatchSignals(map[string]any{"_hb": time.Now().UnixMilli()}); err != nil {
 		return
 	}
+	// The pull requests page painted from the cache (a skeleton when it
+	// was empty); with the cache old, read GitHub now and swap the list.
+	if view == "prs" {
+		if _, fresh, err := s.prsPageCached(ctx); err == nil && !fresh {
+			if err := c.renderPRs(ctx); err != nil {
+				return
+			}
+		}
+	}
 
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()

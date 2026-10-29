@@ -74,7 +74,9 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 	case "keys":
 		pt.Main = views.KeysPage(s.keysData())
 	case "prs":
-		d, err := s.prsPageData(ctx, false)
+		// From the cache only: GitHub takes seconds, and the stream reads
+		// it once the page is up (see events.go).
+		d, _, err := s.prsPageCached(ctx)
 		if err != nil {
 			return pt, err
 		}

@@ -240,11 +240,30 @@ templ PRsList(d PRsPageData) {
 			<p class="dim pad">{ d.Err }</p>
 			<p class="dim pad tiny-text">The page needs the GitHub CLI (gh) on PATH and signed in.</p>
 		} else if !d.Loaded {
-			<p class="dim pad">loading…</p>
+			@prSkeleton()
 		} else {
 			@prGroup("Authored", "pencil", true, d)
 			@prGroup("Others", "users", false, d)
 			<p class="dim prs-none" hidden>No pull requests match.</p>
+		}
+	</div>
+}
+
+// prSkeleton stands in for the list while GitHub is read: a group head
+// and rows the shape of real ones, so the page is there at once and the
+// list lands in place.
+templ prSkeleton() {
+	<div class="prs-skeleton" aria-busy="true" aria-label="Loading pull requests">
+		<header class="prs-group-head">@Icon("pencil", "ui-icon") <span>Authored</span></header>
+		for _, w := range []int{62, 48, 70, 40, 56, 66, 44, 58} {
+			<div class="prb-main">
+				<span class="sk sk-dot"></span>
+				<span class="prb-text">
+					<span class="sk" style={ fmt.Sprintf("width: %d%%", w) }></span>
+					<span class="sk sk-sub" style={ fmt.Sprintf("width: %d%%", w/2+10) }></span>
+				</span>
+				<span class="prb-side"><span class="sk sk-side"></span><span class="sk sk-side short"></span></span>
+			</div>
 		}
 	</div>
 }

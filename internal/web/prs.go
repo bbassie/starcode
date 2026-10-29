@@ -628,6 +628,23 @@ func (s *Server) projectRepos(ctx context.Context, ps []store.Project) map[strin
 // prsPageData gathers the page: the search, the projects each repository
 // belongs to, and the threads linked to each PR.
 func (s *Server) prsPageData(ctx context.Context, refresh bool) (views.PRsPageData, error) {
+	return s.prsPage1(ctx, func(repos map[string]store.Project) myPRsEntry { return s.myPRs(ctx, repos, refresh) })
+}
+
+// prsPageCached is the page from what the cache holds, without waiting
+// on GitHub, so the page paints at once: a skeleton (Loaded false) when
+// nothing was read yet. fresh is whether the cache is young enough to
+// skip the read the stream does next (conn.renderPRs).
+func (s *Server) prsPageCached(ctx context.Context) (d views.PRsPageData, fresh bool, err error) {
+	s.prs.mu.Lock()
+	e := s.prs.mine
+	s.prs.mu.Unlock()
+	d, err = s.prsPage1(ctx, func(map[string]store.Project) myPRsEntry { return e })
+	d.Loaded = !e.at.IsZero()
+	return d, d.Loaded && time.Since(e.at) <= prTTL, err
+}
+
+func (s *Server) prsPage1(ctx context.Context, read func(map[string]store.Project) myPRsEntry) (views.PRsPageData, error) {
 	ps, err := s.App.Store.Projects(ctx)
 	if err != nil {
 		return views.PRsPageData{}, err
@@ -637,7 +654,7 @@ func (s *Server) prsPageData(ctx context.Context, refresh bool) (views.PRsPageDa
 		return views.PRsPageData{}, err
 	}
 	repos := s.projectRepos(ctx, store.Named(ps))
-	e := s.myPRs(ctx, repos, refresh)
+	e := read(repos)
 	d := views.PRsPageData{Board: e.list, Err: e.err, At: e.at, Loaded: true, Repos: repos, Threads: map[store.PR][]store.Thread{}}
 	for _, t := range ts {
 		if pr, ok := t.Linked(); ok {

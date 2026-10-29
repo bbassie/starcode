@@ -1702,6 +1702,17 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .pr-mark.err { color: var(--err); }
 .pr-mark.merged { color: var(--merged); }
 .prs-none { padding: 24px 8px; text-align: center; }
+/* The list's stand-in while GitHub is read: bars the shape of a row,
+   pulsing gently. */
+.prs-skeleton .prb-main:hover { background: none; }
+.sk { display: block; height: 10px; border-radius: 5px; background: var(--bg-3); animation: sk-pulse 1.4s ease-in-out infinite; }
+.prb-text > .sk { height: 12px; margin: 2px 0; }
+.prb-text > .sk-sub { height: 9px; }
+.sk-dot { flex: none; width: 14px; height: 14px; border-radius: 50%; }
+.sk-side { width: 52px; height: 9px; }
+.sk-side.short { width: 26px; }
+@keyframes sk-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
 /* The detail beside the list: a bar with the repository and number,
    then T3 Code's head and the Summary and Timeline tabs. */
 .prpage-detail { flex: 1; min-width: 0; overflow: visible; }
