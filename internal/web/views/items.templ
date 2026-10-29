@@ -211,7 +211,9 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 					@TurnFiles(tf)
 				}
 				<div class="result-line">
-					<span class="tag">@ItemIcon(it.Status) <span>{ it.Status }</span></span>
+					// The body starts with the status word ("done in 4s"), so
+					// the tag is the icon alone.
+					<span class="tag" title={ it.Status }>@ItemIcon(it.Status)</span>
 					<pre class="wrap dim">{ it.Body }</pre>
 				</div>
 			</div>
