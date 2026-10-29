@@ -733,7 +733,7 @@ templ SettingsSidebar(current string) {
 // shown when the window is too narrow for the settings column.
 templ SettingsNav(current string) {
 	// The row scrolls sideways on a phone; open it at the current section.
-	<nav class="settings-menu" aria-label="Settings sections" data-init="(c => c && (el.scrollLeft = c.offsetLeft - el.offsetLeft - 16))(el.querySelector('.current'))">
+	<nav class="settings-menu" aria-label="Settings sections" data-init="(c => c && c.offsetLeft - el.offsetLeft + c.offsetWidth > el.clientWidth && (el.scrollLeft = c.offsetLeft - el.offsetLeft - 16))(el.querySelector('.current'))">
 		@settingsLinks(current)
 	</nav>
 }

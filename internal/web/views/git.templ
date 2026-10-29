@@ -864,6 +864,11 @@ templ GitDetail(d GitData) {
 			<div class="diff-head">
 				<span class="mono ellipsis" title={ d.Selected }>{ d.Selected }</span>
 				<button class="btn icon ghost tiny" type="button" title="Copy the path" aria-label="Copy the path" data-on:click={ "copyText(" + jsq(d.Selected) + ", el)" }>@Icon("copy", "ui-icon")</button>
+				// Edit sits in the path's row rather than a row of its own;
+				// a preview has its own actions below.
+				if d.Preview == "" {
+					<button class="btn tiny" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) } data-on:click={ "@query('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
+				}
 			</div>
 			if d.Preview != "" {
 				// A page, a PDF or a picture, rendered. A page runs in a
@@ -885,10 +890,6 @@ templ GitDetail(d GitData) {
 						<iframe class="file-preview" sandbox="" src={ d.Preview } title={ d.Selected }></iframe>
 				}
 			} else {
-			<div class="git-detail-actions" data-show="!$gitEdit" data-preserve-attr="style" style={ hiddenUnless(!d.Editing) }>
-				<span class="spacer"></span>
-				<button class="btn tiny" data-on:click={ "@query('/api/git/" + d.Project.ID + "/file?path=" + urlQuery(d.Selected) + "')" }>@Icon("pencil", "ui-icon") edit</button>
-			</div>
 			// The editor is a textarea with transparent text over a <pre>
 			// that static/highlight.js colours; the gutter counts lines.
 			// static editor script in layout.templ keeps the three in step.

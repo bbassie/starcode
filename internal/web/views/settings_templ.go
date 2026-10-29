@@ -1704,7 +1704,7 @@ func SettingsNav(current string) templ.Component {
 			templ_7745c5c3_Var60 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 118, "<nav class=\"settings-menu\" aria-label=\"Settings sections\" data-init=\"(c => c && (el.scrollLeft = c.offsetLeft - el.offsetLeft - 16))(el.querySelector('.current'))\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 118, "<nav class=\"settings-menu\" aria-label=\"Settings sections\" data-init=\"(c => c && c.offsetLeft - el.offsetLeft + c.offsetWidth > el.clientWidth && (el.scrollLeft = c.offsetLeft - el.offsetLeft - 16))(el.querySelector('.current'))\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
