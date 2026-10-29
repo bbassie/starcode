@@ -488,17 +488,22 @@ templ UpdateBanner(d BannerData) {
 			}
 			if d.HomeChanged {
 				<div class="update-row" data-dismiss={ "home:" + d.HomeKey }>
-					<span>@Icon("rotate-cw", "ui-icon") starcode was rebuilt. Restart to run the new version.</span>
+					// On a phone the row keeps to one line: the short texts
+					// replace the long ones and "later" becomes an x.
+					<span>@Icon("rotate-cw", "ui-icon") <span class="long">starcode was rebuilt. Restart to run the new version.</span><span class="short">New version built</span></span>
 					if d.Running > 0 {
 						if d.Resume {
-							<span class="dim">{ fmt.Sprintf("%d running %s stop and pick up again after it.", d.Running, plural(d.Running, "turn", "turns")) }</span>
+							<span class="dim long">{ fmt.Sprintf("%d running %s stop and pick up again after it.", d.Running, plural(d.Running, "turn", "turns")) }</span>
+							<span class="dim short">{ fmt.Sprintf("%d %s resume", d.Running, plural(d.Running, "turn", "turns")) }</span>
 						} else {
-							<span class="dim">{ fmt.Sprintf("%d running %s would be cut off.", d.Running, plural(d.Running, "turn", "turns")) }</span>
+							<span class="dim long">{ fmt.Sprintf("%d running %s would be cut off.", d.Running, plural(d.Running, "turn", "turns")) }</span>
+							<span class="dim short">{ fmt.Sprintf("%d %s cut off", d.Running, plural(d.Running, "turn", "turns")) }</span>
 						}
 					}
 					<span class="spacer"></span>
-					<button class="btn primary tiny" data-on:click={ restartClick(d) }>restart now</button>
-					<button class="btn ghost tiny" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
+					<button class="btn primary tiny" data-on:click={ restartClick(d) }>restart<span class="long"> now</span></button>
+					<button class="btn ghost tiny long" data-on:click="bannerDismiss(el)" title="Hide this until it changes">later</button>
+					<button class="btn icon ghost tiny short" data-on:click="bannerDismiss(el)" title="Hide this until it changes" aria-label="Later">@Icon("x", "ui-icon")</button>
 				</div>
 			}
 		</div>

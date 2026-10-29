@@ -1117,6 +1117,15 @@ body.scrolled-up .jump { display: inline-flex; }
 .update { display: flex; flex-direction: column; font-size: 0.92em; flex: none; }
 .update-row { display: flex; align-items: center; gap: 10px; padding: 6px var(--pad); background: var(--sel); border-bottom: var(--border-w) solid var(--accent); flex-wrap: wrap; }
 .update-row > span:first-child { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.update-row .short { display: none; }
+@media (max-width: 900px) {
+  /* One line on a phone: short texts, an x for later, no wrapping. */
+  .update-row:has(.short) { flex-wrap: nowrap; gap: 8px; padding: 4px 6px 4px var(--pad); }
+  .update-row:has(.short) > span { white-space: nowrap; min-width: 0; }
+  .update-row .long { display: none; }
+  .update-row .short { display: inline; }
+  .update-row .btn.short { display: inline-flex; }
+}
 /* The bar for a running branch binary: amber, and it stays. */
 
 /* ---- usage ---- */
