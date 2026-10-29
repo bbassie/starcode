@@ -1470,7 +1470,9 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
      at the foot of the model sheet open the same menus. Chips lose their
      border and read as text. */
   .composer { border-radius: 22px; }
-  .composer .prompt { min-height: 56px; }
+  /* Two lines, so a placeholder that wraps fits without the empty box
+     scrolling. */
+  .composer .prompt { min-height: calc(2lh + 16px); }
   .composer-row { align-items: center; padding: 2px 8px 8px 10px; }
   .composer-row .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 2px 0; justify-content: flex-end; gap: 0; }
   .composer-row .chips::-webkit-scrollbar { display: none; }
