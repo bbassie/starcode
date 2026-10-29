@@ -128,6 +128,37 @@ func TestListThreadsByState(t *testing.T) {
 	}
 }
 
+// settle_thread settles a thread that is done; list_threads shows which
+// ones have a merged pull request.
+func TestSettleThread(t *testing.T) {
+	ctx := context.Background()
+	s, id := agentServer(t)
+	done, err := s.App.CreateThread(ctx, "p1", "fake", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := call(t, s, done, "link_pr", map[string]any{"pr": "acme/web#7"}); r.IsError {
+		t.Fatal(r.Text)
+	}
+	if err := s.App.Store.SavePRStates(ctx, []store.PRState{{PR: store.PR{Repo: "acme/web", Number: 7}, State: "merged"}}); err != nil {
+		t.Fatal(err)
+	}
+	if list := call(t, s, id, "list_threads", nil).Text; !strings.Contains(list, "[PR #7 merged]") {
+		t.Fatalf("list:\n%s", list)
+	}
+	if r := call(t, s, id, "settle_thread", map[string]any{"id": "/threads/" + done}); r.IsError {
+		t.Fatal(r.Text)
+	}
+	if th, _ := s.App.Store.Thread(ctx, done); !th.Archived {
+		t.Fatal("the thread was not settled")
+	}
+	busy, _ := s.App.CreateThread(ctx, "p1", "fake", "")
+	s.App.Store.Append(ctx, busy, domain.ThreadStatusChanged{Status: domain.StatusRunning})
+	if r := call(t, s, id, "settle_thread", map[string]any{"id": busy}); !r.IsError {
+		t.Fatal("settled a running thread")
+	}
+}
+
 func TestSpawnAndWait(t *testing.T) {
 	ctx := context.Background()
 	s, id := agentServer(t)

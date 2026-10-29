@@ -336,7 +336,7 @@ func init() {
 				}
 				return "Cancelled.", nil
 			}),
-		tool("list_threads", "List starcode threads (other conversations, yours included) with their id, state and title, newest activity first. A snoozed thread shows when it comes back.",
+		tool("list_threads", "List starcode threads (other conversations, yours included) with their id, state and title, newest activity first. A snoozed thread shows when it comes back, and a thread with a pull request shows its number and state (open, merged, closed).",
 			schema(map[string][2]string{
 				"query":        {"string", "only threads whose title contains this"},
 				"state":        {"string", "only threads in this state: active (not settled or snoozed), snoozed, settled, or a status such as running or idle"},
@@ -439,6 +439,32 @@ func init() {
 					return "", err
 				}
 				return s.waitThread(ctx, a.ID, a.Timeout)
+			}),
+		tool("settle_thread", "Settle a thread: it leaves the user's list for the Settled section, where they can bring it back, and its idle agent process closes. For threads that are done, such as one whose pull request merged (list_threads shows each thread's PR and its state). A thread with a turn running or an approval waiting cannot be settled.",
+			schema(map[string][2]string{"id": {"string", "the thread id, or its /threads/<id> link"}}, "id"),
+			func(s *Server, ctx context.Context, t store.Thread, args json.RawMessage) (string, error) {
+				a, err := decode[struct{ ID string }](args)
+				if err != nil {
+					return "", err
+				}
+				to, err := s.App.Store.Thread(ctx, threadIDOf(a.ID))
+				if err != nil {
+					return "", err
+				}
+				if to.Archived {
+					return fmt.Sprintf("Thread %q is settled already.", to.Title), nil
+				}
+				if to.ID != t.ID && (to.Status == domain.StatusRunning || to.Status == domain.StatusAwaitingApproval) {
+					return "", fmt.Errorf("thread %q %s; settle it once it is done", to.Title, s.App.ThreadState(to))
+				}
+				if err := s.App.ArchiveThread(ctx, to.ID); err != nil {
+					return "", err
+				}
+				// As the settle button does: the thread's shells go too.
+				if s.Term != nil {
+					s.Term.KillPrefix(termPrefix(to.ID))
+				}
+				return fmt.Sprintf("Settled thread %q.", to.Title), nil
 			}),
 		tool("stop_thread", "Stop the running turn of a thread you spawned.",
 			schema(map[string][2]string{"id": {"string", "the thread id"}}, "id"),
@@ -555,6 +581,10 @@ func (s *Server) listThreads(ctx context.Context, caller store.Thread, q, want s
 	if err != nil {
 		return "", err
 	}
+	prs, err := s.App.Store.PRStates(ctx)
+	if err != nil {
+		return "", err
+	}
 	projects := map[string]string{}
 	if all {
 		ps, err := s.App.Store.Projects(ctx)
@@ -594,6 +624,13 @@ func (s *Server) listThreads(ctx context.Context, caller store.Thread, q, want s
 		}
 		if state == "snoozed" {
 			mark += " (snoozed until " + t.SnoozedUntil.UTC().Format("2006-01-02 15:04 UTC") + ")"
+		}
+		if pr, ok := t.Linked(); ok {
+			st := prs[pr].State
+			if st == "" {
+				st = "state unknown"
+			}
+			mark += fmt.Sprintf(" [PR #%d %s]", pr.Number, st)
 		}
 		if all {
 			mark += " [project " + projects[t.ProjectID] + "]"
