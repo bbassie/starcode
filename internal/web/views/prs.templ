@@ -10,11 +10,12 @@ import (
 	"time"
 )
 
-// PRsPageData is the pull requests page: the signed-in user's PRs from a
-// search across GitHub, the project each repository is added as (if it
-// is), and the threads linked to each PR.
+// PRsPageData is the pull requests page: the signed-in user's pull
+// requests and the others that concern them or sit in the repositories
+// of their projects (gitx.PRBoard), the project each repository is added
+// as (if it is), and the threads linked to each PR.
 type PRsPageData struct {
-	Mine   gitx.MyPullRequests
+	Board  gitx.PRBoard
 	Err    string
 	At     time.Time
 	Loaded bool
@@ -24,70 +25,421 @@ type PRsPageData struct {
 	Threads map[store.PR][]store.Thread
 }
 
-// PRsPage lists the pull requests that concern the signed-in user in
-// three groups. A PR in a repository that is one of the projects gets a
-// button that opens a thread on it; every PR shows the threads already
-// linked to it.
+// PRsPage lists the pull requests in two groups, Authored and Others,
+// under a search box and Sort and Filters menus, like T3 Code's. A row
+// opens the PR beside the list (over it on a phone). The filters and the
+// order are the browser's (prsApply in the layout), over every row the
+// page has, open and done.
 templ PRsPage(d PRsPageData) {
 	<main id="main" class="prs-page">
 		<header id="mainhead" class="mainhead">
 			<button class="btn icon ghost navtoggle" data-on:click="$nav = !$nav" aria-label="Toggle navigation">@Icon("menu", "ui-icon")</button>
 			<nav class="crumbs"><span>Pull requests</span></nav>
-			if d.Mine.Login != "" {
-				<span class="dim tiny-text hide-sm">@Icon("user", "ui-icon") <span>{ d.Mine.Login }</span></span>
-			}
 			<span class="spacer"></span>
 			if !d.At.IsZero() {
 				<span class="dim tiny-text hide-sm" title="When the lists were last read from GitHub">updated <span data-ago={ d.At.UTC().Format(time.RFC3339) }>{ ago(d.At) }</span></span>
 			}
-			<button class="btn ghost" data-on:click="@query('/api/prs')" title="Read the lists again, and the state of every linked pull request">@Icon("refresh-cw", "ui-icon") <span class="hide-sm">refresh</span></button>
 		</header>
-		<div class="prs-scroll">
-			<div class="prs-inner">
-				// Filters over the rows on the page; a PR open in the detail
-				// hides them with the list.
-				<div class="prs-filter" data-show="!$prsel" data-preserve-attr="style">
-					<label class="pick-search">
-						@Icon("list-filter", "ui-icon")
-						<input type="search" placeholder="Filter by repository, number, title, author or branch" data-bind:prq autocomplete="off" spellcheck="false" autocapitalize="off" enterkeyhint="search"/>
-					</label>
-					<label class="prs-toggle"><input type="checkbox" data-bind:prnodraft/> <span>hide drafts</span></label>
-					<label class="prs-toggle" title="Only the pull requests that wait on you: changes asked for or checks failing on yours, ready to merge, or a review you were asked for"><input type="checkbox" data-bind:prmine/> <span>waiting on me</span></label>
+		<div class="prs-split" data-class:open="$prsel">
+			<section class="prs-listpane">
+				<div class="prs-inner">
+					<div class="prs-toolbar">
+						<label class="prs-search">
+							@Icon("search", "ui-icon")
+							<input type="search" placeholder="Search pull requests, or label:bug" data-bind:prq autocomplete="off" spellcheck="false" autocapitalize="off" enterkeyhint="search"/>
+						</label>
+						@prSortMenu()
+						@PRFilterMenu(d)
+						<button class="btn icon prs-tool" data-on:click="@query('/api/prs')" title="Read the lists again, and the state of every linked pull request" aria-label="Refresh">@Icon("refresh-cw", "ui-icon")</button>
+					</div>
+					@PRsList(d)
 				</div>
-				@PRsList(d)
+			</section>
+			<section class="prs-detailpane">
 				@PRPageDetail(PRDetailData{Page: true})
-			</div>
+			</section>
 		</div>
 	</main>
 }
 
-// PRsList is the three groups; patched on its own so a redraw does not
+// prSorts are the orders the Sort menu offers, as T3 Code's.
+var prSorts = []struct{ Value, Label, Icon string }{
+	{"ready", "Merge readiness", "list-checks"},
+	{"blocked", "Blocked on me", "user"},
+	{"updated", "Recently updated", "clock"},
+	{"newest", "Newest shown", "calendar-arrow-down"},
+	{"oldest", "Oldest shown", "calendar-arrow-up"},
+	{"largest", "Largest shown", "maximize-2"},
+	{"smallest", "Smallest shown", "minimize-2"},
+}
+
+templ prSortMenu() {
+	<div class="pick prs-pick" data-on:click__outside="$pick == 'prsort' && !evt.target.closest('.pick') && ($pick = '')" data-on:keydown="pickKey(evt, el) && ($pick = '')">
+		<button type="button" class="btn prs-tool chip" data-on:click={ pickToggle("prsort") } data-class:open="$pick == 'prsort'" title="Order the list">@Icon("arrow-down-up", "ui-icon") <span class="hide-xs">Sort</span></button>
+		<div class="pick-menu prs-menu" data-show="$pick == 'prsort'" data-preserve-attr="style" style="display: none">
+			<div class="pick-list" role="listbox">
+				for _, o := range prSorts {
+					<button type="button" class={ "opt", templ.KV("sel", o.Value == "ready") } role="option" data-value={ o.Value } data-class:sel={ "$prsort == " + jsq(o.Value) } data-on:click={ pickSet("prsort", o.Value, "") }>
+						@Icon(o.Icon, "ui-icon opt-icon")
+						<span class="opt-text"><span class="opt-name">{ o.Label }</span></span>
+						@Icon("check", "ui-icon opt-check")
+					</button>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// prChoice is one value of a filter: what the signal holds and the label.
+type prChoice struct{ Value, Label string }
+
+// prFilter is one row of the Filters menu: its signal, icon and values,
+// the first being "no filter".
+type prFilter struct {
+	Key, Label, Icon string
+	Choices          []prChoice
+}
+
+func prFilters(d PRsPageData) []prFilter {
+	fs := []prFilter{
+		{"prstate", "State", "git-pull-request", []prChoice{{"open", "Open"}, {"merged", "Merged"}, {"closed", "Closed"}, {"all", "All"}}},
+		{"prinv", "Involvement", "layers", []prChoice{{"", "All"}, {"review", "Review requested"}, {"assigned", "Assigned"}, {"involved", "Commented or mentioned"}, {"repo", "In my projects"}}},
+	}
+	authors := []prChoice{{"", "Anyone"}}
+	for _, a := range prCounted(d, func(p gitx.BoardPR) []string { return []string{p.Author} }) {
+		authors = append(authors, prChoice{a, a})
+	}
+	labels := []prChoice{{"", "Any"}}
+	for _, l := range prCounted(d, func(p gitx.BoardPR) []string { return p.Labels }) {
+		labels = append(labels, prChoice{l, l})
+	}
+	fs = append(fs,
+		prFilter{"prauthor", "Author", "user", authors},
+		prFilter{"prlabel", "Labels", "tag", labels},
+		prFilter{"prdraft", "Draft", "git-pull-request-draft", []prChoice{{"", "All"}, {"draft", "Drafts"}, {"ready", "Ready for review"}}},
+		prFilter{"prreview", "Review", "eye", []prChoice{{"", "All"}, {"approved", "Approved"}, {"changes_requested", "Changes requested"}, {"rereview_requested", "Re-review requested"}, {"review_required", "Review required"}, {"none", "No review"}}},
+		prFilter{"prchecks", "Checks", "circle-check", []prChoice{{"", "All"}, {"success", "Passing"}, {"failure", "Failing"}, {"pending", "Running"}, {"none", "None"}}},
+	)
+	projects := []prChoice{{"", "All projects"}}
+	seen := map[string]bool{}
+	for _, p := range d.Repos {
+		if !seen[p.ID] {
+			seen[p.ID] = true
+			projects = append(projects, prChoice{p.ID, p.Name})
+		}
+	}
+	sort.Slice(projects[1:], func(i, j int) bool { return projects[i+1].Label < projects[j+1].Label })
+	projects = append(projects, prChoice{"none", "Not a project"})
+	return append(fs, prFilter{"prfproj", "Project", "folder", projects})
+}
+
+// prCounted is every value of(p) over the page's PRs, most frequent
+// first, for the author and label filters.
+func prCounted(d PRsPageData, of func(gitx.BoardPR) []string) []string {
+	n := map[string]int{}
+	for _, p := range d.Board.PRs {
+		for _, v := range of(p) {
+			if v != "" {
+				n[v]++
+			}
+		}
+	}
+	out := make([]string, 0, len(n))
+	for v := range n {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if n[out[i]] != n[out[j]] {
+			return n[out[i]] > n[out[j]]
+		}
+		return strings.ToLower(out[i]) < strings.ToLower(out[j])
+	})
+	return out
+}
+
+// prChoiceLabels is a JS object from value to label, for the menu row
+// that names the filter's current value.
+func prChoiceLabels(f prFilter) string {
+	var b strings.Builder
+	b.WriteString("({")
+	for i, c := range f.Choices {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(jsq(c.Value) + ": " + jsq(c.Label))
+	}
+	b.WriteString("})[$" + f.Key + "] ?? $" + f.Key)
+	return b.String()
+}
+
+// PRFilterMenu is the Filters button: a list of the filters, each with
+// its current value, that opens on its values in place (prfmenu names
+// the open one). It is redrawn with the list, since the authors and
+// labels come from the rows.
+templ PRFilterMenu(d PRsPageData) {
+	<div id="prs-filters" class="pick prs-pick" data-on:click__outside="$pick == 'prfilter' && !evt.target.closest('.pick') && ($pick = '')" data-on:keydown="pickKey(evt, el) && ($pick = '')">
+		<button type="button" class="btn prs-tool chip" data-on:click={ "$prfmenu = ''; " + pickToggle("prfilter") } data-class:open="$pick == 'prfilter'" data-class:on="prsFiltered($prinv, $prauthor, $prlabel, $prdraft, $prreview, $prchecks, $prfproj, $prstate)" title="Filter the list">@Icon("list-filter", "ui-icon") <span class="hide-xs">Filters</span></button>
+		<div class="pick-menu prs-menu prs-filter-menu" data-show="$pick == 'prfilter'" data-preserve-attr="style" style="display: none">
+			<div class="pick-list" role="listbox" data-show="$prfmenu == ''" data-preserve-attr="style">
+				for i, f := range prFilters(d) {
+					if i == 2 || i == len(prFilters(d))-1 {
+						<div class="prs-menu-rule"></div>
+					}
+					<button type="button" class="opt" data-on:click={ "$prfmenu = " + jsq(f.Key) }>
+						@Icon(f.Icon, "ui-icon opt-icon")
+						<span class="opt-text"><span class="opt-name">{ f.Label }</span></span>
+						<span class="opt-ctx ellipsis" data-text={ prChoiceLabels(f) }>{ f.Choices[0].Label }</span>
+						@Icon("chevron-right", "ui-icon opt-icon")
+					</button>
+				}
+			</div>
+			for _, f := range prFilters(d) {
+				<div class="pick-list" role="listbox" data-show={ "$prfmenu == " + jsq(f.Key) } data-preserve-attr="style" style="display: none">
+					<button type="button" class="opt prs-menu-back" data-on:click="$prfmenu = ''">
+						@Icon("arrow-left", "ui-icon opt-icon")
+						<span class="opt-text"><span class="opt-name">{ f.Label }</span></span>
+					</button>
+					for _, c := range f.Choices {
+						<button type="button" class="opt" role="option" data-value={ c.Value } data-class:sel={ "$" + f.Key + " == " + jsq(c.Value) } data-on:click={ "$" + f.Key + " = " + jsq(c.Value) + "; $prfmenu = ''" }>
+							if f.Key == "prauthor" && c.Value != "" {
+								@prAvatar(prAvatarOf(d, c.Value))
+							}
+							<span class="opt-text"><span class="opt-name ellipsis">{ c.Label }</span></span>
+							@Icon("check", "ui-icon opt-check")
+						</button>
+					}
+				</div>
+			}
+		</div>
+	</div>
+}
+
+// prAvatarOf is the avatar of an author on the page.
+func prAvatarOf(d PRsPageData, login string) string {
+	for _, p := range d.Board.PRs {
+		if p.Author == login && p.Avatar != "" {
+			return p.Avatar
+		}
+	}
+	return ""
+}
+
+templ prAvatar(url string) {
+	if url != "" {
+		<img class="pr-avatar" src={ url } alt="" loading="lazy"/>
+	} else {
+		<span class="pr-avatar">@Icon("user", "ui-icon")</span>
+	}
+}
+
+// PRsList is the two groups; patched on its own so a redraw does not
 // close a PR that is open in the detail.
 templ PRsList(d PRsPageData) {
-	<div id="prpage-list" class="prpage-list" data-show="!$prsel" data-preserve-attr="style">
+	<div id="prpage-list" class="prpage-list" data-effect="$prv; $mainv; prsApply(el, $prq, $prstate, $prinv, $prauthor, $prlabel, $prdraft, $prreview, $prchecks, $prfproj, $prsort)">
 		if d.Err != "" {
 			<p class="dim pad">{ d.Err }</p>
 			<p class="dim pad tiny-text">The page needs the GitHub CLI (gh) on PATH and signed in.</p>
 		} else if !d.Loaded {
 			<p class="dim pad">loading…</p>
 		} else {
-			@prGroup("Assigned to you", "user-check", "Open pull requests with you as an assignee. The ones waiting on you come first.", byWaiting(d.Mine.Assigned, false), d, false)
-			@prGroup("Waiting for your review", "eye", "Open pull requests that asked you for a review.", d.Mine.ReviewRequested, d, true)
-			@prGroup("Opened by you", "git-pull-request-arrow", "Your own open pull requests. The ones waiting on you (changes asked for, checks failing, ready to merge) come first.", byWaiting(d.Mine.Authored, false), d, false)
-			<p class="dim tiny-text prs-note">A row opens the pull request here, with its reviews, comments and checks, and a button on each point that opens a thread on just that point. Threads already linked to a PR are listed under it, and every thread that runs `gh pr create` links itself.</p>
+			@prGroup("Authored", "pencil", true, d)
+			@prGroup("Others", "users", false, d)
+			<p class="dim prs-none" hidden>No pull requests match.</p>
 		}
 	</div>
 }
 
+templ prGroup(title, icon string, mine bool, d PRsPageData) {
+	<section class="prs-group">
+		<header class="prs-group-head">@Icon(icon, "ui-icon") <span>{ title }</span> <span class="prs-count"></span></header>
+		<ul class="prs prs-rows">
+			for _, pr := range d.Board.PRs {
+				if pr.Mine() == mine {
+					@prRow(pr, d)
+				}
+			}
+		</ul>
+	</section>
+}
+
+// prRow is one PR: its state, number, title and checks, then the
+// author and repository; its size and age on the right. The data
+// attributes are what prsApply filters and sorts on.
+templ prRow(pr gitx.BoardPR, d PRsPageData) {
+	{{ p, known := d.Repos[pr.Repo] }}
+	{{ key := pr.Repo + "#" + strconv.Itoa(pr.Number) }}
+	<li
+		class="prb-row"
+		data-k={ strings.ToLower(pr.Repo + " #" + strconv.Itoa(pr.Number) + " " + pr.Title + " " + pr.Author + " " + pr.Head) }
+		data-state={ pr.State }
+		data-inv={ pr.Involve }
+		data-author={ pr.Author }
+		data-repo={ strings.ToLower(pr.Repo) }
+		data-labels={ strings.ToLower("," + strings.Join(pr.Labels, ",") + ",") }
+		data-draft={ prDraftWord(pr) }
+		data-review={ prReviewWord(pr) }
+		data-checks={ prChecksWord(pr) }
+		data-proj={ prProjectOf(p, known) }
+		data-ready={ strconv.Itoa(prReadiness(pr)) }
+		data-blocked={ strconv.FormatBool(prBlocksMe(pr)) }
+		data-updated={ strconv.FormatInt(pr.UpdatedAt.Unix(), 10) }
+		data-created={ strconv.FormatInt(pr.CreatedAt.Unix(), 10) }
+		data-size={ strconv.Itoa(pr.Additions + pr.Deletions) }
+		data-class:current={ "$prsel && $prkey == " + jsq(key) }
+	>
+		<a class="prb-main" href={ templ.SafeURL(pr.URL) } title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); $prkey = " + jsq(key) + "; @query('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')" }>
+			<span class={ "pr-mark", prStateClass(pr) } title={ prStateTitle(pr) }>@Icon(prStateIcon(pr), "ui-icon")</span>
+			<span class="prb-text">
+				<span class="prb-line">
+					<span class="mono dim prb-num">#{ strconv.Itoa(pr.Number) }</span>
+					<span class="prb-title ellipsis">{ pr.Title }</span>
+					@prChecksMark(pr.Checks)
+					if pr.Involve == "review" {
+						<span class="prb-flag warn" title="A review is asked of you">@Icon("eye", "ui-icon")</span>
+					}
+				</span>
+				<span class="prb-line dim tiny-text">
+					@prAvatar(pr.Avatar)
+					<span class="prb-author">{ pr.Author }</span>
+					<span class="ellipsis">{ pr.Repo }</span>
+					if pr.Comments > 0 {
+						<span class="prb-comments" title={ fmt.Sprintf("%d %s", pr.Comments, plural(pr.Comments, "comment", "comments")) }>@Icon("message-square", "ui-icon") <span>{ strconv.Itoa(pr.Comments) }</span></span>
+					}
+				</span>
+			</span>
+			<span class="prb-side">
+				<span class="mono prb-size"><span class="ok">+{ prCount(pr.Additions) }</span> <span class="err">-{ prCount(pr.Deletions) }</span></span>
+				<span class="dim prb-age" data-ago={ pr.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(pr.UpdatedAt) }</span>
+			</span>
+		</a>
+	</li>
+}
+
+templ prChecksMark(checks string) {
+	switch checks {
+		case "success":
+			<span class="prb-check ok" title="Checks passed">@Icon("circle-check", "ui-icon")</span>
+		case "failure":
+			<span class="prb-check err" title="Checks failed">@Icon("circle-x", "ui-icon")</span>
+		case "pending":
+			<span class="prb-check warn" title="Checks running">@Icon("circle-dot", "ui-icon")</span>
+	}
+}
+
+// prCount writes a line count with a thin separator per thousand.
+func prCount(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "." + s[i:]
+	}
+	return s
+}
+
+func prStateIcon(pr gitx.BoardPR) string {
+	switch {
+	case pr.State == "merged":
+		return "git-merge"
+	case pr.State == "closed":
+		return "git-pull-request-closed"
+	case pr.Draft:
+		return "git-pull-request-draft"
+	}
+	return "git-pull-request"
+}
+
+func prStateClass(pr gitx.BoardPR) string {
+	switch {
+	case pr.State == "merged":
+		return "merged"
+	case pr.State == "closed":
+		return "err"
+	case pr.Draft:
+		return "dim"
+	}
+	return "ok"
+}
+
+func prStateTitle(pr gitx.BoardPR) string {
+	if pr.State == "open" && pr.Draft {
+		return "Draft"
+	}
+	return strings.ToUpper(pr.State[:1]) + pr.State[1:]
+}
+
+func prDraftWord(pr gitx.BoardPR) string {
+	if pr.Draft {
+		return "draft"
+	}
+	return "ready"
+}
+
+func prReviewWord(pr gitx.BoardPR) string {
+	if pr.Review == "" {
+		return "none"
+	}
+	return pr.Review
+}
+
+func prChecksWord(pr gitx.BoardPR) string {
+	if pr.Checks == "" {
+		return "none"
+	}
+	return pr.Checks
+}
+
+func prProjectOf(p store.Project, known bool) string {
+	if !known {
+		return "none"
+	}
+	return p.ID
+}
+
+// prReadiness ranks a PR for the "Merge readiness" order, lowest first:
+// open and ready to merge, then waiting on a review or on checks, then
+// with failing checks or changes asked for, then drafts, then done.
+func prReadiness(pr gitx.BoardPR) int {
+	switch {
+	case pr.State != "open":
+		return 5
+	case pr.Draft:
+		return 4
+	case pr.Checks == "failure" || pr.Review == "changes_requested":
+		return 3
+	case pr.Review == "approved" && pr.Checks != "pending":
+		return 0
+	case pr.Review == "approved":
+		return 1
+	}
+	return 2
+}
+
+// prBlocksMe is whether an open PR waits on the signed-in user: a review
+// asked of them, or on one of theirs changes asked for, checks failing,
+// or everything green and nothing left but the merge.
+func prBlocksMe(pr gitx.BoardPR) bool {
+	if pr.State != "open" {
+		return false
+	}
+	if pr.Involve == "review" {
+		return true
+	}
+	return pr.Mine() && (pr.Review == "changes_requested" || pr.Checks == "failure" || (!pr.Draft && pr.Review == "approved" && pr.Checks != "pending"))
+}
+
 // PRPageDetail is one PR opened from the list, in the same shape as the
-// panel's detail with the page's head: back, the repository, the threads
-// linked to it, refresh and the GitHub link.
+// panel's detail with T3 Code's head: the repository and number, the
+// title, who and when, the branches and the size, then Summary and
+// Timeline tabs (PRDetailBody, Page set).
 templ PRPageDetail(d PRDetailData) {
 	<div id="prpage-detail" class="pr-detail prpage-detail" data-show="$prsel" data-preserve-attr="style" style="display: none">
-		<div class="pr-detail-head">
-			<button class="btn icon ghost tiny" data-on:click="$prsel = 0" title="Back to the list" aria-label="Back to the list">@Icon("arrow-left", "ui-icon")</button>
+		<div class="prd-bar">
+			<button class="btn icon ghost" data-on:click="$prsel = 0; $prkey = ''" title="Close" aria-label="Close the pull request">@Icon("x", "ui-icon")</button>
 			if d.Loaded {
-				<span class="dim ellipsis">{ d.Repo } <span class="mono">#{ strconv.Itoa(d.Detail.Number) }</span></span>
+				if d.Detail.URL != "" {
+					<a class="dim ellipsis prd-repo" href={ templ.SafeURL(d.Detail.URL) } target="_blank" rel="noopener" title="Open on GitHub">{ d.Repo } <span class="mono">#{ strconv.Itoa(d.Detail.Number) }</span> @Icon("external-link", "ui-icon")</a>
+				} else {
+					<span class="dim ellipsis prd-repo">{ d.Repo } <span class="mono">#{ strconv.Itoa(d.Detail.Number) }</span></span>
+				}
 				<span class="spacer"></span>
 				for _, t := range d.Threads {
 					<a class="pr-thread" href={ templ.SafeURL("/threads/" + t.ID) } title={ "Thread linked to this pull request: " + t.Title }>
@@ -95,117 +447,9 @@ templ PRPageDetail(d PRDetailData) {
 						<span class="ellipsis">{ t.Title }</span>
 					</a>
 				}
-				<button class="btn icon ghost tiny" data-on:click={ "@query('" + d.Base + "?refresh=1')" } title="Refresh" aria-label="Refresh">@Icon("refresh-cw", "ui-icon")</button>
-				if d.Detail.URL != "" {
-					<a class="btn icon ghost tiny" href={ templ.SafeURL(d.Detail.URL) } target="_blank" rel="noopener" title="Open on GitHub" aria-label="Open on GitHub">@Icon("external-link", "ui-icon")</a>
-				}
+				<button class="btn icon ghost" data-on:click={ "@query('" + d.Base + "?refresh=1')" } title="Refresh" aria-label="Refresh">@Icon("refresh-cw", "ui-icon")</button>
 			}
 		</div>
 		@PRDetailBody(d)
 	</div>
-}
-
-// waitsOnMe is whether a PR waits on the signed-in user: a review they
-// were asked for, or on one of theirs changes asked for, checks failing,
-// or everything green and nothing left but the merge.
-func waitsOnMe(pr gitx.MyPR, reviewer bool) bool {
-	if reviewer {
-		return true
-	}
-	return pr.Review == "changes_requested" || pr.Checks == "failure" || (!pr.Draft && pr.Review == "approved" && pr.Checks != "pending")
-}
-
-// byWaiting puts the PRs that wait on the user first, keeping the search's
-// order (last updated first) within each part.
-func byWaiting(prs []gitx.MyPR, reviewer bool) []gitx.MyPR {
-	out := append([]gitx.MyPR(nil), prs...)
-	sort.SliceStable(out, func(i, j int) bool { return waitsOnMe(out[i], reviewer) && !waitsOnMe(out[j], reviewer) })
-	return out
-}
-
-// prFilterKey is what the page's filter box matches a row on.
-func prFilterKey(pr gitx.MyPR) string {
-	return strings.ToLower(pr.Repo + " #" + strconv.Itoa(pr.Number) + " " + pr.Title + " " + pr.Author + " " + pr.Head)
-}
-
-templ prGroup(title, icon, blurb string, prs []gitx.MyPR, d PRsPageData, reviewer bool) {
-	<section class="prs-group">
-		<header>
-			<h2>@Icon(icon, "ui-icon") <span>{ title }</span> <span class="dim tiny-text">{ strconv.Itoa(len(prs)) }</span></h2>
-			<p class="dim tiny-text">{ blurb }</p>
-		</header>
-		if len(prs) == 0 {
-			<p class="dim prs-empty">none.</p>
-		} else {
-			<ul class="prs prs-wide">
-				for _, pr := range prs {
-					@prRow(pr, d, waitsOnMe(pr, reviewer))
-				}
-			</ul>
-		}
-	</section>
-}
-
-// prRow is one PR: repository, number, title, who and when, then the
-// review and check badges, then the threads linked to it and a button
-// to open one when the repository is a project here.
-templ prRow(pr gitx.MyPR, d PRsPageData, mine bool) {
-	{{ p, known := d.Repos[pr.Repo] }}
-	{{ threads := d.Threads[store.PR{Repo: pr.Repo, Number: pr.Number}] }}
-	<li data-k={ prFilterKey(pr) } data-show={ fmt.Sprintf("($prq == '' || el.dataset.k.includes($prq.toLowerCase())) && !($prnodraft && %t) && (!$prmine || %t)", pr.Draft, mine) } data-preserve-attr="style">
-		// The row opens the PR here; GitHub is the button at its end.
-		<a class="pr-row" role="button" tabindex="0" data-on:keydown="evt.key === 'Enter' && el.click()" title={ pr.Head + " → " + pr.Base } data-on:click={ "evt.preventDefault(); @query('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "')" }>
-			<span class={ "pr-mark", prClass(pr.PR) }>@Icon(prIcon(pr.PR), "ui-icon")</span>
-			<span class="pr-text">
-				<span class="ellipsis"><span class="dim">{ pr.Repo }</span> <span class="mono dim">#{ strconv.Itoa(pr.Number) }</span> { pr.Title }</span>
-				<span class="dim tiny-text ellipsis">
-					{ pr.Author } · { pr.Head }
-					· <span data-ago={ pr.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(pr.UpdatedAt) }</span>
-				</span>
-			</span>
-			<span class="pr-badges">
-				if mine {
-					<span class="pr-badge accent text" title="This one waits on you">your move</span>
-				}
-				if pr.Comments > 0 {
-					<span class="pr-badge text" title={ fmt.Sprintf("%d %s", pr.Comments, plural(pr.Comments, "comment", "comments")) }>@Icon("message-square", "ui-icon") <span>{ strconv.Itoa(pr.Comments) }</span></span>
-				}
-				if pr.Draft {
-					<span class="pr-badge">draft</span>
-				}
-				switch pr.Review {
-					case "approved":
-						<span class="pr-badge ok text" title="Approved">@Icon("check", "ui-icon") <span>approved</span></span>
-					case "changes_requested":
-						<span class="pr-badge err text" title="A reviewer asked for changes">@Icon("message-square-x", "ui-icon") <span>changes requested</span></span>
-					case "rereview_requested":
-						<span class="pr-badge warn text" title={ reReviewTitle(pr.Requested) }>@Icon("eye", "ui-icon") <span>re-review requested</span></span>
-				}
-				switch pr.Checks {
-					case "success":
-						<span class="pr-badge ok" title="Checks passed">@Icon("circle-check", "ui-icon")</span>
-					case "failure":
-						<span class="pr-badge err text" title="Checks failed">@Icon("circle-x", "ui-icon") <span>checks failed</span></span>
-					case "pending":
-						<span class="pr-badge warn" title="Checks running">@Icon("circle-dot", "ui-icon")</span>
-				}
-			</span>
-		</a>
-		<a class="btn icon ghost tiny pr-gh" href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener" title="Open on GitHub" aria-label="Open on GitHub">@Icon("external-link", "ui-icon")</a>
-		<div class={ "pr-row-threads", templ.KV("empty", len(threads) == 0 && !known) }>
-			for _, t := range threads {
-				<a class="pr-thread" href={ templ.SafeURL("/threads/" + t.ID) } title={ "Thread linked to this pull request: " + t.Title }>
-					<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
-					<span class="ellipsis">{ t.Title }</span>
-				</a>
-			}
-			if known {
-				<button class="btn tiny ghost" data-on:click={ "@post('/api/prs/" + pr.Repo + "/" + strconv.Itoa(pr.Number) + "/thread?project=" + p.ID + "')" } title={ prThreadTitle(pr, p) }>@Icon("message-square-plus", "ui-icon") <span>new thread</span></button>
-			}
-		</div>
-	</li>
-}
-
-func prThreadTitle(pr gitx.MyPR, p store.Project) string {
-	return fmt.Sprintf("Open a thread on %s for #%d, linked to the pull request, with a prompt that lists what it needs", p.Name, pr.Number)
 }

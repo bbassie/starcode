@@ -159,7 +159,7 @@ templ Layout(title string, p Page, parts Parts) {
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', gfind: '', pr: 0, prsel: 0, prproject: '', prq: '', prnodraft: false, prmine: false, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, qedit: '', qbody: '', tid: %q, pid: pageID(), vis: !document.hidden, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft), p.ThreadID) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', gfind: '', pr: 0, prsel: 0, prproject: '', prq: '', prkey: '', prstate: 'open', prinv: '', prauthor: '', prlabel: '', prdraft: '', prreview: '', prchecks: '', prfproj: '', prsort: 'ready', prfmenu: '', prv: 0, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, qedit: '', qbody: '', tid: %q, pid: pageID(), vis: !document.hidden, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft), p.ThreadID) }
 			data-attr:data-theme="$theme"
 			data-class:nav-collapsed="$navhide"
 			data-class:panel-wide="$wide"
@@ -1179,6 +1179,58 @@ templ Layout(title string, p Page, parts Parts) {
 			// picks the first match on Enter in the search box, and answers
 			// true for Escape so the caller can close the menu.
 			<script>
+				// The pull requests page (views.PRsList). Every row carries
+				// what the filters and orders need as data attributes; the
+				// search box takes words, #number, and label:, author:,
+				// repo: and is: terms. A redraw of the list bumps prv, and one
+				// of the page mainv, so it runs again over the new rows.
+				window.prsFiltered = (...v) => v.slice(0, 7).some((x) => x) || v[7] !== 'open';
+				window.prsApply = (list, q, state, inv, author, label, draft, review, checks, proj, order) => {
+					const terms = (q || '').toLowerCase().split(/\s+/).filter(Boolean);
+					const term = (d, t) => {
+						const i = t.indexOf(':');
+						const k = i > 0 ? t.slice(0, i) : '', v = i > 0 ? t.slice(i + 1) : '';
+						if (k === 'label') return d.labels.includes(v);
+						if (k === 'author') return d.author.toLowerCase().includes(v);
+						if (k === 'repo') return d.repo.includes(v);
+						if (k === 'is') return v === d.state || v === d.draft;
+						return d.k.includes(t);
+					};
+					const match = (d) => (state === 'all' || d.state === state) && (!inv || d.inv === inv) && (!author || d.author === author)
+						&& (!label || d.labels.includes(',' + label.toLowerCase() + ',')) && (!draft || d.draft === draft)
+						&& (!review || d.review === review) && (!checks || d.checks === checks) && (!proj || d.proj === proj)
+						&& terms.every((t) => term(d, t));
+					const keys = {
+						ready: (d) => [+d.ready, -d.updated],
+						blocked: (d) => [d.blocked === 'true' ? 0 : 1, +d.ready, -d.updated],
+						updated: (d) => [-d.updated],
+						newest: (d) => [-d.created],
+						oldest: (d) => [+d.created],
+						largest: (d) => [-d.size],
+						smallest: (d) => [+d.size],
+					};
+					const key = keys[order] || keys.ready;
+					const cmp = (a, b) => {
+						const x = key(a.dataset), y = key(b.dataset);
+						for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i];
+						return 0;
+					};
+					let shown = 0;
+					for (const g of list.querySelectorAll('.prs-group')) {
+						const ul = g.querySelector('ul');
+						let n = 0;
+						for (const r of [...ul.children].sort(cmp)) {
+							r.hidden = !match(r.dataset);
+							if (!r.hidden) n++;
+							ul.appendChild(r);
+						}
+						g.querySelector('.prs-count').textContent = n;
+						g.hidden = n === 0;
+						shown += n;
+					}
+					const none = list.querySelector('.prs-none');
+					if (none) none.hidden = shown > 0;
+				};
 				window.pickLabel = (el, value) => {
 					const menu = el.closest('.pick')?.querySelector('.pick-menu');
 					const opt = menu && [...menu.querySelectorAll('.opt[data-value]')].find((o) => o.dataset.value === String(value ?? ''));

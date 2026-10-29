@@ -448,12 +448,34 @@ templ PRDetailBody(d PRDetailData) {
 		<p class="dim pad">{ d.Err }</p>
 	} else {
 		{{ pr := d.Detail }}
-		<div class="pr-detail-body">
-			<h2 class="pr-title">{ pr.Title }</h2>
-			<div class="dim tiny-text pr-meta">
-				<span>@Icon("git-branch", "ui-icon") <span class="mono">{ pr.Head }</span> → <span class="mono">{ pr.Base }</span></span>
-				<span>{ pr.Author } · <span data-ago={ pr.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(pr.UpdatedAt) }</span></span>
-			</div>
+		<div class="pr-detail-body" data-signals__ifmissing="{prtab: 'summary'}">
+			if d.Page {
+				// The page's head, like T3 Code's: title, who and when, the
+				// branches and the size, then the tabs.
+				<div class="prd-head">
+					<h2 class="pr-title">{ pr.Title }</h2>
+					<div class="dim tiny-text pr-meta"><span><b class="prd-author">{ pr.Author }</b> · updated <span data-ago={ pr.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(pr.UpdatedAt) }</span></span></div>
+					<div class="prd-branches tiny-text">
+						<span class="mono prd-base">{ pr.Base }</span>
+						@Icon("arrow-left", "ui-icon dim")
+						<span class="mono dim ellipsis">{ pr.Head }</span>
+						<span class="spacer"></span>
+						<span class="dim">@Icon("file-diff", "ui-icon") <span>{ fmt.Sprintf("%d %s", pr.ChangedFiles, plural(pr.ChangedFiles, "file", "files")) }</span></span>
+						<span class="mono"><span class="ok">+{ strconv.Itoa(pr.Additions) }</span> <span class="err">-{ strconv.Itoa(pr.Deletions) }</span></span>
+					</div>
+				</div>
+				<div class="segmented prd-tabs">
+					<a role="button" tabindex="0" class="current" data-class:current="$prtab == 'summary'" data-on:click="$prtab = 'summary'">Summary</a>
+					<a role="button" tabindex="0" data-class:current="$prtab == 'timeline'" data-on:click="$prtab = 'timeline'">Timeline</a>
+				</div>
+			} else {
+				<h2 class="pr-title">{ pr.Title }</h2>
+				<div class="dim tiny-text pr-meta">
+					<span>@Icon("git-branch", "ui-icon") <span class="mono">{ pr.Head }</span> → <span class="mono">{ pr.Base }</span></span>
+					<span>{ pr.Author } · <span data-ago={ pr.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(pr.UpdatedAt) }</span></span>
+				</div>
+			}
+			<div class="pr-tab" { prTab(d, "summary")... }>
 			<div class="pr-facts">
 				if pr.Draft {
 					<span class="pr-fact">@Icon("git-pull-request-draft", "ui-icon") draft</span>
@@ -484,7 +506,9 @@ templ PRDetailBody(d PRDetailData) {
 					case "clean":
 						<span class="pr-fact ok">@Icon("git-merge", "ui-icon") ready to merge</span>
 				}
-				<span class="pr-fact mono"><span class="ok">+{ strconv.Itoa(pr.Additions) }</span> <span class="err">−{ strconv.Itoa(pr.Deletions) }</span> · { fmt.Sprintf("%d %s", pr.ChangedFiles, plural(pr.ChangedFiles, "file", "files")) }</span>
+				if !d.Page {
+					<span class="pr-fact mono"><span class="ok">+{ strconv.Itoa(pr.Additions) }</span> <span class="err">−{ strconv.Itoa(pr.Deletions) }</span> · { fmt.Sprintf("%d %s", pr.ChangedFiles, plural(pr.ChangedFiles, "file", "files")) }</span>
+				}
 				for _, l := range pr.Labels {
 					<span class="pr-fact">{ l }</span>
 				}
@@ -578,8 +602,13 @@ templ PRDetailBody(d PRDetailData) {
 				</div>
 			}
 			@prReviewCard(d)
+			</div>
+			<div class="pr-tab" { prTab(d, "timeline")... }>
+			if d.Page && len(pr.Reviews) == 0 && len(pr.Checks) == 0 && len(pr.Threads) == len(open) {
+				<p class="dim">No reviews, checks or resolved comments yet.</p>
+			}
 			if len(pr.Reviews) > 0 {
-				<details class="pr-section">
+				<details class="pr-section" open?={ d.Page }>
 					<summary>{ fmt.Sprintf("%d %s", len(pr.Reviews), plural(len(pr.Reviews), "review", "reviews")) } <span class="dim">· { reviewSummary(pr) }</span></summary>
 					<ul class="pr-rows">
 						for _, r := range pr.Reviews {
@@ -593,7 +622,7 @@ templ PRDetailBody(d PRDetailData) {
 				</details>
 			}
 			if len(pr.Checks) > 0 {
-				<details class="pr-section">
+				<details class="pr-section" open?={ d.Page }>
 					<summary>{ fmt.Sprintf("%d %s", len(pr.Checks), plural(len(pr.Checks), "check", "checks")) } <span class="dim">· { checkSummary(pr) }</span></summary>
 					<ul class="pr-rows">
 						for _, c := range pr.Checks {
@@ -612,7 +641,7 @@ templ PRDetailBody(d PRDetailData) {
 			}
 			{{ resolved := len(pr.Threads) - len(open) }}
 			if resolved > 0 {
-				<details class="pr-section">
+				<details class="pr-section" open?={ d.Page }>
 					<summary>{ fmt.Sprintf("%d resolved %s", resolved, plural(resolved, "comment", "comments")) }</summary>
 					for _, t := range pr.Threads {
 						if t.Resolved {
@@ -634,14 +663,30 @@ templ PRDetailBody(d PRDetailData) {
 					}
 				</details>
 			}
+			</div>
+			<div class="pr-tab" { prTab(d, "summary")... }>
 			if strings.TrimSpace(pr.Body) != "" {
 				<details class="pr-section" open>
 					<summary>Description</summary>
 					<div class="md pr-md pr-desc">@templ.Raw(Markdown(pr.Body))</div>
 				</details>
 			}
+			</div>
 		</div>
 	}
+}
+
+// prTab shows a part of the detail on one tab of the page's detail; the
+// panel has no tabs and shows every part.
+func prTab(d PRDetailData, tab string) templ.Attributes {
+	if !d.Page {
+		return nil
+	}
+	a := templ.Attributes{"data-show": "$prtab == '" + tab + "'", "data-preserve-attr": "style"}
+	if tab != "summary" {
+		a["style"] = "display: none"
+	}
+	return a
 }
 
 // prReviewCard acts on the PR from here, so a phone need not open

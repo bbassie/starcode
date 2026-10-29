@@ -69,23 +69,26 @@ func TestPRDetailRender(t *testing.T) {
 }
 
 func TestPRsPageRender(t *testing.T) {
-	mine := gitx.MyPullRequests{Login: "bb",
-		Assigned: []gitx.MyPR{{PR: gitx.PR{Number: 3, Title: "Assigned one", URL: "https://github.com/o/r/pull/3", Head: "a", Base: "main", Author: "cc", Review: "changes_requested", Checks: "failure", Comments: 4, UpdatedAt: time.Now()}, Repo: "o/r", State: "open"}},
-		Authored: []gitx.MyPR{{PR: gitx.PR{Number: 5, Title: "Elsewhere", URL: "https://github.com/x/y/pull/5", Head: "b", Base: "main", Author: "bb", UpdatedAt: time.Now()}, Repo: "x/y", State: "open"}},
-	}
-	d := PRsPageData{Mine: mine, Loaded: true, At: time.Now(),
-		Repos:   map[string]store.Project{"o/r": {ID: "p1", Name: "r"}},
-		Threads: map[store.PR][]store.Thread{{Repo: "o/r", Number: 3}: {{ID: "t1", Title: "Fix the review", Status: "idle"}}},
-	}
+	now := time.Now()
+	board := gitx.PRBoard{Login: "bb", PRs: []gitx.BoardPR{
+		{MyPR: gitx.MyPR{PR: gitx.PR{Number: 5, Title: "Elsewhere", URL: "https://github.com/x/y/pull/5", Head: "b", Base: "main", Author: "bb", UpdatedAt: now}, Repo: "x/y", State: "open"}, Involve: "authored", Additions: 1811, Deletions: 62, Labels: []string{"bug"}},
+		{MyPR: gitx.MyPR{PR: gitx.PR{Number: 3, Title: "Review me", URL: "https://github.com/o/r/pull/3", Head: "a", Base: "main", Author: "cc", Review: "changes_requested", Checks: "failure", Comments: 4, UpdatedAt: now}, Repo: "o/r", State: "open"}, Involve: "review", Avatar: "https://a/cc"},
+		{MyPR: gitx.MyPR{PR: gitx.PR{Number: 7, Title: "Old one", URL: "https://github.com/o/r/pull/7", Author: "dd", UpdatedAt: now}, Repo: "o/r", State: "merged"}, Involve: "repo"},
+	}}
+	d := PRsPageData{Board: board, Loaded: true, At: now, Repos: map[string]store.Project{"o/r": {ID: "p1", Name: "r"}}}
 	var b strings.Builder
 	if err := PRsPage(d).Render(context.Background(), &b); err != nil {
 		t.Fatal(err)
 	}
 	html := b.String()
-	for _, want := range []string{"Assigned to you", "Waiting for your review", "Opened by you", "changes requested", "checks failed", `href="/threads/t1"`, "Fix the review", `/api/prs/o/r/3/thread?project=p1`, `@query(&#39;/api/prs/o/r/3&#39;)`, "https://github.com/x/y/pull/5", "none.", `title="4 comments"`} {
+	for _, want := range []string{"Authored", "Others", "Review me", `data-inv="review"`, `data-state="merged"`, `data-proj="p1"`, `data-proj="none"`, `data-labels=",bug,"`, "+1.811", `src="https://a/cc"`, `@query(&#39;/api/prs/o/r/3&#39;)`, `title="4 comments"`, "Merge readiness", "Not a project"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q", want)
 		}
+	}
+	// The authored PR sits in the first group, the others in the second.
+	if i, j := strings.Index(html, "Elsewhere"), strings.Index(html, "Review me"); i < 0 || j < i || strings.Index(html, ">Others<") > j || strings.Index(html, ">Others<") < i {
+		t.Error("rows are in the wrong groups")
 	}
 	b.Reset()
 	PRsPage(PRsPageData{Err: "the GitHub CLI (gh) is not installed", Loaded: true}).Render(context.Background(), &b)

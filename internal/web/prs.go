@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -227,7 +228,7 @@ func (s *Server) patchPageDetail(sse *datastar.ServerSentEventGenerator, r *http
 	if err != nil {
 		data.Err = err.Error()
 	}
-	sse.MarshalAndPatchSignals(map[string]any{"prsel": n})
+	sse.MarshalAndPatchSignals(map[string]any{"prsel": n, "prkey": repo + "#" + strconv.Itoa(n)})
 	sse.PatchElementTempl(views.PRPageDetail(data))
 }
 
@@ -562,18 +563,23 @@ func (s *Server) prDir(ctx context.Context) string {
 
 type myPRsEntry struct {
 	at   time.Time
-	list gitx.MyPullRequests
+	list gitx.PRBoard
 	err  string
 }
 
-// myPRs is the signed-in user's PR search, cached for a minute unless
-// refresh is set.
-func (s *Server) myPRs(ctx context.Context, refresh bool) myPRsEntry {
+// myPRs is the page's search (gitx.FetchPRBoard) over the repositories
+// of the projects, cached for a minute unless refresh is set.
+func (s *Server) myPRs(ctx context.Context, repos map[string]store.Project, refresh bool) myPRsEntry {
 	s.prs.mu.Lock()
 	e := s.prs.mine
 	s.prs.mu.Unlock()
 	if e.at.IsZero() || time.Since(e.at) > prTTL || refresh {
-		list, err := gitx.FetchMyPullRequests(ctx, s.prDir(ctx))
+		names := make([]string, 0, len(repos))
+		for r := range repos {
+			names = append(names, r)
+		}
+		sort.Strings(names)
+		list, err := gitx.FetchPRBoard(ctx, s.prDir(ctx), names)
 		e = myPRsEntry{at: time.Now(), list: list}
 		if err != nil {
 			e.err = err.Error()
@@ -630,8 +636,9 @@ func (s *Server) prsPageData(ctx context.Context, refresh bool) (views.PRsPageDa
 	if err != nil {
 		return views.PRsPageData{}, err
 	}
-	e := s.myPRs(ctx, refresh)
-	d := views.PRsPageData{Mine: e.list, Err: e.err, At: e.at, Loaded: true, Repos: s.projectRepos(ctx, ps), Threads: map[store.PR][]store.Thread{}}
+	repos := s.projectRepos(ctx, store.Named(ps))
+	e := s.myPRs(ctx, repos, refresh)
+	d := views.PRsPageData{Board: e.list, Err: e.err, At: e.at, Loaded: true, Repos: repos, Threads: map[store.PR][]store.Thread{}}
 	for _, t := range ts {
 		if pr, ok := t.Linked(); ok {
 			d.Threads[pr] = append(d.Threads[pr], t)
@@ -655,7 +662,10 @@ func (s *Server) refreshPRs(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	datastar.NewSSE(w, r).PatchElementTempl(views.PRsList(d))
+	sse := datastar.NewSSE(w, r)
+	sse.PatchElementTempl(views.PRsList(d))
+	sse.PatchElementTempl(views.PRFilterMenu(d))
+	sse.MarshalAndPatchSignals(map[string]any{"prv": time.Now().UnixMilli()})
 }
 
 // linkPR ties the thread to the PR named in the query (repo and n), from

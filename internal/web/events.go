@@ -334,7 +334,13 @@ func (c *conn) renderPRs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.sse.PatchElementTempl(views.PRsList(d))
+	if err := c.sse.PatchElementTempl(views.PRsList(d)); err != nil {
+		return err
+	}
+	if err := c.sse.PatchElementTempl(views.PRFilterMenu(d)); err != nil {
+		return err
+	}
+	return c.sse.MarshalAndPatchSignals(map[string]any{"prv": time.Now().UnixMilli()})
 }
 
 func (c *conn) renderProviders(ctx context.Context) error {

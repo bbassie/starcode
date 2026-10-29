@@ -146,26 +146,36 @@ func TestRepoFromRemote(t *testing.T) {
 	}
 }
 
-func TestDecodeMyPullRequests(t *testing.T) {
+func TestDecodePRBoard(t *testing.T) {
 	raw := []byte(`{"data":{"viewer":{"login":"bb"},
-	 "assigned":{"nodes":[{"number":3,"title":"A","url":"https://github.com/o/r/pull/3","state":"OPEN","isDraft":false,"reviewDecision":"CHANGES_REQUESTED","headRefName":"a","baseRefName":"main","updatedAt":"2026-09-01T10:00:00Z","totalCommentsCount":7,"author":{"login":"bb"},"repository":{"nameWithOwner":"o/r"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}]},
-	 "requested":{"nodes":[{}]},
-	 "authored":{"nodes":[{"number":4,"title":"B","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":true,"reviewDecision":null,"headRefName":"b","baseRefName":"main","updatedAt":"2026-09-02T10:00:00Z","author":{"login":"bb"},"repository":{"nameWithOwner":"o/r"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}}`)
-	got, err := decodeMyPullRequests(raw)
+	 "authoredOpen":{"nodes":[{"number":4,"title":"B","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":true,"reviewDecision":null,"headRefName":"b","baseRefName":"main","updatedAt":"2026-09-02T10:00:00Z","createdAt":"2026-08-30T10:00:00Z","additions":12,"deletions":3,"author":{"login":"bb","avatarUrl":"https://a/bb"},"labels":{"nodes":[{"name":"bug"}]},"repository":{"nameWithOwner":"o/r"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]},
+	 "authoredDone":{"nodes":[{}]},
+	 "involvedOpen":{"nodes":[{"number":3,"title":"A","url":"https://github.com/o/r/pull/3","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","headRefName":"a","baseRefName":"main","updatedAt":"2026-09-01T10:00:00Z","totalCommentsCount":7,"author":{"login":"cc"},"repository":{"nameWithOwner":"o/r"},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"bb"}}]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}]},
+	 "reposOpen":{"nodes":[
+	   {"number":3,"title":"A","state":"OPEN","author":{"login":"cc"},"repository":{"nameWithOwner":"o/r"}},
+	   {"number":8,"title":"C","state":"MERGED","author":{"login":"dd"},"repository":{"nameWithOwner":"o/r"},"assignees":{"nodes":[{"login":"bb"}]}},
+	   {"number":9,"title":"D","state":"CLOSED","author":{"login":"ee"},"repository":{"nameWithOwner":"o/r"}}]}}}`)
+	got, err := decodePRBoard(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Login != "bb" || len(got.Assigned) != 1 || len(got.ReviewRequested) != 0 || len(got.Authored) != 1 {
+	if got.Login != "bb" || len(got.PRs) != 4 {
 		t.Fatalf("got %+v", got)
 	}
-	a := got.Assigned[0]
-	if a.Repo != "o/r" || a.Number != 3 || a.Review != "changes_requested" || a.Checks != "failure" || a.State != "open" || a.Head != "a" || a.Comments != 7 {
-		t.Errorf("assigned row = %+v", a)
-	}
-	if b := got.Authored[0]; !b.Draft || b.Checks != "" || b.Review != "" {
+	b, a, c, d := got.PRs[0], got.PRs[1], got.PRs[2], got.PRs[3]
+	if b.Number != 4 || b.Involve != "authored" || !b.Mine() || !b.Draft || b.Additions != 12 || b.Deletions != 3 || b.Avatar != "https://a/bb" || len(b.Labels) != 1 || b.CreatedAt.IsZero() {
 		t.Errorf("authored row = %+v", b)
 	}
-	if _, err := decodeMyPullRequests([]byte(`{"data":{"viewer":{"login":""}},"errors":[{"message":"bad credentials"}]}`)); err == nil || err.Error() != "bad credentials" {
+	if a.Number != 3 || a.Involve != "review" || a.Review != "rereview_requested" || a.Checks != "failure" || a.Comments != 7 {
+		t.Errorf("review row = %+v", a)
+	}
+	if c.Number != 8 || c.Involve != "assigned" || c.State != "merged" {
+		t.Errorf("assigned row = %+v", c)
+	}
+	if d.Number != 9 || d.Involve != "repo" || d.State != "closed" {
+		t.Errorf("repo row = %+v", d)
+	}
+	if _, err := decodePRBoard([]byte(`{"data":{"viewer":{"login":""}},"errors":[{"message":"bad credentials"}]}`)); err == nil || err.Error() != "bad credentials" {
 		t.Errorf("error not surfaced: %v", err)
 	}
 }

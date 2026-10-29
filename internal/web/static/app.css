@@ -1654,45 +1654,94 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .pr-chip-btn:hover .pr-chip { filter: brightness(1.2); }
 .accent { color: var(--accent); }
 
+/* The pull requests page, like T3 Code's: a search box with Sort and
+   Filters, the Authored and Others groups under a rule, one two-line row
+   per PR with its size and age on the right. A PR opens beside the list
+   (over it on a phone). */
 .prs-page { display: flex; flex-direction: column; min-height: 0; }
-.prs-scroll { flex: 1; min-height: 0; overflow: auto; }
-.prs-inner { max-width: var(--content-w); margin: 0 auto; padding: var(--pad) var(--pad) 32px; display: flex; flex-direction: column; gap: 22px; }
-.prs-group > header { padding: 0 0 6px; }
-.prs-group > header h2 { margin: 0; font-size: 1em; display: flex; align-items: center; gap: 6px; }
-.prs-group > header p { margin: 2px 0 0; }
-.prs-empty { padding: 8px 0; margin: 0; }
-.prs-wide { border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); overflow: hidden; }
-.prs-wide li { display: grid; grid-template-columns: 1fr auto; align-items: center; border-top: var(--border-w) solid var(--border); }
-.prs-wide li .pr-row-threads { grid-column: 1 / -1; }
-.pr-gh { margin-right: 6px; }
-.prs-wide li:first-child { border-top: 0; }
-.prs-wide .pr-row { display: flex; gap: 8px; align-items: center; padding: 8px var(--pad) 4px; min-height: 44px; }
-.prs-wide .pr-row:hover { background: var(--bg-3); }
-.pr-row-threads { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 var(--pad) 8px calc(var(--pad) + 24px); }
-.pr-row-threads.empty { display: none; }
-.prpage-detail { border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); overflow: visible; }
-.prpage-detail .pr-detail-head { border-radius: var(--radius) var(--radius) 0 0; }
-.prpage-detail .pr-detail-head .pr-thread { max-width: 40%; }
+.prs-split { flex: 1; min-height: 0; display: flex; }
+.prs-listpane { flex: 1; min-width: 0; overflow: auto; }
+.prs-detailpane { display: none; min-width: 0; }
+.prs-split.open .prs-detailpane { display: flex; flex: 1.25; overflow: auto; border-left: var(--border-w) solid var(--border); }
+.prs-inner { max-width: 1100px; margin: 0 auto; padding: 14px 24px 40px; }
+.prs-split.open .prs-inner { padding: 12px 14px 32px; }
+.prs-toolbar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 8px; margin: -14px -4px 6px; padding: 14px 4px 8px; background: var(--bg); }
+.prs-search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-2); color: var(--fg-dim); cursor: text; }
+.prs-search:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.prs-search input { flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; outline: none; color: var(--fg); }
+.prs-pick { position: relative; flex: none; }
+.btn.prs-tool { height: 34px; min-height: 34px; padding: 0 11px; gap: 6px; border-color: var(--border); background: var(--bg-2); color: var(--fg); font-size: 0.92em; font-weight: 600; border-radius: var(--radius-sm); }
+.btn.icon.prs-tool { width: 34px; padding: 0; }
+.btn.prs-tool:hover, .btn.prs-tool.open { background: var(--bg-3); }
+.btn.prs-tool.on { background: var(--sel); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.prs-menu { top: calc(100% + 6px); bottom: auto; left: auto; right: 0; min-width: 210px; width: max-content; }
+.prs-filter-menu { width: 290px; }
+.prs-menu .pick-list { gap: 0; }
+.prs-menu .opt { min-height: 30px; padding: 4px 8px; }
+.prs-menu .opt-ctx { max-width: 120px; }
+.prs-menu-rule { height: 1px; margin: 4px 2px; background: var(--line-soft); }
+.prs-menu-back { color: var(--fg-dim); }
+.prpage-list { display: flex; flex-direction: column; }
+.prs-group-head { display: flex; align-items: center; gap: 6px; margin: 12px 0 4px; color: var(--fg-dim); font-size: 0.86em; }
+.prs-group-head::after { content: ""; flex: 1; height: 1px; margin-left: 6px; background: var(--border); }
+.prs-group[hidden], .prb-row[hidden] { display: none; }
+.prs-rows { display: flex; flex-direction: column; }
+.prb-main { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--radius-sm); }
+.prb-main:hover { background: var(--bg-3); }
+.prb-row.current .prb-main { background: var(--sel); }
+.prb-main > .pr-mark { align-self: flex-start; margin-top: 3px; }
+.prb-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.prb-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.prb-num { flex: none; font-size: 0.82em; }
+.prb-title { flex: 0 1 auto; }
+.prb-check, .prb-flag, .prb-comments { flex: none; display: inline-flex; align-items: center; gap: 3px; }
+.prb-author { flex: none; }
+.pr-avatar { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--bg-4); object-fit: cover; font-size: 10px; }
+.prb-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 0.8em; }
+.pr-mark.ok { color: var(--ok); }
+.pr-mark.err { color: var(--err); }
+.pr-mark.merged { color: var(--merged); }
+.prs-none { padding: 24px 8px; text-align: center; }
+/* The detail beside the list: a bar with the repository and number,
+   then T3 Code's head and the Summary and Timeline tabs. */
+.prpage-detail { flex: 1; min-width: 0; overflow: visible; }
+.prd-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 4px 10px; background: var(--bg); border-bottom: var(--border-w) solid var(--border); }
+.prd-bar .pr-thread { max-width: 40%; }
+.prd-repo { display: inline-flex; align-items: center; gap: 5px; font-size: 0.88em; }
+.prd-repo:hover { color: var(--fg); }
+.prd-head { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; border-bottom: var(--border-w) solid var(--border); }
+.prd-head .pr-title { font-size: 1.2em; font-weight: 600; }
+.prd-author { color: var(--fg); font-weight: 600; }
+.prd-branches { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.prd-branches > span { display: inline-flex; align-items: center; gap: 4px; }
+.prd-base { color: var(--warn); }
+.prd-tabs { align-self: flex-start; }
+.pr-tab { display: flex; flex-direction: column; gap: 10px; }
 .pr-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-3); }
 .pr-pick .in { min-height: 30px; padding: 2px 8px; }
 .pr-card-actions { display: inline-flex; gap: 2px; margin: -4px 0 -4px auto; flex: none; }
 .pr-card-head .ellipsis { min-width: 0; }
-.prs-wide li:has(.pr-row-threads.empty) .pr-row { padding-bottom: 8px; }
 .pr-thread { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 8px 2px 6px; border-radius: 999px; border: var(--border-w) solid var(--border); background: var(--bg-3); font-size: 0.85em; color: var(--fg); }
 .pr-thread:hover { background: var(--bg-4); }
 .pr-thread .glyph { display: inline-flex; }
 .pr-thread .ellipsis { max-width: 32ch; }
-.prs-note { margin: 0; }
-@media (max-width: 560px) {
-  .prs-wide .pr-text > .ellipsis:first-child { white-space: normal; overflow: visible; }
-  /* The title gets the whole width; the badges drop under it, in line
-     with the text rather than the icon. */
-  .prs-wide .pr-row { flex-wrap: wrap; row-gap: 6px; align-items: flex-start; }
-  .prs-wide .pr-row > .pr-mark { margin-top: 2px; }
-  .prs-wide li > .pr-gh { align-self: start; margin-top: 6px; }
-  .prs-wide .pr-text { flex-basis: calc(100% - 24px); }
-  .prs-wide .pr-badges { flex-wrap: wrap; padding-left: 24px; }
-  .prs-wide .pr-badges:empty { display: none; }
+@media (max-width: 900px) {
+  /* On a phone the open PR takes the page and the list waits behind it. */
+  .prs-split.open .prs-listpane { display: none; }
+  .prs-split.open .prs-detailpane { border-left: 0; }
+  /* The menus are the phone's bottom sheets, as every pick-menu is. */
+  .prs-menu, .prs-filter-menu { top: auto; bottom: calc(8px + env(safe-area-inset-bottom)); left: 8px; right: 8px; width: auto; }
+  .prs-menu .opt { min-height: var(--tap); }
+  .prs-inner, .prs-split.open .prs-inner { padding: 10px 10px 32px; }
+  .prs-toolbar { margin: -10px -4px 4px; padding: 10px 4px 8px; }
+  .btn.prs-tool, .prs-search { height: var(--tap); min-height: var(--tap); }
+  .btn.icon.prs-tool { width: var(--tap); }
+  .prs-search input { font-size: 16px; }
+  .prb-main { padding: 9px 6px; }
+}
+@media (max-width: 480px) {
+  .hide-xs { display: none; }
+  .btn.prs-tool { padding: 0; width: var(--tap); }
 }
 .pr-unlink { margin-left: -4px; }
 
@@ -1879,16 +1928,6 @@ details.item.agent[open] > summary::after { transform: rotate(90deg); }
 .project-chips .pick-menu { bottom: auto; top: calc(100% + 8px); left: auto; right: 0; }
 .project-chips .chips { justify-content: flex-end; }
 
-/* The pull requests page's filter row. */
-.prs-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 12px; }
-.prs-filter .pick-search { flex: 1 1 260px; border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-2); }
-.prs-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9em; color: var(--fg-dim); cursor: pointer; }
-.prpage-list { display: flex; flex-direction: column; gap: 16px; }
-@media (max-width: 560px) {
-  /* The filter box gets its own row, the two toggles share the next. */
-  .prs-filter .pick-search { flex-basis: 100%; }
-  .prs-toggle { min-height: var(--tap); }
-}
 .pr-badge.accent { color: var(--accent); border-color: var(--accent); }
 
 /* The stash button sits in the composer's top right corner, so it takes

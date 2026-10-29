@@ -1024,8 +1024,24 @@ type prNode struct {
 	UpdatedAt string `json:"updatedAt"`
 	Comments  int    `json:"totalCommentsCount"`
 	Author    struct {
-		Login string `json:"login"`
+		Login  string `json:"login"`
+		Avatar string `json:"avatarUrl"`
 	} `json:"author"`
+	// The pull requests page reads these too (boardFields); the other
+	// readers leave them empty.
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	CreatedAt string `json:"createdAt"`
+	Labels    struct {
+		Nodes []struct {
+			Name string `json:"name"`
+		} `json:"nodes"`
+	} `json:"labels"`
+	Assignees struct {
+		Nodes []struct {
+			Login string `json:"login"`
+		} `json:"nodes"`
+	} `json:"assignees"`
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
@@ -1090,66 +1106,134 @@ func (n prNode) pr() PR {
 }
 
 // MyPR is a pull request from a search across every repository the
-// signed-in user can see.
+// signed-in user can see: the list row plus the repository and state.
 type MyPR struct {
 	PR
 	Repo  string // "owner/name"
 	State string // "open" | "merged" | "closed"
 }
 
-// MyPullRequests is the signed-in user's open pull requests in three
-// groups: assigned to them, waiting for their review, and opened by
-// them. One GraphQL call with three searches; Login is who "them" is.
-type MyPullRequests struct {
-	Login           string
-	Assigned        []MyPR
-	ReviewRequested []MyPR
-	Authored        []MyPR
+// BoardPR is a row of the pull requests page: the PR, who wrote it and
+// with which avatar, its size, labels and age, and how the signed-in
+// user is involved.
+type BoardPR struct {
+	MyPR
+	Avatar    string
+	Additions int
+	Deletions int
+	CreatedAt time.Time
+	Labels    []string
+	// Involve is "authored" (theirs), "review" (a review asked of them),
+	// "assigned", "involved" (commented or mentioned), or "repo" (only
+	// in the repository of one of their projects).
+	Involve string
 }
 
-const myPRsQuery = `query {
-  viewer { login }
-  assigned: search(query: "is:pr is:open assignee:@me sort:updated-desc", type: ISSUE, first: 50) { nodes { ... on PullRequest { %[1]s } } }
-  requested: search(query: "is:pr is:open review-requested:@me sort:updated-desc", type: ISSUE, first: 50) { nodes { ... on PullRequest { %[1]s } } }
-  authored: search(query: "is:pr is:open author:@me sort:updated-desc", type: ISSUE, first: 50) { nodes { ... on PullRequest { %[1]s } } }
-}`
+// Mine is whether the signed-in user wrote the pull request.
+func (p BoardPR) Mine() bool { return p.Involve == "authored" }
 
-// FetchMyPullRequests runs the search; dir only matters for which GitHub
-// host gh talks to.
-func FetchMyPullRequests(ctx context.Context, dir string) (MyPullRequests, error) {
-	raw, err := gh(ctx, dir, "api", "graphql", "-f", "query="+fmt.Sprintf(myPRsQuery, prStateFields))
-	if err != nil {
-		return MyPullRequests{}, err
+// PRBoard is the pull requests page: the signed-in user's pull requests
+// and those of others that concern them or sit in the repositories of
+// their projects, open and done. Login is who "them" is.
+type PRBoard struct {
+	Login string
+	PRs   []BoardPR
+}
+
+// boardFields are what the page shows of each pull request.
+const boardFields = prStateFields + ` additions deletions createdAt author { login avatarUrl(size: 40) } labels(first: 10) { nodes { name } } assignees(first: 10) { nodes { login } }`
+
+// FetchPRBoard reads the page in one GraphQL call: six searches, open
+// and done (merged or closed) for each of the user's own, others' that
+// involve them, and others' in repos. Done ones are fewer, so a long
+// history does not push an open one out. dir only matters for which
+// GitHub host gh talks to.
+func FetchPRBoard(ctx context.Context, dir string, repos []string) (PRBoard, error) {
+	var q strings.Builder
+	q.WriteString("query { viewer { login }")
+	search := func(name, query string, n int) {
+		fmt.Fprintf(&q, " %s: search(query: %q, type: ISSUE, first: %d) { nodes { ... on PullRequest { %s } } }", name, query+" sort:updated-desc", n, boardFields)
 	}
-	return decodeMyPullRequests(raw)
+	search("authoredOpen", "is:pr is:open author:@me", 50)
+	search("authoredDone", "is:pr is:closed author:@me", 30)
+	search("involvedOpen", "is:pr is:open involves:@me -author:@me", 50)
+	search("involvedDone", "is:pr is:closed involves:@me -author:@me", 30)
+	if len(repos) > 0 {
+		in := "repo:" + strings.Join(repos, " repo:")
+		search("reposOpen", "is:pr is:open -author:@me "+in, 50)
+		search("reposDone", "is:pr is:closed -author:@me "+in, 30)
+	}
+	q.WriteString(" }")
+	raw, err := gh(ctx, dir, "api", "graphql", "-f", "query="+q.String())
+	if err != nil {
+		return PRBoard{}, err
+	}
+	return decodePRBoard(raw)
 }
 
-func decodeMyPullRequests(raw []byte) (MyPullRequests, error) {
+func decodePRBoard(raw []byte) (PRBoard, error) {
 	var resp struct {
-		Data struct {
-			Viewer struct {
-				Login string `json:"login"`
-			} `json:"viewer"`
-			Assigned  searchNodes `json:"assigned"`
-			Requested searchNodes `json:"requested"`
-			Authored  searchNodes `json:"authored"`
-		} `json:"data"`
+		Data map[string]json.RawMessage `json:"data"`
 		Errors []struct {
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return MyPullRequests{}, err
+		return PRBoard{}, err
 	}
-	if len(resp.Errors) > 0 && resp.Data.Viewer.Login == "" {
-		return MyPullRequests{}, errors.New(resp.Errors[0].Message)
+	var viewer struct {
+		Login string `json:"login"`
 	}
-	return MyPullRequests{
-		Login:           resp.Data.Viewer.Login,
-		Assigned:        resp.Data.Assigned.prs(),
-		ReviewRequested: resp.Data.Requested.prs(),
-		Authored:        resp.Data.Authored.prs(),
-	}, nil
+	json.Unmarshal(resp.Data["viewer"], &viewer)
+	if len(resp.Errors) > 0 && viewer.Login == "" {
+		return PRBoard{}, errors.New(resp.Errors[0].Message)
+	}
+	b := PRBoard{Login: viewer.Login}
+	seen := map[string]bool{}
+	// The searches in the order that names the involvement best: a PR
+	// found by "involves" and by a repository is the user's business.
+	for _, name := range []string{"authoredOpen", "authoredDone", "involvedOpen", "involvedDone", "reposOpen", "reposDone"} {
+		var nodes searchNodes
+		if r, ok := resp.Data[name]; ok {
+			json.Unmarshal(r, &nodes)
+		}
+		for _, n := range nodes.Nodes {
+			key := fmt.Sprintf("%s#%d", n.Repository.NameWithOwner, n.Number)
+			if n.Number == 0 || seen[key] {
+				continue
+			}
+			seen[key] = true
+			p := BoardPR{MyPR: MyPR{PR: n.pr(), Repo: n.Repository.NameWithOwner, State: strings.ToLower(n.State)}, Avatar: n.Author.Avatar, Additions: n.Additions, Deletions: n.Deletions}
+			p.CreatedAt, _ = time.Parse(time.RFC3339, n.CreatedAt)
+			for _, l := range n.Labels.Nodes {
+				p.Labels = append(p.Labels, l.Name)
+			}
+			p.Involve = involvement(n, viewer.Login, strings.HasPrefix(name, "repos"))
+			b.PRs = append(b.PRs, p)
+		}
+	}
+	return b, nil
+}
+
+// involvement names how login is involved in the pull request n; repo
+// is whether only the repositories search found it.
+func involvement(n prNode, login string, repo bool) string {
+	_, requested := n.reviewers()
+	switch {
+	case n.Author.Login == login:
+		return "authored"
+	case slices.Contains(requested, login):
+		return "review"
+	}
+	for _, a := range n.Assignees.Nodes {
+		if a.Login == login {
+			return "assigned"
+		}
+	}
+	if repo {
+		return "repo"
+	}
+	return "involved"
 }
 
 type searchNodes struct {

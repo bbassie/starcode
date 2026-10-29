@@ -35,6 +35,7 @@ var spriteIcons = []string{
 	"zoom-in", "zoom-out", "chevrons-down-up", "chevrons-up-down", "list-filter", "file-text", "image", "maximize-2", "code",
 	"git-fork", "arrow-right-left", "sparkles", "globe", "list-checks", "wrench", "file-plus", "file-diff",
 	"bell", "bell-off", "bell-dot", "message-square-dashed",
+	"arrow-down-up", "layers", "users", "tag", "clock", "calendar-arrow-down", "calendar-arrow-up", "minimize-2",
 }
 
 // brandPaths are the brand marks as sprite symbols. The drivers' are
