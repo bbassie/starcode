@@ -2162,9 +2162,9 @@ func UpdateBanner(d BannerData) templ.Component {
 							return templ_7745c5c3_Err
 						}
 						var templ_7745c5c3_Var107 string
-						templ_7745c5c3_Var107, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d %s resume", d.Running, plural(d.Running, "turn", "turns")))
+						templ_7745c5c3_Var107, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d %s", d.Running, plural(d.Running, "turn resumes", "turns resume")))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/providers.templ`, Line: 497, Col: 107}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/providers.templ`, Line: 497, Col: 115}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var107))
 						if templ_7745c5c3_Err != nil {

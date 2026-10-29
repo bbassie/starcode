@@ -494,7 +494,7 @@ templ UpdateBanner(d BannerData) {
 					if d.Running > 0 {
 						if d.Resume {
 							<span class="dim long">{ fmt.Sprintf("%d running %s stop and pick up again after it.", d.Running, plural(d.Running, "turn", "turns")) }</span>
-							<span class="dim short">{ fmt.Sprintf("%d %s resume", d.Running, plural(d.Running, "turn", "turns")) }</span>
+							<span class="dim short">{ fmt.Sprintf("%d %s", d.Running, plural(d.Running, "turn resumes", "turns resume")) }</span>
 						} else {
 							<span class="dim long">{ fmt.Sprintf("%d running %s would be cut off.", d.Running, plural(d.Running, "turn", "turns")) }</span>
 							<span class="dim short">{ fmt.Sprintf("%d %s cut off", d.Running, plural(d.Running, "turn", "turns")) }</span>
