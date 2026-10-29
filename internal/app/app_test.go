@@ -202,6 +202,69 @@ func TestCompactContextRunsAsATurn(t *testing.T) {
 	}
 }
 
+// A reply that streams on after tool calls cut into it (Claude does this
+// with a background subagent's calls) goes on in a new item after them,
+// and the text before the calls stays where it was.
+func TestReplyResumedAfterToolsIsANewItem(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "resume.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	sess := newQueueSession()
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendPrompt(ctx, threadID, "go"); err != nil {
+		t.Fatal(err)
+	}
+	receivePrompt(t, sess.sent)
+	text := func(s string) agent.Event {
+		return agent.Event{Kind: agent.KindTextDelta, TextDelta: &agent.TextDelta{MessageID: "m1", Text: s}}
+	}
+	sess.events <- agent.Event{Kind: agent.KindTurnStarted, TurnStarted: &agent.TurnStarted{TurnID: "turn-1"}}
+	sess.events <- text("first ")
+	sess.events <- text("half")
+	for _, id := range []string{"t1", "t2"} {
+		sess.events <- agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: id, Name: "Bash"}}
+		sess.events <- agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: id, Status: "done"}}
+		sess.events <- text("more " + id)
+	}
+	sess.events <- agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{TurnID: "turn-1", Status: "done", DurationMS: 10}}
+	var items []store.Item
+	deadline := time.Now().Add(time.Second)
+	for {
+		items, _ = st.Items(ctx, threadID)
+		if len(items) > 0 && items[len(items)-1].Kind == domain.KindResult {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("turn did not end: %+v", items)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var got []string
+	ids := map[string]bool{}
+	for _, it := range items {
+		got = append(got, it.Kind+":"+it.Body)
+		if ids[it.ID] {
+			t.Errorf("id %s twice", it.ID)
+		}
+		ids[it.ID] = true
+	}
+	want := "user:go|assistant:first half|tool:|assistant:more t1|tool:|assistant:more t2"
+	if g := strings.Join(got[:len(got)-1], "|"); g != want {
+		t.Fatalf("transcript\n got %s\nwant %s", g, want)
+	}
+}
+
 func receivePrompt(t *testing.T, ch <-chan string) string {
 	t.Helper()
 	select {

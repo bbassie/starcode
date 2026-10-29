@@ -1723,11 +1723,25 @@ func (a *App) delta(l *live, append_ func(...any), itemID func(string) string, k
 	key := kind + ":" + msgID
 	l.mu.Lock()
 	id, ok := l.seenMsgs[key]
+	l.mu.Unlock()
 	if !ok {
 		id = itemID(kind[:1] + "-" + msgID)
+		// A message can stream again after it was closed: Claude puts a
+		// background subagent's tool calls into the main stream with no
+		// parent, in the middle of a reply. The rest of the reply is then
+		// a new item after those calls. Starting the old id again would
+		// move it to the end with only the new text in it, and leave the
+		// page with two elements of that id.
+		for n := 2; ; n++ {
+			if _, err := a.Store.Item(context.Background(), id); err != nil {
+				break
+			}
+			id = itemID(fmt.Sprintf("%s-%s-%d", kind[:1], msgID, n))
+		}
+		l.mu.Lock()
 		l.seenMsgs[key] = id
+		l.mu.Unlock()
 	}
-	l.mu.Unlock()
 	if !ok {
 		// A new message means the previous streamed one is finished.
 		evs := a.closeMessages(l, id)
