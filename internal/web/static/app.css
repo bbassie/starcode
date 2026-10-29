@@ -1576,6 +1576,14 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .prs-note { margin: 0; }
 @media (max-width: 560px) {
   .prs-wide .pr-text > .ellipsis:first-child { white-space: normal; overflow: visible; }
+  /* The title gets the whole width; the badges drop under it, in line
+     with the text rather than the icon. */
+  .prs-wide .pr-row { flex-wrap: wrap; row-gap: 6px; align-items: flex-start; }
+  .prs-wide .pr-row > .pr-mark { margin-top: 2px; }
+  .prs-wide li > .pr-gh { align-self: start; margin-top: 6px; }
+  .prs-wide .pr-text { flex-basis: calc(100% - 24px); }
+  .prs-wide .pr-badges { flex-wrap: wrap; padding-left: 24px; }
+  .prs-wide .pr-badges:empty { display: none; }
 }
 .pr-unlink { margin-left: -4px; }
 
@@ -1767,6 +1775,12 @@ details.item.agent[open] > summary::after { transform: rotate(90deg); }
 .prs-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 12px; }
 .prs-filter .pick-search { flex: 1 1 260px; border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-2); }
 .prs-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9em; color: var(--fg-dim); cursor: pointer; }
+.prpage-list { display: flex; flex-direction: column; gap: 16px; }
+@media (max-width: 560px) {
+  /* The filter box gets its own row, the two toggles share the next. */
+  .prs-filter .pick-search { flex-basis: 100%; }
+  .prs-toggle { min-height: var(--tap); }
+}
 .pr-badge.accent { color: var(--accent); border-color: var(--accent); }
 
 /* The stash button sits in the composer's top right corner, so it takes
