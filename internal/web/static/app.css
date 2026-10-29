@@ -539,6 +539,12 @@ button.status-pill { cursor: pointer; font-family: inherit; color: inherit; }
 .work > summary::after { content: "›"; margin-left: 2px; transition: transform 0.15s; }
 .work[open] > summary::after { transform: rotate(90deg); }
 .work-body { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 2px; }
+/* Wrappers the stream needs ids on, which leave the layout to the list:
+   a turn, the waiting approval cards, a block of a single step. */
+.turn, .approvals, .work-one { display: contents; }
+/* A finished turn's fold holds messages and blocks of its own, so its
+   body is spaced like the transcript. */
+.turn-fold > .work-body { gap: 14px; padding-top: 14px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Prompt navigator: a narrow map between the sidebar and transcript. */
@@ -2010,11 +2016,11 @@ button.pending, .btn.pending { cursor: progress; animation: pending-pulse 0.9s e
   button.pending, .btn.pending { animation: none; opacity: 0.6; }
 }
 /* iOS 26 blurs the top of an installed web app (its Liquid Glass scroll
-   edge) wherever WebKit cannot read one flat colour at the top edge, and
-   the blur reaches past the status bar into the header. A fixed box on
-   that edge is what WebKit reads instead: this strip, the height of the
-   status bar, in the page's own background. It sits under the lightbox,
-   which has its own top bar. */
+   edge) wherever WebKit cannot read one flat colour at the top edge. The
+   status bar style in the layout is "default", so the page starts below
+   the bar and the inset is 0 there; this strip, in the page's own
+   background, only covers an app still installed with black-translucent.
+   It sits under the lightbox, which has its own top bar. */
 @media (display-mode: standalone) {
   body::before { content: ""; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); background: var(--bg); z-index: 50; pointer-events: none; }
 }

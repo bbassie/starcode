@@ -126,7 +126,11 @@ templ Layout(title string, p Page, parts Parts) {
 			<meta name="theme-color" content="#17212b"/>
 			<meta name="mobile-web-app-capable" content="yes"/>
 			<meta name="apple-mobile-web-app-capable" content="yes"/>
-			<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+			// "default", not black-translucent: the page then starts below
+			// the status bar, so iOS 26's blur over the top edge of an
+			// installed app has none of the page under it. theme-color
+			// colours the bar. Takes effect after re-adding to the home screen.
+			<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
 			<meta name="apple-mobile-web-app-title" content="starcode"/>
 			<link rel="manifest" href={ asset("/static/manifest.webmanifest") }/>
 			@PageTitle(title)
