@@ -870,7 +870,7 @@ body.scrolled-up .jump { display: inline-flex; }
 .opt-custom { border-top: var(--border-w) solid var(--border); border-radius: 0; margin-top: 4px; padding-top: 10px; }
 /* The effort and mode rows in the model sheet only exist on a phone. */
 .pick-more { display: none; }
-.composer.start { margin: 0 0 24px; box-shadow: none; }
+.composer.start { width: 100%; margin: 0 0 24px; box-shadow: none; }
 
 /* Context meter: how full the model's window is, as a ring in a chip
    beside the pickers. The chip opens a card (a pick-menu like the
