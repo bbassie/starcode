@@ -1692,6 +1692,7 @@ details.item.agent[open] > summary::after { transform: rotate(90deg); }
 .agent-brief > summary::-webkit-details-marker { display: none; }
 .agent-brief > summary::before { content: "▸ "; }
 .agent-brief[open] > summary::before { content: "▾ "; }
+@media (max-width: 900px) { .agent-brief > summary { display: flex; align-items: center; min-height: 32px; white-space: pre; } }
 
 /* A number with its unit: wide enough for three digits and the spinner. */
 .num-unit { display: inline-flex; align-items: center; gap: 6px; flex: none; }
