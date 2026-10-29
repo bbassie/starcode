@@ -1208,7 +1208,8 @@ body.panel-wide { --gitpanel-w: min(62vw, 960px); }
    pre's own white-space is normal so those newlines do not render as
    empty lines. The spans wrap instead of scrolling out of the panel. */
 .diff { padding: 4px 0; overflow: auto; font-size: 0.85em; flex: 1; white-space: normal; }
-.diff span { display: block; padding: 0 var(--pad); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A wrapped line hangs past its +/- mark, so the mark column stays clear. */
+.diff span { display: block; padding: 0 var(--pad) 0 calc(var(--pad) + 1ch); text-indent: -1ch; white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff .add { background: var(--add-bg); color: var(--ok); }
 .diff .del { background: var(--del-bg); color: var(--err); }
 .diff .hunk { color: var(--accent); }
