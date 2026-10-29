@@ -135,7 +135,10 @@ templ Sidebar(d SidebarData) {
 			<button class="btn icon ghost" data-on:click="$nav = false" aria-label="Close navigation">@Icon("x", "ui-icon")</button>
 		</div>
 		<div class="side-search">
-			<input class="in" type="search" placeholder="Filter threads" data-bind:q autocomplete="off" enterkeyhint="search"/>
+			<label class="side-filter">
+				@Icon("search", "ui-icon")
+				<input class="in" type="search" placeholder="Filter threads" aria-label="Filter threads" data-bind:q autocomplete="off" enterkeyhint="search"/>
+			</label>
 			<button class="btn icon ghost" type="button" title="Search threads and messages, run a command (Ctrl+K)" aria-label="Search and commands" data-on:click="runHotkey('mod+k')">@Icon("command", "ui-icon")</button>
 			<button class="btn icon ghost" data-on:click="$addproj = !$addproj" title="Add project folder" aria-label="Add project folder">@Icon("folder-plus", "ui-icon")</button>
 			if pid := newThreadProject(d); pid != "" {
@@ -229,21 +232,13 @@ templ Sidebar(d SidebarData) {
 				</details>
 			}
 		</nav>
-		// The footer is the pull requests page, then the settings link plus
-		// one icon per section, so Usage, Providers and Keys are a click
-		// away from any page. The update badge sits on Providers, where
-		// updates are installed.
-		<div class="side-foot side-prs-row">
-			<a class={ "side-settings", templ.KV("current", d.View == "prs") } href="/prs" title="Pull requests assigned to you, waiting for your review, or opened by you" data-on:click="$nav = false">
-				@Icon("git-pull-request", "ui-icon")
-				<span>Pull requests</span>
-			</a>
-		</div>
+		// The footer is one row of icons: settings, the pull requests page,
+		// and Usage, Providers and Keys, so each is a click away from any
+		// page. The update badge sits on Providers, where updates are
+		// installed.
 		<div class="side-foot">
-			<a class={ "side-settings", templ.KV("current", d.View == "settings" || d.View == "appearance") } href="/settings" title="Threads, this device, appearance" data-on:click="$nav = false">
-				@Icon("settings", "ui-icon")
-				<span>Settings</span>
-			</a>
+			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "settings" || d.View == "appearance") } href="/settings" title="Settings: threads, this device, appearance" aria-label="Settings" data-on:click="$nav = false">@Icon("settings", "ui-icon")</a>
+			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "prs") } href="/prs" title="Pull requests assigned to you, waiting for your review, or opened by you" aria-label="Pull requests" data-on:click="$nav = false">@Icon("git-pull-request", "ui-icon")</a>
 			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "usage") } href="/settings/usage" title="Usage" aria-label="Usage" data-on:click="$nav = false">@Icon("chart-no-axes-combined", "ui-icon")</a>
 			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "providers") } href="/settings/providers" title={ providersTitle(d.Updates, d.SignedOut) } aria-label="Providers" data-on:click="$nav = false">
 				@Icon("plug", "ui-icon")
