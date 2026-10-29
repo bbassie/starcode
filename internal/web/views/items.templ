@@ -161,6 +161,14 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 						</div>
 						<pre class="wrap bubble">{ text }</pre>
 					}
+					if len(pm.Reports) > 0 {
+						<span class="dim tiny-text user-auto" title="The agent got these threads' last replies along with this message">
+							@Icon("message-square", "ui-icon") <span>with the replies of</span>
+							for i, id := range pm.Reports {
+								<a href={ templ.SafeURL("/threads/" + id) }>{ fmt.Sprintf("thread %d", i+1) }</a>
+							}
+						</span>
+					}
 					if len(atts) > 0 {
 						<div class="attach-legend">
 							for _, a := range atts {

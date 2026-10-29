@@ -87,8 +87,12 @@ type Thread struct {
 	// Parent is the thread whose agent spawned this one, empty for one the
 	// reader opened; WakeParent tells the parent when this one finishes
 	// (domain.ThreadCreated).
-	Parent     string
-	WakeParent bool
+	Parent       string
+	WakeParent   bool
+	ReportParent bool
+	// ReportPending is a ReportParent child whose last reply its parent
+	// has not had yet (domain.ThreadReportPending).
+	ReportPending bool
 	// Anchor is where the agent's conversation can be forked to keep all
 	// of it (the last turn's), and ForkAt the point a rewind cut it back
 	// to, which the next session start forks at; empty when there is none.
@@ -356,8 +360,8 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		_, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id=?`, p.ID)
 		return err
 	case domain.ThreadCreated:
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO threads(id,project_id,title,agent,model,parent_id,wake_parent,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			p.ID, p.ProjectID, p.Title, p.Agent, p.Model, p.Parent, p.WakeParent, ts, ts)
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO threads(id,project_id,title,agent,model,parent_id,wake_parent,report_parent,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			p.ID, p.ProjectID, p.Title, p.Agent, p.Model, p.Parent, p.WakeParent, p.ReportParent, ts, ts)
 		return err
 	case domain.ThreadRenamed:
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET title=?, updated_at=? WHERE id=?`, p.Title, ts, ev.ThreadID)
@@ -433,6 +437,12 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		return err
 	case domain.ThreadPRWatchStopped:
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_watch='' WHERE id=?`, ev.ThreadID)
+		return err
+	case domain.ThreadReportPending:
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET report_pending=1 WHERE id=?`, ev.ThreadID)
+		return err
+	case domain.ThreadReported:
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET report_pending=0 WHERE id=?`, ev.ThreadID)
 		return err
 	case domain.ScheduleSet:
 		_, err := tx.ExecContext(ctx, `INSERT INTO schedules(id,thread_id,project_id,prompt,title,next_at,cron,tz,agent,model,effort,mode,paused,by_thread,created_at)
@@ -680,6 +690,10 @@ func deref(p any) any {
 		return *v
 	case *domain.ThreadPRWatchStopped:
 		return *v
+	case *domain.ThreadReportPending:
+		return *v
+	case *domain.ThreadReported:
+		return *v
 	case *domain.ScheduleSet:
 		return *v
 	case *domain.ScheduleRan:
@@ -788,12 +802,12 @@ func scanProject(sc interface{ Scan(...any) error }) (Project, error) {
 	return p, err
 }
 
-const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,pinned,context_tokens,context_window,pr_repo,pr_number,pr_url,created_at,updated_at,settled_at,held_at,snoozed_until,anchor,fork_at,snooze_resume,pr_watch,snooze_prompt,parent_id,wake_parent`
+const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,pinned,context_tokens,context_window,pr_repo,pr_number,pr_url,created_at,updated_at,settled_at,held_at,snoozed_until,anchor,fork_at,snooze_resume,pr_watch,snooze_prompt,parent_id,wake_parent,report_parent,report_pending`
 
 func scanThread(sc interface{ Scan(...any) error }) (Thread, error) {
 	var t Thread
 	var c, u, settled, held, snoozed string
-	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.Pinned, &t.ContextTokens, &t.ContextWindow, &t.PRRepo, &t.PRNumber, &t.PRURL, &c, &u, &settled, &held, &snoozed, &t.Anchor, &t.ForkAt, &t.SnoozeResume, &t.PRWatch, &t.SnoozePrompt, &t.Parent, &t.WakeParent)
+	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.Pinned, &t.ContextTokens, &t.ContextWindow, &t.PRRepo, &t.PRNumber, &t.PRURL, &c, &u, &settled, &held, &snoozed, &t.Anchor, &t.ForkAt, &t.SnoozeResume, &t.PRWatch, &t.SnoozePrompt, &t.Parent, &t.WakeParent, &t.ReportParent, &t.ReportPending)
 	t.CreatedAt, _ = time.Parse(timeFmt, c)
 	t.UpdatedAt, _ = time.Parse(timeFmt, u)
 	t.SettledAt = parseTime(settled)

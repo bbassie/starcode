@@ -131,12 +131,12 @@ func TestListThreadsByState(t *testing.T) {
 func TestSpawnAndWait(t *testing.T) {
 	ctx := context.Background()
 	s, id := agentServer(t)
-	r := call(t, s, id, "spawn_thread", map[string]any{"prompt": "do the thing", "title": "helper", "wake_me": false})
+	r := call(t, s, id, "spawn_thread", map[string]any{"prompt": "do the thing", "title": "helper", "report": "none"})
 	if r.IsError {
 		t.Fatal(r.Text)
 	}
 	kids := s.App.Children(ctx, id)
-	if len(kids) != 1 || kids[0].Title != "helper" || kids[0].PermissionMode != "yolo" || kids[0].WakeParent {
+	if len(kids) != 1 || kids[0].Title != "helper" || kids[0].PermissionMode != "yolo" || kids[0].WakeParent || kids[0].ReportParent {
 		t.Fatalf("children %+v", kids)
 	}
 	child := kids[0].ID

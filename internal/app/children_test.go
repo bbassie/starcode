@@ -37,10 +37,10 @@ func childApp(t *testing.T) (*App, string) {
 	return a, id
 }
 
-func spawn(t *testing.T, a *App, parent string, wake bool) string {
+func spawn(t *testing.T, a *App, parent string, report string) string {
 	t.Helper()
 	ctx := context.Background()
-	id, err := a.SpawnThread(ctx, parent, "", "fake", "", wake)
+	id, err := a.SpawnThread(ctx, parent, "", "fake", "", report)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestChildrenWakeTheirParentOnce(t *testing.T) {
 	childBatch = 300 * time.Millisecond
 	ctx := context.Background()
 	a, parent := childApp(t)
-	c1, c2 := spawn(t, a, parent, true), spawn(t, a, parent, true)
+	c1, c2 := spawn(t, a, parent, ReportNow), spawn(t, a, parent, ReportNow)
 	for _, c := range []string{c1, c2} {
 		if err := a.SendPrompt(ctx, c, "work"); err != nil {
 			t.Fatal(err)
@@ -89,11 +89,53 @@ func TestChildrenWakeTheirParentOnce(t *testing.T) {
 	waitIdle(t, a.Store, parent)
 }
 
+// A child that reports with the next prompt does not start a turn on its
+// parent; its reply goes along with the next prompt the parent gets.
+func TestChildReportsWithTheNextPrompt(t *testing.T) {
+	defer func(d time.Duration) { childBatch = d }(childBatch)
+	childBatch = 50 * time.Millisecond
+	ctx := context.Background()
+	a, parent := childApp(t)
+	c := spawn(t, a, parent, ReportNext)
+	if err := a.SendPrompt(ctx, c, "work"); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, a.Store, c)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if th, _ := a.Store.Thread(ctx, c); th.ReportPending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the child's report was never marked")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(4 * childBatch)
+	if items, _ := a.Store.Items(ctx, parent); len(items) != 0 {
+		t.Fatalf("the parent was woken: %+v", items)
+	}
+	if err := a.SendPrompt(ctx, parent, "next thing"); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, a.Store, parent)
+	items, _ := a.Store.Items(ctx, parent)
+	if len(items) == 0 || items[0].Kind != domain.KindUser || items[0].Body != "next thing" {
+		t.Fatalf("items %+v", items)
+	}
+	if m := promptMeta(items[0]); len(m.Reports) != 1 || m.Reports[0] != c {
+		t.Fatalf("meta %+v", m)
+	}
+	if th, _ := a.Store.Thread(ctx, c); th.ReportPending {
+		t.Fatal("the report is still pending after it went out")
+	}
+}
+
 func TestSpawnDepth(t *testing.T) {
 	a, root := childApp(t)
-	c := spawn(t, a, root, false)
-	g := spawn(t, a, c, false)
-	if _, err := a.SpawnThread(context.Background(), g, "", "fake", "", false); err == nil {
+	c := spawn(t, a, root, ReportNone)
+	g := spawn(t, a, c, ReportNone)
+	if _, err := a.SpawnThread(context.Background(), g, "", "fake", "", ReportNone); err == nil {
 		t.Fatal("a fourth level was allowed")
 	}
 }

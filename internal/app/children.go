@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,10 +15,21 @@ import (
 )
 
 // Threads an agent spawns through the starcode tools are children of the
-// thread it runs in. A child that finishes sends its parent a prompt with
-// its last reply, unless the parent is in a wait_thread on it already
-// (which returns the reply itself). Children that finish close together
-// go out as one prompt, so a parent that fanned out work wakes once.
+// thread it runs in. A child that finishes reports its last reply to the
+// parent, unless the parent is in a wait_thread on it already (which
+// returns the reply itself). By default (ReportNext) the reply waits on
+// the child and goes along with the next prompt the parent gets, so the
+// parent does not run a turn of its own just to repeat it to the reader.
+// With ReportNow the child sends the parent a prompt instead; children
+// that finish close together go out as one prompt, so a parent that
+// fanned out work wakes once.
+
+// How a child reports to its parent (spawn_thread's report argument).
+const (
+	ReportNext = "next"
+	ReportNow  = "now"
+	ReportNone = "none"
+)
 
 // MaxDepth is how deep spawned threads may nest: a thread the reader
 // opened, its children, and theirs.
@@ -42,9 +54,10 @@ type kids struct {
 }
 
 // SpawnThread opens a thread for parent's agent on projectID and returns
-// its id; the caller sends the first prompt. It refuses past MaxDepth and
+// its id; the caller sends the first prompt. report is ReportNext,
+// ReportNow or ReportNone. It refuses past MaxDepth and
 // MaxRunningChildren.
-func (a *App) SpawnThread(ctx context.Context, parentID, projectID, agentName, model string, wake bool) (string, error) {
+func (a *App) SpawnThread(ctx context.Context, parentID, projectID, agentName, model, report string) (string, error) {
 	parent, err := a.Store.Thread(ctx, parentID)
 	if err != nil {
 		return "", err
@@ -78,7 +91,7 @@ func (a *App) SpawnThread(ctx context.Context, parentID, projectID, agentName, m
 		return "", fmt.Errorf("unknown agent %q", agentName)
 	}
 	id := newID()
-	_, err = a.Store.Append(ctx, id, domain.ThreadCreated{ID: id, ProjectID: projectID, Title: "new thread", Agent: agentName, Model: strings.TrimSpace(model), Parent: parentID, WakeParent: wake})
+	_, err = a.Store.Append(ctx, id, domain.ThreadCreated{ID: id, ProjectID: projectID, Title: "new thread", Agent: agentName, Model: strings.TrimSpace(model), Parent: parentID, WakeParent: report == ReportNow, ReportParent: report == ReportNext})
 	return id, err
 }
 
@@ -144,16 +157,25 @@ func (a *App) WaitThread(ctx context.Context, id string) (store.Thread, error) {
 }
 
 // childDone is the end of a turn on tid with nothing queued after it.
-// When tid is a child that wakes its parent, it joins the parent's batch.
+// When tid is a child that wakes its parent, it joins the parent's batch;
+// one that reports with the parent's next prompt is marked for it.
 func (a *App) childDone(tid string) {
 	ctx := context.Background()
 	t, err := a.Store.Thread(ctx, tid)
-	if err != nil || t.Parent == "" || !t.WakeParent {
+	if err != nil || t.Parent == "" || !(t.WakeParent || t.ReportParent) {
 		return
 	}
 	a.kids.mu.Lock()
 	defer a.kids.mu.Unlock()
 	if a.kids.waiting[tid] > 0 {
+		return
+	}
+	if t.ReportParent {
+		if !t.ReportPending {
+			if _, err := a.Store.Append(ctx, tid, domain.ThreadReportPending{}); err != nil {
+				a.Log.Warn("child report", "thread", tid, "err", err)
+			}
+		}
 		return
 	}
 	if a.kids.done == nil {
@@ -182,6 +204,18 @@ func (a *App) wakeParent(parent string) {
 		return
 	}
 	ctx := context.Background()
+	text := a.childReports(ctx, ids)
+	if text == "" {
+		return
+	}
+	if err := a.AutoPrompt(ctx, parent, text, "child"); err != nil {
+		a.Log.Warn("wake parent", "thread", parent, "err", err)
+	}
+}
+
+// childReports says for each child where it stands and what it last
+// replied, for its parent.
+func (a *App) childReports(ctx context.Context, ids []string) string {
 	var b strings.Builder
 	for _, id := range ids {
 		t, err := a.Store.Thread(ctx, id)
@@ -196,11 +230,43 @@ func (a *App) wakeParent(parent string) {
 			b.WriteString(" Its last reply:\n\n" + clipRunes(reply, 4000))
 		}
 	}
-	if b.Len() == 0 {
-		return
+	return b.String()
+}
+
+// pendingReports takes the replies of parent's ReportNext children that
+// finished since it last heard from them, as text to send ahead of its
+// next prompt, and their ids. The children's marks are cleared.
+func (a *App) pendingReports(ctx context.Context, parent string) (string, []string) {
+	var ids []string
+	for _, c := range a.Children(ctx, parent) {
+		if c.ReportPending {
+			ids = append(ids, c.ID)
+		}
 	}
-	if err := a.AutoPrompt(ctx, parent, b.String(), "child"); err != nil {
-		a.Log.Warn("wake parent", "thread", parent, "err", err)
+	if len(ids) == 0 {
+		return "", nil
+	}
+	// Oldest first, the order they finished in as near as it gets.
+	slices.Reverse(ids)
+	text := a.childReports(ctx, ids)
+	a.ClearReport(ctx, ids...)
+	if text == "" {
+		return "", nil
+	}
+	return "[starcode] Threads you spawned finished since your last turn. The user has seen their replies in those threads; use them as context and do not repeat them.\n\n" + text + "\n\n[starcode] The prompt follows.\n\n", ids
+}
+
+// ClearReport marks children's replies as had by their parent, which
+// learned of them some other way (wait_thread) or got them just now.
+func (a *App) ClearReport(ctx context.Context, ids ...string) {
+	for _, id := range ids {
+		t, err := a.Store.Thread(ctx, id)
+		if err != nil || !t.ReportPending {
+			continue
+		}
+		if _, err := a.Store.Append(ctx, id, domain.ThreadReported{}); err != nil {
+			a.Log.Warn("child report", "thread", id, "err", err)
+		}
 	}
 }
 

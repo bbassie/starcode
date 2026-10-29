@@ -17,6 +17,9 @@ type promptMeta struct {
 	Fresh   bool   `json:"fresh"`
 	// PR is the pull request a "prwatch" prompt reports on.
 	PR int `json:"pr"`
+	// Reports are the child threads whose replies went ahead of the
+	// prompt.
+	Reports []string `json:"reports"`
 }
 
 func promptMetaOf(it store.Item) promptMeta {

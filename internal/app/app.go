@@ -924,6 +924,8 @@ type PromptMeta struct {
 	Session string `json:"session,omitempty"`
 	Anchor  string `json:"anchor,omitempty"`
 	Auto    string `json:"auto,omitempty"`
+	// Reports are the children whose replies went ahead of the prompt.
+	Reports []string `json:"reports,omitempty"`
 	// Fresh is a prompt that began a conversation (no session yet): a
 	// rewind to it starts a fresh one again.
 	Fresh bool `json:"fresh,omitempty"`
@@ -951,6 +953,12 @@ func (a *App) startPromptMeta(ctx context.Context, l *live, t store.Thread, queu
 		}
 	} else {
 		meta["fresh"] = true
+	}
+	// Replies of children that finished since the last turn go ahead of
+	// the prompt; the transcript shows the prompt with a note of them.
+	reports, reported := a.pendingReports(ctx, t.ID)
+	if len(reported) > 0 {
+		meta["reports"] = reported
 	}
 	rawMeta, _ := json.Marshal(meta)
 	if len(meta) == 0 {
@@ -980,7 +988,7 @@ func (a *App) startPromptMeta(ctx context.Context, l *live, t store.Thread, queu
 			send = func(ctx context.Context, text string) error { return is.SendImages(ctx, text, images) }
 		}
 	}
-	if err := send(ctx, text); err != nil {
+	if err := send(ctx, reports+text); err != nil {
 		a.Store.Append(ctx, t.ID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
 		return err
 	}

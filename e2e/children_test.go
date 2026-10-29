@@ -16,7 +16,7 @@ func TestSpawnedThreadNestsUnderItsParent(t *testing.T) {
 	ctx := context.Background()
 	parent := e.thread()
 	e.turns(parent, "parent work")
-	child, err := e.app.SpawnThread(ctx, parent, "", "fake", "", false)
+	child, err := e.app.SpawnThread(ctx, parent, "", "fake", "", app.ReportNone)
 	if err != nil {
 		t.Fatal(err)
 	}

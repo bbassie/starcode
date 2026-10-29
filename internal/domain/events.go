@@ -74,10 +74,19 @@ type ThreadCreated struct {
 	// Parent is the thread whose agent spawned this one through the
 	// starcode tools, empty for a thread the reader opened. WakeParent
 	// sends the parent a prompt with this thread's reply whenever it
-	// finishes.
-	Parent     string `json:"parent,omitempty"`
-	WakeParent bool   `json:"wake_parent,omitempty"`
+	// finishes. ReportParent instead holds the reply until the next
+	// prompt the parent gets, and sends it along with that one.
+	Parent       string `json:"parent,omitempty"`
+	WakeParent   bool   `json:"wake_parent,omitempty"`
+	ReportParent bool   `json:"report_parent,omitempty"`
 }
+
+// ThreadReportPending marks a child with ReportParent that finished a turn
+// since its parent last heard from it; ThreadReported clears the mark when
+// its reply went to the parent.
+type ThreadReportPending struct{}
+
+type ThreadReported struct{}
 
 type ThreadRenamed struct {
 	Title string `json:"title"`
@@ -489,6 +498,10 @@ func TypeOf(p any) string {
 		return "thread.pr_watch_set"
 	case ThreadPRWatchStopped, *ThreadPRWatchStopped:
 		return "thread.pr_watch_stopped"
+	case ThreadReportPending, *ThreadReportPending:
+		return "thread.report_pending"
+	case ThreadReported, *ThreadReported:
+		return "thread.reported"
 	case ScheduleSet, *ScheduleSet:
 		return "schedule.set"
 	case ScheduleRan, *ScheduleRan:
@@ -583,6 +596,10 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &ThreadPRWatchSet{}
 	case "thread.pr_watch_stopped":
 		p = &ThreadPRWatchStopped{}
+	case "thread.report_pending":
+		p = &ThreadReportPending{}
+	case "thread.reported":
+		p = &ThreadReported{}
 	case "schedule.set":
 		p = &ScheduleSet{}
 	case "schedule.ran":

@@ -370,24 +370,37 @@ func init() {
 				}
 				return s.readThread(ctx, threadIDOf(a.ID), a.Last)
 			}),
-		tool("spawn_thread", "Start a new thread with its own agent to work on a task in parallel with you. It shows under your thread in the user's sidebar. By default starcode sends you a prompt with its reply when it finishes; or call wait_thread. The child works in the same checkout as you, so give parallel children separate files to touch.",
+		tool("spawn_thread", "Start a new thread with its own agent to work on a task in parallel with you. It shows under your thread in the user's sidebar. When it finishes, the user hears from it directly, and its reply comes to you with the next prompt you get, so you do not need to relay it. Set report to now only when you have more work to do with the result (a next step that depends on it); call wait_thread to block on it instead. The child works in the same checkout as you, so give parallel children separate files to touch.",
 			schema(map[string][2]string{
-				"prompt":  {"string", "the task, written for an agent that has not seen your conversation"},
-				"title":   {"string", "a short title for the sidebar"},
-				"agent":   {"string", "which agent runs it (see thread_info for the names); default: yours"},
-				"model":   {"string", "the model; default: yours when the agent is yours"},
-				"effort":  {"string", "reasoning effort; default: yours when the agent is yours"},
-				"wake_me": {"boolean", "send you its reply when it finishes (default true)"},
+				"prompt": {"string", "the task, written for an agent that has not seen your conversation"},
+				"title":  {"string", "a short title for the sidebar"},
+				"agent":  {"string", "which agent runs it (see thread_info for the names); default: yours"},
+				"model":  {"string", "the model; default: yours when the agent is yours"},
+				"effort": {"string", "reasoning effort; default: yours when the agent is yours"},
+				"report": {"string", "how its reply reaches you: next (default, along with your next prompt), now (a prompt of its own, which starts a turn), none"},
 			}, "prompt"),
 			func(s *Server, ctx context.Context, t store.Thread, args json.RawMessage) (string, error) {
 				a, err := decode[struct {
-					Prompt, Title, Agent, Model, Effort string
-					WakeMe                              *bool `json:"wake_me"`
+					Prompt, Title, Agent, Model, Effort, Report string
+					// WakeMe is the argument report replaced, for sessions
+					// that still have the old tool list.
+					WakeMe *bool `json:"wake_me"`
 				}](args)
 				if err != nil {
 					return "", err
 				}
-				return s.spawnThread(ctx, t, a.Prompt, a.Title, a.Agent, a.Model, a.Effort, a.WakeMe == nil || *a.WakeMe)
+				report := strings.ToLower(strings.TrimSpace(a.Report))
+				switch {
+				case report == "" && a.WakeMe != nil && *a.WakeMe:
+					report = app.ReportNow
+				case report == "" && a.WakeMe != nil:
+					report = app.ReportNone
+				case report == "":
+					report = app.ReportNext
+				case report != app.ReportNext && report != app.ReportNow && report != app.ReportNone:
+					return "", fmt.Errorf("report is next, now or none, not %q", a.Report)
+				}
+				return s.spawnThread(ctx, t, a.Prompt, a.Title, a.Agent, a.Model, a.Effort, report)
 			}),
 		tool("send_to_thread", "Send a prompt to one of the threads you spawned, or to the thread that spawned you. It is queued when that thread is busy.",
 			schema(map[string][2]string{
@@ -639,7 +652,7 @@ func (s *Server) readThread(ctx context.Context, id string, last int) (string, e
 // child never runs in a looser mode than its parent: on the parent's
 // agent it takes the parent's mode; on another agent it gets that agent's
 // mode that never asks only when the parent is in one too.
-func (s *Server) spawnThread(ctx context.Context, parent store.Thread, prompt, title, agentName, model, effort string, wake bool) (string, error) {
+func (s *Server) spawnThread(ctx context.Context, parent store.Thread, prompt, title, agentName, model, effort, report string) (string, error) {
 	if strings.TrimSpace(prompt) == "" {
 		return "", errors.New("prompt is empty")
 	}
@@ -664,7 +677,7 @@ func (s *Server) spawnThread(ctx context.Context, parent store.Thread, prompt, t
 			mode = views.DefaultMode(caps[agentName])
 		}
 	}
-	id, err := s.App.SpawnThread(ctx, parent.ID, parent.ProjectID, agentName, model, wake)
+	id, err := s.App.SpawnThread(ctx, parent.ID, parent.ProjectID, agentName, model, report)
 	if err != nil {
 		return "", err
 	}
@@ -682,7 +695,10 @@ func (s *Server) spawnThread(ctx context.Context, parent store.Thread, prompt, t
 		return "", err
 	}
 	msg := fmt.Sprintf("Started thread %s.", id)
-	if wake {
+	switch report {
+	case app.ReportNext:
+		msg += " The user hears from it when it finishes, and you get its reply with your next prompt. Finish your turn, or call wait_thread if you need the result now."
+	case app.ReportNow:
 		msg += " You get a prompt with its reply when it finishes; carry on meanwhile, or call wait_thread."
 	}
 	return msg, nil
@@ -708,6 +724,10 @@ func (s *Server) waitThread(ctx context.Context, id string, timeout int) (string
 		return fmt.Sprintf("Thread %s is still working after %ds. Call wait_thread again, or carry on.", id, timeout), nil
 	}
 	out := fmt.Sprintf("Thread %q (%s) %s.", t.Title, t.ID, s.App.ThreadState(t))
+	// Settled, so this reply is the one a pending report would carry.
+	if t.Status != domain.StatusRunning {
+		s.App.ClearReport(ctx, id)
+	}
 	if reply := s.App.LastReply(ctx, id); reply != "" {
 		out += " Its last reply:\n\n" + reply
 	}

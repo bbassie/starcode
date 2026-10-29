@@ -232,8 +232,9 @@ func (s *Server) pushThread(ctx context.Context, id, body string, input bool) {
 			return
 		}
 	}
-	// A child that reports to its parent is the parent's business, not
-	// the reader's, until it needs the reader.
+	// A child that wakes its parent is the parent's business, not the
+	// reader's, until it needs the reader. One that reports with the
+	// parent's next prompt tells the reader itself.
 	if !input && t.Parent != "" && t.WakeParent {
 		return
 	}
