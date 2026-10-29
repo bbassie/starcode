@@ -671,7 +671,7 @@ func (s *Server) prsPage1(ctx context.Context, read func(map[string]store.Projec
 }
 
 func (s *Server) prsPage(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "pull requests", views.Page{View: "prs", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "pull requests", views.Page{View: "prs", Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r)}).Render(r.Context(), w)
 }
 
 // refreshPRs rereads the search and every linked PR's state.

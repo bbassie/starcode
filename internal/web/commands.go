@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,7 +37,9 @@ type signals struct {
 	Model   string `json:"model"`
 	Project string `json:"project"`
 	Theme   string `json:"theme"`
-	Effort  string `json:"effort"`
+	// Appearance is the theme's half; see Server.appearanceMode.
+	Appearance string `json:"appearance"`
+	Effort     string `json:"effort"`
 	// Mode is nil when the page carried no mode signal at all (a "new
 	// thread" hotkey on the settings page, say), which is different from
 	// the agent's default mode picked on purpose.
@@ -653,16 +656,18 @@ func formAnswers(qs []domain.Question, form url.Values) map[string]string {
 	return out
 }
 
+// setTheme saves the theme and its appearance; the page has already
+// switched to them.
 func (s *Server) setTheme(w http.ResponseWriter, r *http.Request) {
 	sig := s.readSignals(r)
-	for _, t := range Themes {
-		if t == sig.Theme {
-			http.SetCookie(w, &http.Cookie{Name: "theme", Value: t, Path: "/", Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
-			s.ok(w, r)
-			return
-		}
+	if !slices.Contains(Themes, sig.Theme) || !slices.Contains(Appearances, sig.Appearance) {
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
-	w.WriteHeader(http.StatusBadRequest)
+	for name, v := range map[string]string{"theme": sig.Theme, "appearance": sig.Appearance} {
+		http.SetCookie(w, &http.Cookie{Name: name, Value: v, Path: "/", Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
+	}
+	s.ok(w, r)
 }
 
 func (s *Server) gitRefresh(w http.ResponseWriter, r *http.Request) {

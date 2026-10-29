@@ -35,7 +35,12 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-var Themes = []string{"dark", "black", "ocean", "amber", "green", "light"}
+// Themes are the palettes, each with a dark and a light half;
+// Appearances pick the half, "system" the one the device is in.
+var (
+	Themes      = []string{"starcode", "black", "ocean", "amber", "green"}
+	Appearances = []string{"system", "dark", "light"}
+)
 
 const tokenCookie = "starcode_token"
 
@@ -316,10 +321,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusUnauthorized)
-		views.Login(next, true, s.theme(r), s.CA != nil).Render(r.Context(), w)
+		views.Login(next, true, s.theme(r), s.appearanceMode(r), s.CA != nil).Render(r.Context(), w)
 		return
 	}
-	views.Login(next, false, s.theme(r), s.CA != nil).Render(r.Context(), w)
+	views.Login(next, false, s.theme(r), s.appearanceMode(r), s.CA != nil).Render(r.Context(), w)
 }
 
 // staticHash fingerprints the embedded assets. It feeds the ?v= parameter on
@@ -375,15 +380,27 @@ func (s *Server) read(pattern string, h http.HandlerFunc) {
 	s.mux.HandleFunc("QUERY "+pattern, h)
 }
 
+// theme is this browser's palette. The theme cookie once held "dark"
+// and "light" too, from before a theme had two halves; they read as
+// Starcode.
 func (s *Server) theme(r *http.Request) string {
-	if c, err := r.Cookie("theme"); err == nil {
-		for _, t := range Themes {
-			if c.Value == t {
-				return t
-			}
-		}
+	if c, err := r.Cookie("theme"); err == nil && slices.Contains(Themes, c.Value) {
+		return c.Value
 	}
 	return Themes[0]
+}
+
+// appearanceMode is this browser's half of the theme: dark, light, or
+// whichever the device is in. A browser that picked the old Light theme
+// and nothing since stays light.
+func (s *Server) appearanceMode(r *http.Request) string {
+	if c, err := r.Cookie("appearance"); err == nil && slices.Contains(Appearances, c.Value) {
+		return c.Value
+	}
+	if c, err := r.Cookie("theme"); err == nil && c.Value == "light" {
+		return "light"
+	}
+	return Appearances[0]
 }
 
 func (s *Server) agentNames() []string { return s.App.AgentNames() }
@@ -391,7 +408,7 @@ func (s *Server) agentNames() []string { return s.App.AgentNames() }
 // ---- pages ----
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "home", views.Page{View: "home", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), Draft: s.draft(r, "home")}).Render(r.Context(), w)
+	s.page(r.Context(), "home", views.Page{View: "home", Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), Draft: s.draft(r, "home")}).Render(r.Context(), w)
 }
 
 // draft is the saved composer text for key, for the page's initial
@@ -405,11 +422,11 @@ func (s *Server) draft(r *http.Request, key string) string {
 }
 
 func (s *Server) appearance(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "appearance", views.Page{View: "appearance", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "appearance", views.Page{View: "appearance", Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r)}).Render(r.Context(), w)
 }
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "settings", views.Page{View: "settings", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), PairURL: s.pairURL(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "settings", views.Page{View: "settings", Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), PairURL: s.pairURL(r)}).Render(r.Context(), w)
 }
 
 // pairURL is the link a phone can open to sign in: the address this
@@ -449,7 +466,7 @@ func (s *Server) pairURL(r *http.Request) string {
 }
 
 func (s *Server) keysPage(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "keys", views.Page{View: "keys", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "keys", views.Page{View: "keys", Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r)}).Render(r.Context(), w)
 }
 
 func (s *Server) keysData() views.KeysPageData {
@@ -505,7 +522,7 @@ func (s *Server) resetKeys(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	days, metric := usageParams(r)
-	s.page(r.Context(), "usage", views.Page{View: "usage", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), UsageDays: days, UsageMetric: metric}).Render(r.Context(), w)
+	s.page(r.Context(), "usage", views.Page{View: "usage", Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), UsageDays: days, UsageMetric: metric}).Render(r.Context(), w)
 }
 
 func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
@@ -516,7 +533,7 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.App.MarkSeen(r.Context(), id)
-	s.page(r.Context(), views.TabTitle(t), views.Page{View: "thread", ThreadID: id, Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), Draft: s.draft(r, id)}).Render(r.Context(), w)
+	s.page(r.Context(), views.TabTitle(t), views.Page{View: "thread", ThreadID: id, Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), Draft: s.draft(r, id)}).Render(r.Context(), w)
 }
 
 // ---- helpers shared by events and commands ----

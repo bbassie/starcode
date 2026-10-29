@@ -184,10 +184,10 @@
   panel.querySelector('.term-split').addEventListener('click', split);
   panel.querySelector('.term-restart').addEventListener('click', () => active && restart(active));
   panel.querySelector('.term-close-pane').addEventListener('click', () => active && closePane(active));
-  // Datastar mirrors the theme signal onto <body data-theme>.
+  // applyTheme sets the theme and its half on <html>.
   new MutationObserver(() => {
     for (const p of panes.values()) p.term.options.theme = theme();
-  }).observe(document.body, { attributeFilter: ['data-theme'] });
+  }).observe(document.documentElement, { attributeFilter: ['data-theme', 'data-mode'] });
 
   // The panel starts hidden; boot the terminals the first time it gets
   // real dimensions, refit whenever they change, and focus on each open.

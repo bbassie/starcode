@@ -124,6 +124,9 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 	for _, th := range Themes {
 		out = append(out, views.Command{Label: "Theme: " + views.ThemeName(th), Icon: "palette", Action: "$theme = " + jsq(th) + "; @post('/api/theme')"})
 	}
+	for _, a := range Appearances {
+		out = append(out, views.Command{Label: "Appearance: " + views.AppearanceName(a), Icon: "sun-moon", Action: "$appearance = " + jsq(a) + "; @post('/api/theme')"})
+	}
 	return out
 }
 

@@ -258,7 +258,7 @@ func (s *Server) projectsPage(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.App.Store.Project(r.Context(), sel); err != nil {
 		sel = ""
 	}
-	s.page(r.Context(), "projects", views.Page{View: "projects", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), ProjectSel: sel}).Render(r.Context(), w)
+	s.page(r.Context(), "projects", views.Page{View: "projects", Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), ProjectSel: sel}).Render(r.Context(), w)
 }
 
 // projectsData is Settings > Projects for project sel, or the first.

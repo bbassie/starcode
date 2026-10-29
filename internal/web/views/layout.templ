@@ -15,6 +15,8 @@ type Page struct {
 	View        string // "home" | "thread" | "prs" | "settings" | "appearance" | "usage" | "providers" | "keys"
 	ThreadID    string
 	Theme       string
+	// Appearance is the theme's half: "system", "dark" or "light".
+	Appearance  string
 	UsageDays   int
 	UsageMetric string
 	ProviderSel string
@@ -115,15 +117,15 @@ type Parts struct {
 
 templ Layout(title string, p Page, parts Parts) {
 	<!DOCTYPE html>
-	<html lang="en" data-theme={ p.Theme }>
+	<html lang="en" data-theme={ p.Theme } data-mode={ p.Appearance }>
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"/>
 			<meta name="color-scheme" content="dark light"/>
 			// Installable from a phone's "add to home screen": the manifest
-			// asks for a standalone window and the theme-color script below
-			// keeps the system bars in the current theme's background.
-			<meta name="theme-color" content="#17212b"/>
+			// asks for a standalone window and ThemeBoot keeps the system
+			// bars in the current theme's background.
+			<meta name="theme-color" content="#121212"/>
 			<meta name="mobile-web-app-capable" content="yes"/>
 			<meta name="apple-mobile-web-app-capable" content="yes"/>
 			// "default", not black-translucent: the page then starts below
@@ -139,6 +141,7 @@ templ Layout(title string, p Page, parts Parts) {
 			// the icon is a shrunken screenshot of the page.
 			<link rel="apple-touch-icon" href={ asset("/static/apple-touch-icon.png") }/>
 			<link rel="stylesheet" href={ asset("/static/app.css") }/>
+			@ThemeBoot()
 			// pageID names this page load for presence: the server pushes
 			// nothing about the thread a page in view shows. presence
 			// reports a change of visibility; the stream carries the state
@@ -163,8 +166,7 @@ templ Layout(title string, p Page, parts Parts) {
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', gfind: '', pr: 0, prsel: 0, prproject: '', prq: '', prkey: '', prstate: 'open', prinv: '', prauthor: '', prlabel: '', prdraft: '', prreview: '', prchecks: '', prfproj: '', prsort: 'ready', prfmenu: '', prv: 0, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, qedit: '', qbody: '', tid: %q, pid: pageID(), vis: !document.hidden, _hb: 0}`, p.View == "thread", p.Theme, draftJSON(p.Draft), p.ThreadID) }
-			data-attr:data-theme="$theme"
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, appearance: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', gfind: '', pr: 0, prsel: 0, prproject: '', prq: '', prkey: '', prstate: 'open', prinv: '', prauthor: '', prlabel: '', prdraft: '', prreview: '', prchecks: '', prfproj: '', prsort: 'ready', prfmenu: '', prv: 0, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, qedit: '', qbody: '', tid: %q, pid: pageID(), vis: !document.hidden, _hb: 0}`, p.View == "thread", p.Theme, p.Appearance, draftJSON(p.Draft), p.ThreadID) }
 			data-class:nav-collapsed="$navhide"
 			data-class:panel-wide="$wide"
 			data-init={ streamOpen(p) }
@@ -175,6 +177,10 @@ templ Layout(title string, p Page, parts Parts) {
 			// The icon sprite first, so every <use> below finds its symbol
 			// as the page paints.
 			@templ.Raw(SpriteInline())
+			// Applies a picked theme or appearance. An element of its own:
+			// body has its data-effect already, and a second attribute of a
+			// name is dropped.
+			<div hidden data-effect="applyTheme($theme, $appearance)"></div>
 			<div class="shell">
 				if parts.Sidebar != nil {
 					@parts.Sidebar
@@ -783,19 +789,6 @@ templ Layout(title string, p Page, parts Parts) {
 						if (tick % 30 === 0) for (const el of document.querySelectorAll('[data-ago]')) el.textContent = ago(Date.parse(el.dataset.ago));
 						if (tick % 4 === 0) for (const el of document.querySelectorAll('[data-busy-word]')) el.textContent = words[Math.floor(Math.random() * words.length)] + '…';
 					}, 1000);
-				})();
-			</script>
-			// theme-color follows the theme: the phone's status and address
-			// bars take the page background instead of a fixed colour.
-			<script>
-				(() => {
-					const meta = document.querySelector('meta[name="theme-color"]');
-					const apply = () => {
-						const bg = getComputedStyle(document.body).getPropertyValue('--bg').trim();
-						if (bg) meta.content = bg;
-					};
-					apply();
-					new MutationObserver(apply).observe(document.body, { attributeFilter: ['data-theme'] });
 				})();
 			</script>
 			// VS Code. vscodeOpen hands a folder of this machine to VS Code on
@@ -1704,4 +1697,30 @@ templ Layout(title string, p Page, parts Parts) {
 
 templ PageTitle(title string) {
 	<title id="page-title">{ title } · starcode</title>
+}
+
+// ThemeBoot sets the theme's half on <html> before the body paints:
+// data-mode is the appearance as picked, or the device's when it follows
+// the system, and changes with the device. applyTheme is also how the
+// page switches theme, and it keeps theme-color on the new background,
+// which colours the phone's status bar. It sits after the stylesheet,
+// which the browser loads before running it, so --bg is the theme's.
+templ ThemeBoot() {
+	<script>
+		(() => {
+			const html = document.documentElement;
+			const light = matchMedia('(prefers-color-scheme: light)');
+			let theme = html.dataset.theme, appearance = html.dataset.mode;
+			window.applyTheme = (t, a) => {
+				theme = t || theme;
+				appearance = a || appearance;
+				html.dataset.theme = theme;
+				html.dataset.mode = appearance === 'system' ? (light.matches ? 'light' : 'dark') : appearance;
+				const bg = getComputedStyle(html).getPropertyValue('--bg').trim();
+				if (bg) for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = bg;
+			};
+			applyTheme();
+			light.addEventListener('change', () => applyTheme());
+		})();
+	</script>
 }

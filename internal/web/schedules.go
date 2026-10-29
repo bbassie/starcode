@@ -24,7 +24,7 @@ func (s *Server) scheduleRoutes() {
 }
 
 func (s *Server) schedulesPage(w http.ResponseWriter, r *http.Request) {
-	s.page(r.Context(), "schedules", views.Page{View: "schedules", Theme: s.theme(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r)}).Render(r.Context(), w)
+	s.page(r.Context(), "schedules", views.Page{View: "schedules", Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r)}).Render(r.Context(), w)
 }
 
 func (s *Server) schedulesData(ctx context.Context, side views.SidebarData) views.SchedulesData {

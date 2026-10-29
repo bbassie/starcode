@@ -78,5 +78,5 @@
 			d.remove();
 		}
 		scan();
-	}).observe(document.body, { attributeFilter: ['data-theme'] });
+	}).observe(document.documentElement, { attributeFilter: ['data-theme', 'data-mode'] });
 })();

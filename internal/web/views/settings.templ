@@ -499,6 +499,9 @@ func signalsJSON(agentName, model, effort, mode string, extra string) string {
 type SettingsPageData struct {
 	Theme  string
 	Themes []string
+	// Appearance is the theme's half, one of Appearances.
+	Appearance  string
+	Appearances []string
 	// PairURL is a link that signs a phone in (the address with the
 	// token in the query) and PairQR the same as a PNG data URL; both
 	// empty when the instance has no token.
@@ -533,10 +536,47 @@ func themeName(theme string) string {
 		return "Dusk"
 	case "green":
 		return "Forest"
+	default:
+		return "Starcode"
+	}
+}
+
+// themeNote is the line under a theme's name in the picker.
+func themeNote(theme string) string {
+	switch theme {
+	case "black":
+		return "Near-black, light as Starcode"
+	case "ocean":
+		return "Blue-grey, after T3 Code"
+	case "amber":
+		return "Warm brown and amber"
+	case "green":
+		return "Deep green"
+	default:
+		return "Neutral grey"
+	}
+}
+
+// AppearanceName is the display name of an appearance id.
+func AppearanceName(a string) string {
+	switch a {
+	case "dark":
+		return "Dark"
 	case "light":
 		return "Light"
 	default:
-		return "Dark"
+		return "System"
+	}
+}
+
+func appearanceIcon(a string) string {
+	switch a {
+	case "dark":
+		return "moon"
+	case "light":
+		return "sun"
+	default:
+		return "monitor"
 	}
 }
 
@@ -689,25 +729,31 @@ templ AppearancePage(d SettingsPageData) {
 						<div class="settings-card">
 							<div class="setting-row">
 								<div>
-									<label for="theme-select">Theme</label>
-									<p class="dim">Changes apply immediately and are saved for your next visit.</p>
+									<label>Appearance</label>
+									<p class="dim">Dark or light, or whichever this device is in.</p>
 								</div>
-								<select id="theme-select" class="in theme-select" data-bind:theme data-on:change="@post('/api/theme')">
-									for _, theme := range d.Themes {
-										<option value={ theme } selected?={ theme == d.Theme }>{ themeName(theme) }</option>
+								<div class="segmented" role="radiogroup" aria-label="Appearance">
+									for _, a := range d.Appearances {
+										<button type="button" role="radio" class={ templ.KV("current", a == d.Appearance) } data-class:current={ "$appearance === " + jsq(a) } data-attr:aria-checked={ "String($appearance === " + jsq(a) + ")" } aria-checked={ fmt.Sprint(a == d.Appearance) } data-on:click={ "$appearance = " + jsq(a) + "; @post('/api/theme')" }>@Icon(appearanceIcon(a), "ui-icon") <span>{ AppearanceName(a) }</span></button>
 									}
-								</select>
-							</div>
-							<div class="appearance-preview" aria-hidden="true">
-								<div class="appearance-preview-side">
-									<span class="preview-dot"></span>
-									<span></span><span></span><span></span>
 								</div>
-								<div class="appearance-preview-main">
-									<div class="preview-line long"></div>
-									<div class="preview-line"></div>
-									<div class="preview-message"></div>
-									<div class="preview-input"><span></span><i></i></div>
+							</div>
+							<div class="setting-row theme-row">
+								<div>
+									<label>Theme</label>
+									<p class="dim">Each theme has a dark and a light half. Saved for this browser.</p>
+								</div>
+								<div class="theme-cards" role="radiogroup" aria-label="Theme">
+									for _, theme := range d.Themes {
+										<button type="button" role="radio" class={ "theme-card", templ.KV("current", theme == d.Theme) } data-class:current={ "$theme === " + jsq(theme) } data-attr:aria-checked={ "String($theme === " + jsq(theme) + ")" } aria-checked={ fmt.Sprint(theme == d.Theme) } data-on:click={ "$theme = " + jsq(theme) + "; @post('/api/theme')" }>
+											<span class="theme-swatch" aria-hidden="true">
+												@themeHalf(theme, "dark")
+												@themeHalf(theme, "light")
+											</span>
+											<span class="theme-card-name">{ themeName(theme) }</span>
+											<span class="theme-card-note dim">{ themeNote(theme) }</span>
+										</button>
+									}
 								</div>
 							</div>
 						</div>
@@ -760,4 +806,15 @@ func settingsSection(view string) string {
 		return view
 	}
 	return ""
+}
+
+// themeHalf is a small picture of one half of a theme: the sidebar, a
+// line of text, a prompt bubble and the composer with its send button.
+// It carries the theme's own data-theme and data-mode, so the colour
+// blocks in app.css paint it as they paint the page.
+templ themeHalf(theme, mode string) {
+	<span class="theme-half" data-theme={ theme } data-mode={ mode }>
+		<span class="th-side"><i></i><i></i><i></i></span>
+		<span class="th-main"><i class="th-text"></i><i class="th-dim"></i><i class="th-bubble"></i><i class="th-input"><b></b></i></span>
+	</span>
 }

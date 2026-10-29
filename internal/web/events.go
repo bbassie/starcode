@@ -30,7 +30,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	usageDays, usageMetric := usageParams(r)
 	provSel, provTab := providerParams(r)
 	projSel := r.URL.Query().Get("p")
-	theme := s.theme(r)
+	theme, appearance := s.theme(r), s.appearanceMode(r)
 	sidebar := s.sidebarMode(r)
 	dense := s.denseMode(r)
 	ctx := r.Context()
@@ -72,7 +72,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		sse.ExecuteScript("location.reload()")
 		return
 	}
-	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, sidebar: sidebar, dense: dense, rowDirty: map[string]bool{}, projSel: projSel, usageDays: usageDays, usageMetric: usageMetric, provSel: provSel, provTab: provTab, dirty: map[string]bool{}, tails: map[string]*tail{}}
+	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, appearance: appearance, sidebar: sidebar, dense: dense, rowDirty: map[string]bool{}, projSel: projSel, usageDays: usageDays, usageMetric: usageMetric, provSel: provSel, provTab: provTab, dirty: map[string]bool{}, tails: map[string]*tail{}}
 	c.gitPath, c.gitEdit, c.panelTab, c.full = sig.GitPath, sig.GitEdit, sig.PanelTab, sig.Full
 	c.mainV, c.sideV = sig.MainV, sig.SideV
 	c.pairURL = s.pairURL(r)
@@ -173,13 +173,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 type conn struct {
-	s        *Server
-	sse      *datastar.ServerSentEventGenerator
-	view     string
-	threadID string
-	theme    string
-	sidebar  string
-	dense    bool
+	s          *Server
+	sse        *datastar.ServerSentEventGenerator
+	view       string
+	threadID   string
+	theme      string
+	appearance string
+	sidebar    string
+	dense      bool
 	// rowDirty names the threads whose sidebar row changed since the last
 	// flush; sideFull says something else did (projects, seen marks, PR
 	// states). With only rows dirty and the order as it was, the rows are
@@ -353,7 +354,7 @@ func hashHTML(s string) string {
 }
 
 func (c *conn) page() views.Page {
-	return views.Page{View: c.view, ThreadID: c.threadID, Theme: c.theme, UsageDays: c.usageDays, UsageMetric: c.usageMetric, ProviderSel: c.provSel, ProviderTab: c.provTab, ProjectSel: c.projSel, GitPath: c.gitPath, GitEdit: c.gitEdit, PanelTab: c.panelTab, Full: c.full, PairURL: c.pairURL, Sidebar: c.sidebar, Dense: c.dense}
+	return views.Page{View: c.view, ThreadID: c.threadID, Theme: c.theme, Appearance: c.appearance, UsageDays: c.usageDays, UsageMetric: c.usageMetric, ProviderSel: c.provSel, ProviderTab: c.provTab, ProjectSel: c.projSel, GitPath: c.gitPath, GitEdit: c.gitEdit, PanelTab: c.panelTab, Full: c.full, PairURL: c.pairURL, Sidebar: c.sidebar, Dense: c.dense}
 }
 
 // renderHome redraws the projects overview. The composer in it keeps what

@@ -107,4 +107,4 @@ e2e                         browser tests with Rod (build tag e2e)
 
 Every user action is a `POST /api/...` and every page has one SSE stream. New state goes through `internal/app` commands and domain events, never from a handler into the store.
 
-Themes are blocks of CSS custom properties in `internal/web/static/app.css`; add a name to `web.Themes` in `internal/web/server.go` to make one selectable. Icons are [Lucide](https://lucide.dev), inlined as one SVG sprite.
+A theme has a dark and a light half, each a block of CSS custom properties in `internal/web/static/app.css` selected by `data-theme` and `data-mode` on `<html>`. The appearance setting (system, dark or light) picks the half, and `ThemeBoot` in `layout.templ` resolves "system" before the first paint. Add a name to `web.Themes` in `internal/web/server.go` to make a theme selectable; a theme without a light block uses Starcode's. Icons are [Lucide](https://lucide.dev), inlined as one SVG sprite.
