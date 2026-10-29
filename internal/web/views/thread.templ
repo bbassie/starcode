@@ -116,7 +116,104 @@ func GroupItems(items []store.Item) []Block {
 	return out
 }
 
-// WorkState summarizes a work block for its header.
+// first is the block's first item.
+func (b Block) first() store.Item {
+	if b.Item != nil {
+		return *b.Item
+	}
+	return b.Work[0]
+}
+
+// Turn is a prompt and what the agent did with it: the rows from a user
+// message up to the next one. Rows before the first prompt (a branch
+// notice, or the start of a cut transcript) make a turn of their own.
+type Turn struct {
+	ID   string // the first item's id
+	Rows []Block
+}
+
+// GroupTurns splits items into turns of blocks (see GroupItems).
+func GroupTurns(items []store.Item) []Turn {
+	var out []Turn
+	for _, b := range GroupItems(items) {
+		if len(out) == 0 || (b.Item != nil && b.Item.Kind == domain.KindUser) {
+			out = append(out, Turn{ID: b.first().ID})
+		}
+		out[len(out)-1].Rows = append(out[len(out)-1].Rows, b)
+	}
+	return out
+}
+
+// PageTurn is the id of the last turn a thread page draws: the page
+// shows the tail of items (SplitTail) unless full.
+func PageTurn(items []store.Item, full bool) string {
+	if !full {
+		_, items = SplitTail(items)
+	}
+	turns := GroupTurns(items)
+	if len(turns) == 0 {
+		return ""
+	}
+	return turns[len(turns)-1].ID
+}
+
+// Fold splits a turn for display into the prompt, the rows folded under
+// one "Worked for" header, and the rest in order. A turn folds once it
+// ended on its own with a reply: what came between the prompt and the
+// last reply goes under the header, along with the work after that
+// reply, so the prompt, the reply and the result stay in view. A turn
+// still running, stopped or failed is shown whole, to see where it got
+// to, and so is one with a single row to fold, which reads as well on
+// its own.
+func (t Turn) Fold() (head, folded, rest []Block) {
+	rows := t.Rows
+	start := 0
+	if rows[0].Item != nil && rows[0].Item.Kind == domain.KindUser {
+		start = 1
+	}
+	head, rest = rows[:start], rows[start:]
+	end := len(rows) - 1
+	if res := rows[end].Item; res == nil || res.Kind != domain.KindResult || res.Status != domain.ItemDone {
+		return head, nil, rest
+	}
+	final := -1
+	for i := end - 1; i >= start; i-- {
+		if it := rows[i].Item; it != nil && it.Kind == domain.KindAssistant && ParentOf(*it) == "" {
+			final = i
+			break
+		}
+	}
+	if final < 0 {
+		return head, nil, rest
+	}
+	folded = append(folded, rows[start:final]...)
+	after := []Block{rows[final]}
+	for _, b := range rows[final+1 : end] {
+		if b.Item == nil {
+			folded = append(folded, b)
+		} else {
+			after = append(after, b)
+		}
+	}
+	if len(folded) < 2 {
+		return head, nil, rest
+	}
+	return head, folded, append(after, rows[end])
+}
+
+// blockItems is the top-level items of blocks, in order.
+func blockItems(bs []Block) []store.Item {
+	var out []store.Item
+	for _, b := range bs {
+		if b.Item != nil {
+			out = append(out, *b.Item)
+		} else {
+			out = append(out, b.Work...)
+		}
+	}
+	return out
+}
+
 // pendingApprovals is the subset that still wants an answer.
 func pendingApprovals(aps []store.Approval) []store.Approval {
 	var out []store.Approval
@@ -191,9 +288,13 @@ templ Thread(d ThreadData) {
 					@LoadEarlier(d.Thread.ID, len(head), tail[0].Seq)
 				}
 				@Blocks(tail, d.Approvals)
-				for _, a := range pendingApprovals(d.Approvals) {
-					@Approval(a)
-				}
+				// The cards waiting for an answer stay last; a new turn
+				// goes in before them.
+				<div id="approvals" class="approvals">
+					for _, a := range pendingApprovals(d.Approvals) {
+						@Approval(a)
+					}
+				</div>
 			</div>
 		</div>
 		@BusyBar(d)
@@ -206,16 +307,57 @@ templ Thread(d ThreadData) {
 	</main>
 }
 
-// Blocks renders items as transcript rows, work runs folded.
+// Blocks renders items as transcript rows, turn by turn.
 templ Blocks(items []store.Item, aps []store.Approval) {
 	{{ _, kids := Nest(items) }}
-	for _, b := range GroupItems(items) {
+	for _, t := range GroupTurns(items) {
+		@TurnView(t, aps, kids)
+	}
+}
+
+// TurnView is one turn, folded when it is finished (see Turn.Fold). The
+// stream appends to it while the turn runs and redraws it once at the
+// end, when it folds.
+templ TurnView(t Turn, aps []store.Approval, kids map[string][]store.Item) {
+	{{ head, folded, rest := t.Fold() }}
+	<div id={ "turn-" + t.ID } class="turn">
+		@rows(head, aps, kids)
+		if len(folded) > 0 {
+			@TurnFold(t.ID, folded, aps, kids)
+		}
+		@rows(rest, aps, kids)
+	</div>
+}
+
+templ rows(bs []Block, aps []store.Approval, kids map[string][]store.Item) {
+	for _, b := range bs {
 		if b.Item != nil {
 			@ItemWith(*b.Item, kids)
 		} else {
 			@Work(b.Work, aps, kids)
 		}
 	}
+}
+
+// TurnFold holds what a finished turn did before its reply, under one
+// header with the time it took and what it did.
+templ TurnFold(id string, bs []Block, aps []store.Approval, kids map[string][]store.Item) {
+	{{ items := blockItems(bs) }}
+	{{ _, steps, dur := WorkState(items, aps) }}
+	<details id={ "fold-" + id } class="work turn-fold" data-preserve-attr="open">
+		<summary class="work-head">
+			<span class="work-took">Worked for { elapsedText(dur) }</span>
+			if sum := workSummary(ctx, items); sum != "" {
+				<span class="dim ellipsis work-sum">· { sum }</span>
+			} else if steps > 0 {
+				<span class="dim">· { fmt.Sprintf("%d %s", steps, plural(steps, "step", "steps")) }</span>
+			}
+			<span class="dim tiny-text row-ts" data-ts={ items[0].CreatedAt.UTC().Format(time.RFC3339) }></span>
+		</summary>
+		<div class="work-body">
+			@rows(bs, aps, kids)
+		</div>
+	</details>
 }
 
 // LoadEarlier is the button at the top of a cut transcript. The fetch
@@ -524,10 +666,23 @@ func statusLabel(s string) string {
 	return s
 }
 
-// Work is a folded run of agent activity. It stays folded while it runs
-// too: the header says what it is doing (see WorkSummary), and a tap
-// opens it, which morphs keep.
+// Work is a run of agent activity. Two steps or more fold under a header,
+// folded while they run too: the header says what the agent is doing
+// (see WorkSummary), and a tap opens it, which morphs keep.
 templ Work(items []store.Item, aps []store.Approval, kids map[string][]store.Item) {
+	if len(items) == 1 {
+		// One step reads as itself; a header over it would say the same.
+		// The wrapper keeps the block's id for the stream, which turns it
+		// into a folded block when a second step lands.
+		<div id={ "work-" + items[0].ID } class="work-one">
+			@ItemWith(items[0], kids)
+		</div>
+	} else {
+		@workFolded(items, aps, kids)
+	}
+}
+
+templ workFolded(items []store.Item, aps []store.Approval, kids map[string][]store.Item) {
 	{{ running, _, _ := WorkState(items, aps) }}
 	<details id={ "work-" + items[0].ID } class={ "work", templ.KV("running", running) } data-preserve-attr="open">
 		@WorkSummary(items, aps)

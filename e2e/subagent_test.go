@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ func TestStopSubagent(t *testing.T) {
 		if it.Kind == domain.KindTool && it.ToolName == "Task" {
 			agentSt = it.Status
 		}
-		if it.Kind == domain.KindAssistant && it.Body != "" {
+		if it.Kind == domain.KindAssistant && strings.HasSuffix(it.ID, "-m2") && it.Body != "" {
 			reply = true
 		}
 	}
@@ -45,5 +46,6 @@ func TestStopSubagent(t *testing.T) {
 	if th, _ := e.store.Thread(ctx, id); th.Status != domain.StatusIdle || !reply {
 		t.Errorf("turn did not run on after the stop: status %q, reply %v", th.Status, reply)
 	}
-	wait(p, `() => !document.querySelector('.agent-stop')`)
+	// The slow turn may have used up the page's deadline.
+	wait(p.CancelTimeout().Timeout(timeout), `() => !document.querySelector('.agent-stop')`)
 }

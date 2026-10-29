@@ -1,6 +1,7 @@
 // Package fake is a scripted agent used for UI development and tests. Every
-// Send replays the same little scenario: some thinking, a tool call that
-// needs approval (except in the yolo mode), streamed prose, a result. A
+// Send replays the same little scenario: some thinking, a line of
+// narration, a tool call that needs approval (except in the yolo mode),
+// streamed prose, a result. A
 // prompt with "ask me" in it first puts a question to the human, the way
 // Claude Code's AskUserQuestion does, in every mode.
 package fake
@@ -182,6 +183,16 @@ func (s *session) run(turnID, prompt string) {
 	msg := turnID + "-m1"
 	for _, w := range strings.Fields("Let me think about " + firstWords(prompt, 6) + " for a moment before I touch anything.") {
 		s.emit(agent.Event{Kind: agent.KindThinkingDelta, ThinkingDelta: &agent.ThinkingDelta{MessageID: msg, Text: w + " "}})
+		if !s.sleep() {
+			finish("interrupted")
+			return
+		}
+	}
+
+	// A line of narration before the work, as Claude writes; with it the
+	// finished turn has something to fold besides its last reply.
+	for _, w := range strings.SplitAfter("Looking around first.", " ") {
+		s.emit(agent.Event{Kind: agent.KindTextDelta, TextDelta: &agent.TextDelta{MessageID: turnID + "-m0", Text: w}})
 		if !s.sleep() {
 			finish("interrupted")
 			return

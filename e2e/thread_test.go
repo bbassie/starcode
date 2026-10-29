@@ -167,7 +167,9 @@ func TestQuoteAndBigPaste(t *testing.T) {
 	id := e.thread()
 	e.turns(id, "hello")
 	p := e.page("/threads/"+id, false)
-	p.MustElement(".item.assistant").MustEval(`() => {
+	// The reply in view: the turn's last; the narration before it is
+	// folded away.
+	p.MustElement(".turn > .item.assistant").MustEval(`() => {
 		const r = document.createRange();
 		r.selectNodeContents(this.querySelector('p') || this);
 		getSelection().removeAllRanges();
@@ -247,21 +249,39 @@ func TestWorkHeader(t *testing.T) {
 	e := newEnv(t)
 	id := e.thread()
 	p := e.page("/threads/"+id, false)
+	// The block runs for a moment only; an observer sees every state of
+	// it, where polling could miss it.
+	p.MustEval(`() => {
+		window.sawLive = false; window.sawOpen = false;
+		new MutationObserver(() => {
+			const w = document.querySelector('details.work.running');
+			if (w && w.querySelector('.work-live')) sawLive = true;
+			if (w && w.open) sawOpen = true;
+		}).observe(document.body, { subtree: true, childList: true, attributes: true });
+	}`)
 	p.MustElement("form.composer .prompt").MustInput("look around")
 	p.KeyActions().Type(input.Enter).MustDo()
-	// While the turn runs the block stays folded and names the step.
-	wait(p, `() => !!document.querySelector('details.work.running .work-live')`)
-	if p.MustEval(`() => document.querySelector('details.work.running').open`).Bool() {
+	e.waitIdle(id)
+	// While the turn ran the block stayed folded and named the step.
+	if !p.MustEval(`() => sawLive`).Bool() {
+		t.Error("no running work block named its step")
+	}
+	if p.MustEval(`() => sawOpen`).Bool() {
 		t.Error("a running work block opened on its own")
 	}
-	e.waitIdle(id)
 	wait(p, `() => !document.querySelector('details.work.running')`)
-	head := p.MustElement("details.work > summary").MustText()
+	// The finished turn folds; inside are the steps' own blocks.
+	head := p.MustElement("details.turn-fold > summary").MustText()
 	if !strings.Contains(head, "Worked for") || !strings.Contains(head, "ran 1 command") {
-		t.Errorf("work header = %q", head)
+		t.Errorf("turn header = %q", head)
+	}
+	click(p.MustElement("details.turn-fold > summary"))
+	// A single step is a row of its own, with no header over it.
+	if n := len(p.MustElements(".turn-fold .work-one > details.item.thinking")); n != 1 {
+		t.Errorf("single thinking rows = %d", n)
 	}
 	// Rows are a kind icon and words, not the tool's name.
-	click(p.MustElement("details.work > summary"))
+	click(p.MustElement(".turn-fold details.work > summary"))
 	row := p.MustElement("details.item.tool.k-command > summary").MustText()
 	if strings.HasPrefix(strings.TrimSpace(row), "Bash") {
 		t.Errorf("command row = %q", row)
@@ -282,7 +302,8 @@ func TestTurnFilesCard(t *testing.T) {
 		t.Errorf("card path = %q", path)
 	}
 	// The edit itself reads as a diff.
-	click(p.MustElement("details.work > summary"))
+	click(p.MustElement("details.turn-fold > summary"))
+	click(p.MustElement(".turn-fold details.work > summary"))
 	click(p.MustElement("details.item.tool.k-edit > summary"))
 	if n := len(p.MustElements("details.item.tool.k-edit .tdiff .dl.add")); n != 2 {
 		t.Errorf("added lines in the diff = %d", n)

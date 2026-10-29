@@ -544,7 +544,7 @@ button.status-pill { cursor: pointer; font-family: inherit; color: inherit; }
 .turn, .approvals, .work-one { display: contents; }
 /* A finished turn's fold holds messages and blocks of its own, so its
    body is spaced like the transcript. */
-.turn-fold > .work-body { gap: 14px; padding-top: 14px; }
+.turn-fold > .work-body { gap: 14px; padding: 14px 0 2px 12px; border-left: 2px solid var(--border); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Prompt navigator: a narrow map between the sidebar and transcript. */

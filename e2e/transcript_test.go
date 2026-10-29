@@ -10,13 +10,17 @@ import (
 	"github.com/go-rod/rod"
 )
 
-// rowsJS sums up the transcript: the ids found more than once, and each
-// row with the items in it when it is a work block.
+// rowsJS sums up the transcript: the ids found more than once, and the
+// tree of turns, folds and work blocks down to the items in them.
 const rowsJS = `() => {
   const n = {};
   document.querySelectorAll('[id^="it-"]').forEach(e => n[e.id] = (n[e.id] || 0) + 1);
-  const rows = [...document.querySelectorAll('#items .items-inner > *')].map(r => r.id +
-    (r.classList.contains('work') ? '[' + [...r.querySelectorAll(':scope > .work-body > *')].map(k => k.id).join(',') + ']' : ''));
+  const tree = el => {
+    const body = el.matches('details.work') ? el.querySelector(':scope > .work-body') : el;
+    const kids = el.matches('.turn, .work-one, details.work') ? [...body.children].map(tree) : [];
+    return el.id + (kids.length ? '[' + kids.join(',') + ']' : '');
+  };
+  const rows = [...document.querySelectorAll('#items .items-inner > *')].map(tree);
   return JSON.stringify({twice: Object.keys(n).filter(k => n[k] > 1), rows});
 }`
 
@@ -62,6 +66,10 @@ func TestTranscriptShowsEachItemOnce(t *testing.T) {
 	}
 	e.waitIdle(id)
 	wait(p, `() => document.querySelectorAll('.item.result').length === 4`)
+	// Each finished turn folds what came before its reply; the prompt,
+	// the reply and the result stay in view.
+	wait(p, `() => [...document.querySelectorAll('.turn')].every(t =>
+		[...t.children].map(c => c.matches('.item.user') ? 'user' : c.matches('details.turn-fold:not([open])') ? 'fold' : c.matches('.item.assistant') ? 'reply' : c.matches('.item.result') ? 'result' : '?').join(' ') === 'user fold reply result')`)
 	live := p.MustEval(rowsJS).String()
 	fresh := e.page("/threads/"+id, true).MustEval(rowsJS).String()
 	if live != fresh {

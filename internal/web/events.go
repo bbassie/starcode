@@ -236,8 +236,14 @@ type conn struct {
 	hasItems bool
 	// work is the id of the first item of the open "worked for" block, or
 	// empty when the last transcript row is not a work block. Work items
-	// are appended into it; anything else closes it.
-	work string
+	// are appended into it; anything else closes it. workOne is whether
+	// the page has that block as a single step, which has no header and
+	// no body to append to (see views.Work).
+	work    string
+	workOne bool
+	// turn is the id of the last turn on the page (views.TurnView), which
+	// the items of the running turn are appended to.
+	turn string
 	// shown is the seq each item had when the page got it: from the full
 	// render, an append, or a morph of a work block or a Task that drew
 	// it along. The store is ahead of the events this connection has
@@ -291,10 +297,12 @@ func (c *conn) render(ctx context.Context, withDetail bool) error {
 				c.shown["ap-"+a.ID] = 0
 			}
 		}
-		c.work = ""
+		c.work, c.workOne = "", false
 		if blocks := views.GroupItems(pt.Thread.Items); len(blocks) > 0 && blocks[len(blocks)-1].Item == nil {
-			c.work = blocks[len(blocks)-1].Work[0].ID
+			last := blocks[len(blocks)-1].Work
+			c.work, c.workOne = last[0].ID, len(last) == 1
 		}
+		c.turn = views.PageTurn(pt.Thread.Items, c.full)
 		c.gitDirty = false
 		c.lastGit = time.Now()
 	}
@@ -652,7 +660,7 @@ func (c *conn) flushDirty(ctx context.Context) error {
 		}
 	}
 	if touchedWork && c.work != "" {
-		if err := c.renderWorkSummary(ctx, c.work); err != nil {
+		if err := c.renderWork(ctx, c.work, false); err != nil {
 			return err
 		}
 	}
@@ -680,9 +688,10 @@ func (c *conn) flushDirty(ctx context.Context) error {
 	return nil
 }
 
-// renderWorkSummary re-renders the header of the work block starting at
-// firstID ("Working…" / "Worked for 12s · 3 steps").
-func (c *conn) renderWorkSummary(ctx context.Context, firstID string) error {
+// renderWork redraws the work block starting at firstID: only its header
+// while it runs ("Working…"), or whole once it is finished, so that it
+// folds shut, or when whole says so (one step becoming two).
+func (c *conn) renderWork(ctx context.Context, firstID string, whole bool) error {
 	// The block starts at firstID, so nothing before it is needed and the
 	// first group is the one to draw.
 	items, err := c.s.App.Store.ItemsFrom(ctx, c.threadID, firstID)
@@ -697,21 +706,71 @@ func (c *conn) renderWorkSummary(ctx context.Context, firstID string) error {
 	// morph needs them or it would drop them.
 	_, kids := views.Nest(items)
 	for _, b := range views.GroupItems(items) {
-		if b.Item == nil && b.Work[0].ID == firstID {
-			if running, _, _ := views.WorkState(b.Work, aps); running {
-				return c.sse.PatchElementTempl(views.WorkSummary(b.Work, aps))
-			}
-			// Finished: morph the whole block so it also folds shut. It
-			// is drawn from the store, which may hold steps whose start
-			// this connection has not handled yet.
-			for _, it := range b.Work {
-				c.mark(it)
-				c.mark(kids[it.ID]...)
-			}
-			return c.sse.PatchElementTempl(views.Work(b.Work, aps, kids))
+		if b.Item != nil || b.Work[0].ID != firstID {
+			continue
 		}
+		if running, _, _ := views.WorkState(b.Work, aps); running && !whole {
+			if firstID == c.work && c.workOne {
+				// A single step has no header; its own redraw shows it.
+				return nil
+			}
+			return c.sse.PatchElementTempl(views.WorkSummary(b.Work, aps))
+		}
+		// The whole block, drawn from the store, which may hold steps
+		// whose start this connection has not handled yet.
+		if firstID == c.work {
+			c.workOne = len(b.Work) == 1
+		}
+		for _, it := range b.Work {
+			c.mark(it)
+			c.mark(kids[it.ID]...)
+		}
+		return c.sse.PatchElementTempl(views.Work(b.Work, aps, kids))
 	}
 	return nil
+}
+
+// closeWork ends the open work block, which gets its final header.
+func (c *conn) closeWork(ctx context.Context) error {
+	if c.work == "" {
+		return nil
+	}
+	err := c.renderWork(ctx, c.work, false)
+	c.work, c.workOne = "", false
+	return err
+}
+
+// foldTurn draws the turn that just ended again whole when it folds (see
+// views.Turn.Fold), and reports whether it did.
+func (c *conn) foldTurn(ctx context.Context) (bool, error) {
+	items, err := c.s.App.Store.ItemsFrom(ctx, c.threadID, c.turn)
+	if err != nil {
+		return false, err
+	}
+	turns := views.GroupTurns(items)
+	if len(turns) == 0 || turns[0].ID != c.turn {
+		return false, nil
+	}
+	t := turns[0]
+	if _, folded, _ := t.Fold(); len(folded) == 0 {
+		return false, nil
+	}
+	aps, err := c.s.App.Store.Approvals(ctx, c.threadID)
+	if err != nil {
+		return false, err
+	}
+	_, kids := views.Nest(items)
+	for _, b := range t.Rows {
+		if b.Item != nil {
+			c.mark(*b.Item)
+			c.mark(kids[b.Item.ID]...)
+		}
+		for _, it := range b.Work {
+			c.mark(it)
+			c.mark(kids[it.ID]...)
+		}
+	}
+	return true, c.sse.PatchElementTempl(views.TurnView(t, aps, kids))
 }
 
 func (c *conn) renderPromptQueue(ctx context.Context) error {
@@ -777,7 +836,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		if mine {
 			if _, ok := p.(domain.ThreadStatusChanged); ok && c.work != "" {
 				// Idle again: the open work block gets its final header.
-				if err := c.renderWorkSummary(ctx, c.work); err != nil {
+				if err := c.renderWork(ctx, c.work, false); err != nil {
 					return err
 				}
 			}
@@ -848,17 +907,19 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 				return err
 			}
 		}
-		if !views.IsWork(it) {
-			// Closes any open work block; its header is refreshed with the
-			// final duration.
-			if c.work != "" {
-				old := c.work
-				c.work = ""
-				if err := c.renderWorkSummary(ctx, old); err != nil {
-					return err
-				}
+		if it.Kind == domain.KindUser || c.turn == "" {
+			// A prompt opens a turn, as does whatever comes before the
+			// first one. Turns go in before the cards waiting for an
+			// answer, which stay last.
+			if err := c.closeWork(ctx); err != nil {
+				return err
 			}
-			if err := c.sse.PatchElementTempl(views.Item(it), datastar.WithSelector("#items .items-inner"), datastar.WithModeAppend()); err != nil {
+			c.turn = it.ID
+			if views.IsWork(it) {
+				c.work, c.workOne = it.ID, true
+			}
+			t := views.Turn{ID: it.ID, Rows: views.GroupItems([]store.Item{it})}
+			if err := c.sse.PatchElementTempl(views.TurnView(t, nil, nil), datastar.WithSelector("#approvals"), datastar.WithModeBefore()); err != nil {
 				return err
 			}
 			if it.Kind == domain.KindUser {
@@ -866,14 +927,31 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 			}
 			return nil
 		}
+		turn := datastar.WithSelector("#turn-" + c.turn)
+		if !views.IsWork(it) {
+			if err := c.closeWork(ctx); err != nil {
+				return err
+			}
+			if it.Kind == domain.KindResult {
+				// The turn is over; one that folds is drawn again whole.
+				if folded, err := c.foldTurn(ctx); folded || err != nil {
+					return err
+				}
+			}
+			return c.sse.PatchElementTempl(views.Item(it), turn, datastar.WithModeAppend())
+		}
 		if c.work == "" {
-			c.work = it.ID
-			return c.sse.PatchElementTempl(views.Work([]store.Item{it}, nil, nil), datastar.WithSelector("#items .items-inner"), datastar.WithModeAppend())
+			c.work, c.workOne = it.ID, true
+			return c.sse.PatchElementTempl(views.Work([]store.Item{it}, nil, nil), turn, datastar.WithModeAppend())
+		}
+		if c.workOne {
+			// A second step: the single row becomes a folded block.
+			return c.renderWork(ctx, c.work, true)
 		}
 		if err := c.sse.PatchElementTempl(views.Item(it), datastar.WithSelector("#work-"+c.work+" .work-body"), datastar.WithModeAppend()); err != nil {
 			return err
 		}
-		return c.renderWorkSummary(ctx, c.work)
+		return c.renderWork(ctx, c.work, false)
 	case domain.ItemDelta:
 		if mine {
 			t := c.tails[p.ID]
@@ -906,7 +984,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 				return nil
 			}
 			c.shown["ap-"+a.ID] = 0
-			return c.sse.PatchElementTempl(views.Approval(a), datastar.WithSelector("#items .items-inner"), datastar.WithModeAppend())
+			return c.sse.PatchElementTempl(views.Approval(a), datastar.WithSelector("#approvals"), datastar.WithModeAppend())
 		}
 	case domain.ApprovalResolved:
 		if mine {
