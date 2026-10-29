@@ -174,7 +174,8 @@ body.panel-dragging { cursor: col-resize; user-select: none; }
 .mid { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container: mid / inline-size; }
 @container mid (max-width: 760px) {
   .hide-sm { display: none; }
-  .show-sm { display: inline; }
+  /* .mid in front: the plain .show-sm rule further down would win. */
+  .mid .show-sm { display: inline; }
   .mainhead { gap: 4px; padding: 6px 8px; }
   .mainhead .btn { padding: 0 8px; }
 }
@@ -1419,7 +1420,8 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   /* The swipe script's stand-in for the backdrop while a panel is dragged. */
   .swipe-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 9; pointer-events: none; will-change: opacity; }
   .hide-sm { display: none; }
-  .show-sm { display: inline; }
+  /* .mid in front: the plain .show-sm rule further down would win. */
+  .mid .show-sm { display: inline; }
   .mainhead { gap: 4px; padding: 6px 8px; }
   html, body { overscroll-behavior: none; touch-action: manipulation; }
   /* Installed to the home screen the page runs under the status bar. */
