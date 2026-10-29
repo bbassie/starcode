@@ -238,6 +238,21 @@ type conn struct {
 	// empty when the last transcript row is not a work block. Work items
 	// are appended into it; anything else closes it.
 	work string
+	// shown is the seq each item had when the page got it: from the full
+	// render, an append, or a morph of a work block or a Task that drew
+	// it along. The store is ahead of the events this connection has
+	// handled, and the bus repeats what happened between subscribing and
+	// the first render, so an item's start can arrive after the page has
+	// it; appending it then would show it twice. Approvals are in it as
+	// "ap-" and their id, with no seq.
+	shown map[string]int64
+}
+
+// mark records items as on the page.
+func (c *conn) mark(items ...store.Item) {
+	for _, it := range items {
+		c.shown[it.ID] = it.Seq
+	}
 }
 
 // renderAll redraws the whole page from the store: on connect, which is a
@@ -269,6 +284,11 @@ func (c *conn) render(ctx context.Context, withDetail bool) error {
 		c.projectID = pt.Thread.Project.ID
 		c.hasItems = len(pt.Thread.Items) > 0
 		c.tails = map[string]*tail{}
+		c.shown = map[string]int64{}
+		c.mark(pt.Thread.Items...)
+		for _, a := range pt.Thread.Approvals {
+			c.shown["ap-"+a.ID] = 0
+		}
 		c.work = ""
 		if blocks := views.GroupItems(pt.Thread.Items); len(blocks) > 0 && blocks[len(blocks)-1].Item == nil {
 			c.work = blocks[len(blocks)-1].Work[0].ID
@@ -589,6 +609,7 @@ func (c *conn) patchItem(ctx context.Context, it store.Item) error {
 	}
 	_, nested := views.Nest(kids)
 	nested[it.ID] = kids
+	c.mark(kids...)
 	return c.sse.PatchElementTempl(views.ItemWith(it, nested))
 }
 
@@ -678,7 +699,13 @@ func (c *conn) renderWorkSummary(ctx context.Context, firstID string) error {
 			if running, _, _ := views.WorkState(b.Work, aps); running {
 				return c.sse.PatchElementTempl(views.WorkSummary(b.Work, aps))
 			}
-			// Finished: morph the whole block so it also folds shut.
+			// Finished: morph the whole block so it also folds shut. It
+			// is drawn from the store, which may hold steps whose start
+			// this connection has not handled yet.
+			for _, it := range b.Work {
+				c.mark(it)
+				c.mark(kids[it.ID]...)
+			}
 			return c.sse.PatchElementTempl(views.Work(b.Work, aps, kids))
 		}
 	}
@@ -789,6 +816,19 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		if err != nil {
 			return nil
 		}
+		if seq, ok := c.shown[p.ID]; ok {
+			if seq >= it.Seq {
+				// The page has it already; bring it up to date.
+				c.dirty[p.ID] = true
+				return nil
+			}
+			// Started again: the store moved the row to the end, so the
+			// page drops the old element before the new one lands.
+			if err := c.sse.RemoveElement("#it-" + p.ID); err != nil {
+				return err
+			}
+		}
+		c.shown[p.ID] = it.Seq
 		delete(c.dirty, p.ID)
 		// The page gets the item whole here; its deltas append from now on.
 		c.tails[p.ID] = newTail(it)
@@ -857,6 +897,13 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 			if err != nil {
 				return nil
 			}
+			// One answered already (a session rule allows it, or the
+			// event is a repeat from before the first render) has no card,
+			// as on a fresh load; nor does one the page shows.
+			if _, ok := c.shown["ap-"+a.ID]; ok || a.Decision != "" {
+				return nil
+			}
+			c.shown["ap-"+a.ID] = 0
 			return c.sse.PatchElementTempl(views.Approval(a), datastar.WithSelector("#items .items-inner"), datastar.WithModeAppend())
 		}
 	case domain.ApprovalResolved:
