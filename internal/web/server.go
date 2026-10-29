@@ -35,7 +35,7 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-var Themes = []string{"dark", "ocean", "amber", "green", "light"}
+var Themes = []string{"dark", "black", "ocean", "amber", "green", "light"}
 
 const tokenCookie = "starcode_token"
 

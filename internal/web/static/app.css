@@ -1,5 +1,5 @@
 /* starcode. Every colour and size is a variable; a theme is a block that
-   overrides [data-theme="..."]. Dark is the near-black default. */
+   overrides [data-theme="..."]. Dark is the slate default. */
 
 :root {
   color-scheme: dark;
@@ -9,15 +9,62 @@
   --line: 1.55;
   --gap: 8px;
   --pad: 14px;
-  --radius: 10px;
-  --radius-sm: 6px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 18px;
   --border-w: 1px;
   --sidebar-w: 280px;
   --settingsnav-w: 208px;
   --gitpanel-w: clamp(380px, 32vw, 620px);
-  --content-w: 820px;
+  --content-w: 780px;
   --tap: 40px;
 
+  /* Slate: a blue-grey page, the sidebar a step lighter, the composer
+     and menus raised in a neutral grey. */
+  --bg: #17212b;
+  --bg-2: #1c2733;
+  --bg-3: #25313d;
+  --bg-4: #303c49;
+  --fg: #e3e7ec;
+  --fg-dim: #8794a3;
+  --border: #2a3744;
+  --accent: #7cb0e8;
+  --accent-fg: #0e1822;
+  --ok: #6cc29a;
+  --warn: #e2b462;
+  --err: #e8777a;
+  --merged: #b39af0;
+  --add-bg: rgba(108, 194, 154, 0.13);
+  --del-bg: rgba(232, 119, 122, 0.13);
+  --sel: rgba(96, 150, 205, 0.2);
+  /* Selected text. --sel is the tint of a current row, far too faint for
+     a selection; this one is the accent at a strength text stays readable
+     on. A plain rgba, since xterm takes it too and parses nothing else. */
+  --select: rgba(124, 176, 232, 0.4);
+  --shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.6);
+  --cursor: var(--accent);
+}
+
+/* Raised surfaces. A theme without its own takes them from its greys:
+   the composer and the menus one step up, a prompt's bubble tinted with
+   the accent. Set on body, where data-theme swaps the greys, so they
+   follow the theme instead of the root's. */
+body {
+  --line-soft: color-mix(in srgb, var(--fg) 9%, transparent);
+  --surface: var(--bg-3);
+  --menu: var(--bg-3);
+  --menu-hover: var(--bg-4);
+  --bubble: color-mix(in srgb, var(--accent) 22%, var(--bg-3));
+}
+body:not([data-theme]), [data-theme="dark"] {
+  --surface: #2e3742;
+  --menu: #38414b;
+  --menu-hover: #47505a;
+  --bubble: #33536d;
+}
+
+/* The near-black that was the default before slate. */
+[data-theme="black"] {
   --bg: #08090b;
   --bg-2: #0d0f12;
   --bg-3: #14171b;
@@ -34,12 +81,12 @@
   --add-bg: rgba(117, 169, 141, 0.13);
   --del-bg: rgba(200, 120, 120, 0.13);
   --sel: rgba(132, 151, 189, 0.14);
-  /* Selected text. --sel is the tint of a current row, far too faint for
-     a selection; this one is the accent at a strength text stays readable
-     on. A plain rgba, since xterm takes it too and parses nothing else. */
   --select: rgba(132, 151, 189, 0.45);
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.48);
-  --cursor: var(--accent);
+  --surface: #14171b;
+  --menu: #14171b;
+  --menu-hover: #1c2025;
+  --bubble: #1c2129;
 }
 
 [data-theme="ocean"] {
@@ -83,6 +130,9 @@
   --sel: rgba(47, 111, 237, 0.12);
   --select: rgba(47, 111, 237, 0.28);
   --shadow: 0 8px 24px rgba(20, 30, 50, 0.12);
+  --surface: #ffffff;
+  --menu: #ffffff;
+  --menu-hover: var(--bg-3);
 }
 
 [data-theme="amber"] {
