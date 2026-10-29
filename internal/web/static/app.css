@@ -374,6 +374,15 @@ button .ui-icon { display: block; margin: auto; }
 .btn.icon { min-width: 32px; padding: 0; }
 .btn.tiny { min-height: 24px; min-width: 24px; padding: 0 6px; font-size: 0.9em; }
 .btn.round { width: 38px; height: 38px; min-height: 0; border-radius: 50%; padding: 0; font-size: 1.1em; }
+/* Send and stop, like T3 Code's: a smaller circle that grows a little
+   under the pointer. Send is grey until there is text or a file to send;
+   stop is a red disc. */
+.composer .btn.round { width: 32px; height: 32px; font-size: 1em; transition: scale 0.15s, background 0.15s, filter 0.12s; }
+.composer .btn.round:hover:not(:disabled) { scale: 1.05; }
+.composer .btn.round.primary:hover { filter: brightness(1.1); }
+.composer:has(.prompt:placeholder-shown):not(:has(.attach-item)) .btn.round.primary { background: color-mix(in srgb, var(--fg) 12%, transparent); border-color: transparent; color: var(--fg-dim); }
+.composer .btn.round.warn { background: var(--err); border-color: var(--err); color: #fff; }
+.composer .btn.round.warn .ui-icon { width: 0.8em; height: 0.8em; fill: currentColor; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .in {
   background: var(--bg-2);
@@ -1561,7 +1570,7 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   .chip-icon { color: inherit; }
   .chip-caret { opacity: 0.6; }
   .attach-btn { min-width: var(--tap); min-height: var(--tap); border-color: transparent; font-size: 1.15em; }
-  .composer-actions .btn.round { width: 42px; height: 42px; }
+  .composer .composer-actions .btn.round, .composer .btn.round { width: 38px; height: 38px; }
   .pick-more { display: flex; flex-direction: column; gap: 1px; padding: 6px; border-top: var(--border-w) solid var(--border); }
   .pick-more .opt-desc { flex: none; max-width: 40%; }
   /* On a phone the menu is a sheet at the bottom of the screen, above the
