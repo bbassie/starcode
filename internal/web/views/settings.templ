@@ -732,7 +732,8 @@ templ SettingsSidebar(current string) {
 // SettingsNav is the same links as a scrolling row above the content,
 // shown when the window is too narrow for the settings column.
 templ SettingsNav(current string) {
-	<nav class="settings-menu" aria-label="Settings sections">
+	// The row scrolls sideways on a phone; open it at the current section.
+	<nav class="settings-menu" aria-label="Settings sections" data-init="(c => c && (el.scrollLeft = c.offsetLeft - el.offsetLeft - 16))(el.querySelector('.current'))">
 		@settingsLinks(current)
 	</nav>
 }
