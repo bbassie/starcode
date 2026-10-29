@@ -1,15 +1,19 @@
 // Package fake is a scripted agent used for UI development and tests. Every
 // Send replays the same little scenario: some thinking, a line of
 // narration, a tool call that needs approval (except in the yolo mode),
-// streamed prose, a result. A
-// prompt with "ask me" in it first puts a question to the human, the way
-// Claude Code's AskUserQuestion does, in every mode.
+// streamed prose, a result. A prompt with "ask me" in it first puts a
+// question to the human, the way Claude Code's AskUserQuestion does, in
+// every mode; one with "screenshot" in it reads a picture.
 package fake
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -208,6 +212,14 @@ func (s *session) run(turnID, prompt string) {
 		return
 	}
 	s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t1, Status: "done", Output: "main.go\ninternal/app/app.go\ninternal/web/server.go"}})
+
+	if strings.Contains(strings.ToLower(prompt), "screenshot") {
+		// Read on a picture, which comes back as the image itself.
+		tr := turnID + "-shot"
+		inr, _ := json.Marshal(map[string]any{"file_path": filepath.Join(s.cfg.Cwd, "shot.png")})
+		s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: tr, Name: "Read", Input: inr, Summary: "shot.png"}})
+		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: tr, Status: "done", Images: []agent.Image{{MediaType: "image/png", Data: shot()}}}})
+	}
 
 	if strings.Contains(strings.ToLower(prompt), "ask me") && !s.ask(turnID) {
 		finish("interrupted")
@@ -452,4 +464,17 @@ func firstWords(s string, n int) string {
 		f = append(f[:n], "...")
 	}
 	return strings.Join(f, " ")
+}
+
+// shot is a small picture for the "screenshot" read: a gradient.
+func shot() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 320, 200))
+	for y := range 200 {
+		for x := range 320 {
+			img.Set(x, y, color.RGBA{uint8(x * 255 / 320), uint8(y * 255 / 200), 160, 255})
+		}
+	}
+	var b bytes.Buffer
+	png.Encode(&b, img)
+	return b.Bytes()
 }

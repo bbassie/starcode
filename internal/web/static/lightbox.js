@@ -1,8 +1,9 @@
-// Image viewer. A click on an attached image or an image in a reply opens
-// it over the page instead of in a new tab: the wheel zooms at the
-// pointer, dragging pans, the buttons zoom on a phone (no pinch: pinch
-// zoom stays off everywhere in starcode), and Escape, the close button or
-// a click beside the image close it. The original is one click away.
+// Image viewer. A click on an attached image, an image in a reply or one
+// a tool call gave the agent opens it over the page instead of in a new
+// tab: the wheel zooms at the pointer, dragging pans, the buttons zoom on
+// a phone (no pinch: pinch zoom stays off everywhere in starcode), and
+// Escape, the close button or a click beside the image close it. The
+// original is one click away.
 (() => {
 	const box = document.createElement('div');
 	box.className = 'lightbox';
@@ -58,7 +59,7 @@
 	document.addEventListener('DOMContentLoaded', () => document.body.append(box));
 	document.addEventListener('click', (e) => {
 		const t = e.target instanceof Element ? e.target : null;
-		const pic = t && t.closest('img.attach-thumb, .item.assistant.md img, .pr-detail-body img');
+		const pic = t && t.closest('img.attach-thumb, .item.assistant.md img, .pr-detail-body img, .tool-images img');
 		if (!pic || e.ctrlKey || e.metaKey || e.shiftKey) return;
 		e.preventDefault();
 		const link = pic.closest('a');

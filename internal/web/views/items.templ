@@ -22,6 +22,9 @@ type toolMeta struct {
 	// Approval is how the human, or a session rule, answered the call's
 	// approval; the store sets it when the approval is resolved.
 	Approval *itemApproval `json:"approval"`
+	// Images are starcode's copies of the pictures the call gave the
+	// agent, in the thread's attachments.
+	Images []string `json:"images"`
 }
 
 type itemApproval struct {
@@ -333,6 +336,10 @@ templ Tool(it store.Item) {
 			if v.Note != "" {
 				<span class="tool-note">{ v.Note }</span>
 			}
+			if len(m.Images) > 0 {
+				// The picture is there to see without opening the row.
+				<img class="tool-thumb" src={ attachmentURL(m.Images[0]) } alt="" loading="lazy"/>
+			}
 			if a := m.Approval; a != nil && !a.Auto {
 				// The human's answer says more than the status it led to.
 				<span class={ "tool-state", templ.KV("warn", a.Decision == domain.DecisionDeny) } title="Your answer to the approval">{ decisionLabel(a.Decision) }</span>
@@ -382,6 +389,13 @@ templ Tool(it store.Item) {
 				if it.Output != "" {
 					<pre class="block output">{ clip(it.Output, 20000) }</pre>
 				}
+		}
+		if len(m.Images) > 0 {
+			<div class="tool-images">
+				for _, p := range m.Images {
+					<img src={ attachmentURL(p) } alt={ firstNonEmpty(v.Code, v.Text) } loading="lazy"/>
+				}
+			</div>
 		}
 	</details>
 }

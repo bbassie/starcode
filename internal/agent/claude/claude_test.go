@@ -290,6 +290,22 @@ func TestParseToolResultContentBlocks(t *testing.T) {
 	if want := "line one\nline two"; ev.Output != want {
 		t.Errorf("Output = %q, want %q", ev.Output, want)
 	}
+	if len(ev.Images) != 0 {
+		t.Errorf("an image without data gave %d images", len(ev.Images))
+	}
+}
+
+// Read on a picture returns it as a base64 block, which the call carries.
+func TestParseToolResultImage(t *testing.T) {
+	st := newState(nil)
+	line := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_r","content":[{"type":"image","source":{"type":"base64","data":"iVBORw0K","media_type":"image/png"}}]}]},"session_id":"s1"}`
+	ev := one(t, feed(st, line), agent.KindToolCompleted).ToolCompleted
+	if len(ev.Images) != 1 || ev.Images[0].MediaType != "image/png" || string(ev.Images[0].Data) != "\x89PNG\r\n" {
+		t.Fatalf("images = %+v", ev.Images)
+	}
+	if ev.Output != "" {
+		t.Errorf("Output = %q", ev.Output)
+	}
 }
 
 func TestParseUserMessagesWithoutToolResults(t *testing.T) {

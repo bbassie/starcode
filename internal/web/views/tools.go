@@ -32,6 +32,7 @@ const (
 	toolWeb     = "web"
 	toolAgent   = "agent"
 	toolPlan    = "plan"
+	toolImage   = "image"
 	toolOther   = "other"
 )
 
@@ -161,6 +162,13 @@ func viewTool(ctx context.Context, it store.Item) toolView {
 		default:
 			v.Text = m.Summary
 		}
+	case name == "ViewImage":
+		// Codex looking at a picture, which the row shows.
+		v.Kind, v.Icon, v.Verb, v.Text = toolRead, "image", "Viewed", ""
+		v.Code = relPath(ctx, in.FilePath)
+		v.Paths = []string{in.FilePath}
+	case name == "ImageGeneration":
+		v.Kind, v.Icon, v.Verb, v.Text = toolImage, "sparkles", "Made an image", m.Summary
 	case name == "Read" || name == "NotebookRead":
 		v.Kind, v.Icon, v.Verb, v.Text = toolRead, "eye", "Read", ""
 		p := firstNonEmpty(in.FilePath, in.NotebookPth)
@@ -561,6 +569,7 @@ func workSummary(ctx context.Context, items []store.Item) string {
 	add(searchWeb, "searched the web once", "searched the web %d times")
 	add(web, "fetched %d page", "fetched %d pages")
 	add(counts[toolAgent], "ran %d agent", "ran %d agents")
+	add(counts[toolImage], "made %d image", "made %d images")
 	if counts[toolPlan] > 0 {
 		parts = append(parts, "updated the plan")
 	}

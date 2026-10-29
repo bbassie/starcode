@@ -980,3 +980,34 @@ func TestPlanMode(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Pictures codex looked at, made, or got from an MCP tool come with the
+// calls: a path for the first two, the bytes for the third.
+func TestImageItems(t *testing.T) {
+	_, f, s := harness(t)
+	events := s.Events()
+	f.send(`{"method":"turn/started","params":{"threadId":"thr_1","turn":{"id":"turn_1","status":"inProgress"}}}`)
+	expectKind(t, events, agent.KindTurnStarted)
+
+	f.send(`{"method":"item/completed","params":{"threadId":"thr_1","turnId":"turn_1","item":{"id":"v1","type":"imageView","path":"/w/shot.png"}}}`)
+	if call := expectKind(t, events, agent.KindToolStarted).ToolStarted; call.Name != "ViewImage" || call.Summary != "/w/shot.png" {
+		t.Fatalf("view call %+v", call)
+	}
+	if done := expectKind(t, events, agent.KindToolCompleted).ToolCompleted; len(done.Images) != 1 || done.Images[0].Path != "/w/shot.png" {
+		t.Fatalf("view images %+v", done.Images)
+	}
+
+	f.send(`{"method":"item/completed","params":{"threadId":"thr_1","turnId":"turn_1","item":{"id":"g1","type":"imageGeneration","status":"completed","revisedPrompt":"a red fox","savedPath":"/w/fox.png"}}}`)
+	if call := expectKind(t, events, agent.KindToolStarted).ToolStarted; call.Name != "ImageGeneration" || call.Summary != "a red fox" {
+		t.Fatalf("generation call %+v", call)
+	}
+	if done := expectKind(t, events, agent.KindToolCompleted).ToolCompleted; len(done.Images) != 1 || done.Images[0].Path != "/w/fox.png" {
+		t.Fatalf("generation images %+v", done.Images)
+	}
+
+	f.send(`{"method":"item/completed","params":{"threadId":"thr_1","turnId":"turn_1","item":{"id":"m1","type":"mcpToolCall","server":"pw","tool":"screenshot","status":"completed","result":{"content":[{"type":"text","text":"took it"},{"type":"image","data":"iVBORw0K","mimeType":"image/png"}]}}}}`)
+	done := expectKind(t, events, agent.KindToolCompleted).ToolCompleted
+	if done.Output != "took it" || len(done.Images) != 1 || done.Images[0].MediaType != "image/png" || string(done.Images[0].Data) != "\x89PNG\r\n" {
+		t.Fatalf("mcp result %q, images %+v", done.Output, done.Images)
+	}
+}

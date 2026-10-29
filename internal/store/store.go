@@ -595,15 +595,24 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 			args = append(args, p.Body)
 		}
 		if len(p.Meta) > 0 {
-			// The approval the store put on the item outlives an agent's
-			// later word on the call's input.
-			q += `, meta=CASE WHEN meta->'$.approval' IS NULL THEN ? ELSE json_set(?, '$.approval', meta->'$.approval') END`
-			args = append(args, string(p.Meta), string(p.Meta))
+			// The approval and images the store put on the item outlive
+			// an agent's later word on the call's input.
+			q += `, meta=json_patch(?, json_object('approval', meta->'$.approval', 'images', meta->'$.images'))`
+			args = append(args, string(p.Meta))
 		}
 		q += ` WHERE id=?`
 		args = append(args, p.ID)
 		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
 			return err
+		}
+		if len(p.Images) > 0 {
+			b, err := json.Marshal(p.Images)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE items SET meta=json_set(meta, '$.images', json(?)) WHERE id=?`, string(b), p.ID); err != nil {
+				return err
+			}
 		}
 		return indexItem(ctx, tx, p.ID)
 	case domain.ApprovalRequested:

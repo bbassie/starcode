@@ -97,7 +97,7 @@ func (a *App) Branch(ctx context.Context, from, before string) (string, string, 
 		domain.ThreadSettingsChanged{Agent: t.Agent, Model: t.Model, Effort: t.Effort, PermissionMode: t.PermissionMode},
 		ev,
 	}
-	evs = append(evs, copyItems(keep)...)
+	evs = append(evs, a.copyItems(keep, id)...)
 	if len(keep) > 0 {
 		evs = append(evs, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Quiet: true,
 			Body: "Branched from \"" + t.Title + "\" here. The conversation above is a copy; the agent picks it up from this point, and the original thread goes on without this one."})
@@ -164,7 +164,7 @@ func (a *App) HandOff(ctx context.Context, from string, to Handoff) (string, err
 		domain.ThreadSettingsChanged{Agent: to.Agent, Model: strings.TrimSpace(to.Model), Effort: strings.TrimSpace(to.Effort), PermissionMode: strings.TrimSpace(to.PermissionMode)},
 		domain.ThreadBranched{From: from},
 	}
-	evs = append(evs, copyItems(items)...)
+	evs = append(evs, a.copyItems(items, id)...)
 	evs = append(evs, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Quiet: true,
 		Body: "Handed over from \"" + t.Title + "\" (" + t.Agent + ") here. The conversation above is a copy; " + to.Agent + " gets it as the file attached below."})
 	if _, err := a.Store.Append(ctx, id, evs...); err != nil {
@@ -208,15 +208,39 @@ func (a *App) HandOff(ctx context.Context, from string, to Handoff) (string, err
 	return id, nil
 }
 
+// copyImage puts the picture at path into thread to's attachments, as a
+// hard link where it can, and returns the copy's path; the original's on
+// failure.
+func (a *App) copyImage(path, to string) string {
+	dir := filepath.Join(a.AttachDir, to)
+	dst := filepath.Join(dir, filepath.Base(path))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return path
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return dst
+	}
+	if os.Link(path, dst) == nil {
+		return dst
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || os.WriteFile(dst, data, 0o644) != nil {
+		return path
+	}
+	return dst
+}
+
 // busyThread is whether a turn is under way on t.
 func busyThread(t store.Thread) bool {
 	return t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval
 }
 
-// copyItems is the events that give a new thread copies of items: new
-// ids (an item id is unique across threads), the parent links of
-// subagent activity moved to the copies, the original times kept.
-func copyItems(items []store.Item) []any {
+// copyItems is the events that give thread to copies of items: new ids
+// (an item id is unique across threads), the parent links of subagent
+// activity moved to the copies, the original times kept. The pictures
+// tool calls kept are copied into to's attachments, so they outlive the
+// original thread.
+func (a *App) copyItems(items []store.Item, to string) []any {
 	ids := make(map[string]string, len(items))
 	for _, it := range items {
 		ids[it.ID] = newID()
@@ -228,6 +252,14 @@ func copyItems(items []store.Item) []any {
 		if json.Unmarshal(meta, &m) == nil {
 			if parent, ok := m["parent"].(string); ok && ids[parent] != "" {
 				m["parent"] = ids[parent]
+				meta, _ = json.Marshal(m)
+			}
+			if imgs, ok := m["images"].([]any); ok && a.AttachDir != "" {
+				for i, p := range imgs {
+					if p, ok := p.(string); ok {
+						imgs[i] = a.copyImage(p, to)
+					}
+				}
 				meta, _ = json.Marshal(m)
 			}
 		}

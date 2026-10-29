@@ -324,6 +324,9 @@ type ItemCompleted struct {
 	Status string          `json:"status,omitempty"`
 	Body   string          `json:"body,omitempty"`
 	Meta   json.RawMessage `json:"meta,omitempty"`
+	// Images are the files starcode saved of the pictures a tool call
+	// gave the agent; the store keeps them in the item's meta ($.images).
+	Images []string `json:"images,omitempty"`
 }
 
 // ApprovalRequested is emitted when the agent needs a human decision.

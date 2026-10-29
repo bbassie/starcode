@@ -187,7 +187,7 @@ func TestCopyItems(t *testing.T) {
 		{ID: "task", Kind: domain.KindTool, ToolName: "Task", Status: domain.ItemDone, Meta: json.RawMessage(`{"summary":"look around"}`), CreatedAt: at},
 		{ID: "sub", Kind: domain.KindTool, ToolName: "Read", Status: domain.ItemDone, Output: "file body", Meta: json.RawMessage(`{"parent":"task"}`), CreatedAt: at},
 	}
-	evs := copyItems(items)
+	evs := (&App{}).copyItems(items, "new")
 	if len(evs) != 3 {
 		t.Fatalf("events = %d", len(evs))
 	}

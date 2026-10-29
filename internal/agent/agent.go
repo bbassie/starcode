@@ -219,6 +219,17 @@ type ToolCompleted struct {
 	Status  string // "done" | "failed" | "declined"
 	Output  string // full output when the adapter has it; empty if streamed
 	IsError bool
+	// Images are the pictures the call gave the agent (a screenshot it
+	// read, one it generated), which the transcript shows on the call.
+	Images []Image
+}
+
+// Image is a picture in a tool result: its bytes as the agent got them,
+// or the file it was read from when the adapter only has the path.
+type Image struct {
+	MediaType string
+	Data      []byte
+	Path      string
 }
 
 // ApprovalRequested asks the human whether the agent may proceed.

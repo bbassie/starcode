@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -348,6 +349,10 @@ type item struct {
 	Query  string          `json:"query"`
 	Result json.RawMessage `json:"result"`
 	Review string          `json:"review"`
+	// imageView and imageGeneration
+	Path          string  `json:"path"`
+	SavedPath     string  `json:"savedPath"`
+	RevisedPrompt *string `json:"revisedPrompt"`
 }
 
 type itemNotification struct {
@@ -510,6 +515,9 @@ func (s *session) itemStarted(n itemNotification, it item) {
 			ID: it.ID, Name: "WebSearch", Input: n.Item, Summary: it.Query,
 		}})
 
+	case "imageView", "imageGeneration":
+		s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: imageTool(it)})
+
 	case "contextCompaction":
 		s.emitNotice("codex compacted the conversation history")
 
@@ -519,6 +527,20 @@ func (s *session) itemStarted(n itemNotification, it item) {
 	default:
 		s.log.Debug("codex: unhandled item", "type", it.Type, "id", it.ID)
 	}
+}
+
+// imageTool is the call an image item shows as: ViewImage for a picture
+// codex looked at, ImageGeneration for one it made. Both carry the file
+// as file_path, the way Read does.
+func imageTool(it item) *agent.ToolStarted {
+	if it.Type == "imageView" {
+		return &agent.ToolStarted{ID: it.ID, Name: "ViewImage", Input: mustJSON(map[string]any{"file_path": it.Path}), Summary: it.Path}
+	}
+	prompt := ""
+	if it.RevisedPrompt != nil {
+		prompt = *it.RevisedPrompt
+	}
+	return &agent.ToolStarted{ID: it.ID, Name: "ImageGeneration", Input: mustJSON(map[string]any{"prompt": prompt, "file_path": it.SavedPath}), Summary: prompt}
 }
 
 func (s *session) itemCompleted(it item) {
@@ -564,9 +586,29 @@ func (s *session) itemCompleted(it item) {
 		if len(it.Result) > 0 && string(it.Result) != "null" {
 			output = string(it.Result)
 		}
+		text, images := mcpImages(it.Result)
+		if len(images) > 0 {
+			// The base64 would bury the text; the pictures show apart.
+			output = text
+		}
 		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{
-			ID: it.ID, Status: status, Output: output, IsError: status == "failed",
+			ID: it.ID, Status: status, Output: output, IsError: status == "failed", Images: images,
 		}})
+
+	case "imageView", "imageGeneration":
+		// A second start only updates the call: the path or the revised
+		// prompt may be known only now.
+		s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: imageTool(it)})
+		status := toolStatus(it.Status)
+		path := it.Path
+		if it.Type == "imageGeneration" {
+			path = it.SavedPath
+		}
+		done := &agent.ToolCompleted{ID: it.ID, Status: status, IsError: status == "failed"}
+		if path != "" && status == "done" {
+			done.Images = []agent.Image{{Path: path}}
+		}
+		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: done})
 
 	case "plan", "todoList":
 		if it.Text != "" {
@@ -873,6 +915,35 @@ func requestID(raw json.RawMessage) string {
 }
 
 // toolStatus maps a codex item status onto the ToolCompleted vocabulary.
+// mcpImages is the text and the pictures of an MCP tool's result, whose
+// content blocks hold images as base64.
+func mcpImages(result json.RawMessage) (string, []agent.Image) {
+	var r struct {
+		Content []struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Data     string `json:"data"`
+			MimeType string `json:"mimeType"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(result, &r) != nil {
+		return "", nil
+	}
+	var texts []string
+	var images []agent.Image
+	for _, c := range r.Content {
+		switch c.Type {
+		case "text":
+			texts = append(texts, c.Text)
+		case "image":
+			if data, err := base64.StdEncoding.DecodeString(c.Data); err == nil {
+				images = append(images, agent.Image{MediaType: c.MimeType, Data: data})
+			}
+		}
+	}
+	return strings.Join(texts, "\n"), images
+}
+
 func toolStatus(status string) string {
 	switch status {
 	case "failed":

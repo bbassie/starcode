@@ -1330,6 +1330,12 @@ type contentBlock struct {
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
+	// image, inside a tool_result
+	Source *struct {
+		Type      string `json:"type"`
+		MediaType string `json:"media_type"`
+		Data      string `json:"data"`
+	} `json:"source"`
 	// tool_result
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
@@ -1632,6 +1638,7 @@ func parseUser(out *outLine, st *state) []agent.Event {
 				Status:  status,
 				Output:  flattenContent(blk.Content),
 				IsError: blk.IsError,
+				Images:  imagesOf(blk.Content, st),
 			},
 		})
 	}
@@ -1798,6 +1805,28 @@ func flattenContent(raw json.RawMessage) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// imagesOf is the pictures in a tool result: Read on an image file, or
+// an MCP tool's screenshot, which come as base64 blocks.
+func imagesOf(raw json.RawMessage, st *state) []agent.Image {
+	var blocks []contentBlock
+	if json.Unmarshal(raw, &blocks) != nil {
+		return nil
+	}
+	var out []agent.Image
+	for _, b := range blocks {
+		if b.Type != "image" || b.Source == nil || b.Source.Type != "base64" {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(b.Source.Data)
+		if err != nil {
+			st.log.Debug("undecodable image in a tool result", "err", err)
+			continue
+		}
+		out = append(out, agent.Image{MediaType: b.Source.MediaType, Data: data})
+	}
+	return out
 }
 
 // summarize picks the one field that best describes a tool call.

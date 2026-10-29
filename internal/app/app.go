@@ -7,12 +7,14 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1525,7 +1527,7 @@ func (a *App) pump(l *live) {
 			if tc.IsError && status == domain.ItemDone {
 				status = domain.ItemFailed
 			}
-			evs = append(evs, domain.ItemCompleted{ID: itemID(tc.ID), Status: status})
+			evs = append(evs, domain.ItemCompleted{ID: itemID(tc.ID), Status: status, Images: a.saveImages(tid, tc.Images, log)})
 			// A Task's end is the end of its subagent's last message.
 			evs = append(evs, a.closeMessages(l, "", tc.ID)...)
 			l.mu.Lock()
@@ -1774,6 +1776,63 @@ func nilIfBlank(s string) any {
 		return nil
 	}
 	return s
+}
+
+// maxImage bounds a picture read from a path an adapter reported.
+const maxImage = 25 << 20
+
+// saveImages keeps copies of a tool call's pictures in the thread's
+// attachments directory, named by their content, and returns the paths.
+// A copy shows what the agent saw then, after a screenshot in /tmp was
+// overwritten by the next one or cleaned up.
+func (a *App) saveImages(threadID string, imgs []agent.Image, log *slog.Logger) []string {
+	if a.AttachDir == "" || len(imgs) == 0 {
+		return nil
+	}
+	dir := filepath.Join(a.AttachDir, threadID)
+	var out []string
+	for _, img := range imgs {
+		data := img.Data
+		if img.Path != "" {
+			fi, err := os.Stat(img.Path)
+			if err != nil || fi.Size() > maxImage {
+				log.Debug("tool image not kept", "path", img.Path, "err", err)
+				continue
+			}
+			if data, err = os.ReadFile(img.Path); err != nil {
+				continue
+			}
+		}
+		// The bytes say what they are; an adapter's media type or a file
+		// name could be wrong, and only pictures are served back.
+		var ext string
+		switch http.DetectContentType(data) {
+		case "image/png":
+			ext = ".png"
+		case "image/jpeg":
+			ext = ".jpg"
+		case "image/gif":
+			ext = ".gif"
+		case "image/webp":
+			ext = ".webp"
+		default:
+			continue
+		}
+		sum := sha256.Sum256(data)
+		path := filepath.Join(dir, "img-"+hex.EncodeToString(sum[:8])+ext)
+		if _, err := os.Stat(path); err != nil {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				log.Error("save tool image", "err", err)
+				continue
+			}
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				log.Error("save tool image", "err", err)
+				continue
+			}
+		}
+		out = append(out, path)
+	}
+	return out
 }
 
 // openMsg is a message item still streaming, and the Task it belongs to

@@ -76,3 +76,20 @@ func TestTranscriptShowsEachItemOnce(t *testing.T) {
 		t.Fatalf("the live transcript is not the one a fresh load draws:\nlive  %s\nfresh %s", live, fresh)
 	}
 }
+
+// A picture a tool call gave the agent shows on the call: a thumbnail in
+// its line, the picture in the opened row, the lightbox on a click. The
+// file is starcode's copy in the thread's attachments.
+func TestToolImage(t *testing.T) {
+	e := newEnv(t)
+	id := e.thread()
+	e.turns(id, "take a screenshot")
+	p := e.page("/threads/"+id, true)
+	// Folded away, the pictures load only once in view.
+	click(p.MustElement("details.turn-fold > summary"))
+	click(p.MustElement(".turn-fold details.work > summary"))
+	wait(p, `() => { const i = document.querySelector('.item.tool img.tool-thumb'); return i && i.complete && i.naturalWidth === 320; }`)
+	click(p.MustElement("details.item.tool:has(img.tool-thumb) > summary"))
+	click(p.MustElement(".tool-images img"))
+	wait(p, `() => !document.querySelector('.lightbox').hidden`)
+}
