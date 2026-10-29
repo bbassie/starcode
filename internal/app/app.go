@@ -1346,7 +1346,7 @@ type live struct {
 	interrupted bool
 	turnID      string
 	nativeTitle bool
-	seenMsgs    map[string]string // agent message id -> item id
+	seenMsgs    map[string]openMsg // kind:agent message id -> its item
 	seenTools   map[string]bool
 	pending     map[string]agent.ApprovalRequested
 }
@@ -1383,7 +1383,7 @@ func (a *App) session(ctx context.Context, t store.Thread) (*live, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &live{threadID: t.ID, projectID: t.ProjectID, agentName: t.Agent, sess: sess, seenMsgs: map[string]string{}, seenTools: map[string]bool{}, subTools: map[string]bool{}, pending: map[string]agent.ApprovalRequested{}}
+	l := &live{threadID: t.ID, projectID: t.ProjectID, agentName: t.Agent, sess: sess, seenMsgs: map[string]openMsg{}, seenTools: map[string]bool{}, subTools: map[string]bool{}, pending: map[string]agent.ApprovalRequested{}}
 	a.mu.Lock()
 	if existing := a.sessions[t.ID]; existing != nil {
 		a.mu.Unlock()
@@ -1490,8 +1490,8 @@ func (a *App) pump(l *live) {
 		case agent.KindThinkingDelta:
 			a.delta(l, append_, itemID, domain.KindThinking, e.ThinkingDelta.MessageID, e.ThinkingDelta.Text, e.ThinkingDelta.Parent)
 		case agent.KindToolStarted:
-			append_(a.closeMessages(l, "")...)
 			ts := e.ToolStarted
+			append_(a.closeMessages(l, "", ts.Parent)...)
 			// parent names the subagent's tool call (a Task) this call
 			// was made under; the transcript nests it there.
 			meta, _ := json.Marshal(map[string]any{"input": nilIfEmpty(ts.Input), "summary": ts.Summary, "parent": nilIfBlank(itemIDOr(itemID, ts.Parent))})
@@ -1526,6 +1526,8 @@ func (a *App) pump(l *live) {
 				status = domain.ItemFailed
 			}
 			evs = append(evs, domain.ItemCompleted{ID: itemID(tc.ID), Status: status})
+			// A Task's end is the end of its subagent's last message.
+			evs = append(evs, a.closeMessages(l, "", tc.ID)...)
 			l.mu.Lock()
 			delete(l.subTools, itemID(tc.ID))
 			l.mu.Unlock()
@@ -1582,10 +1584,10 @@ func (a *App) pump(l *live) {
 				tc.Status = "interrupted"
 			}
 			var closers []any
-			for _, id := range l.seenMsgs {
-				closers = append(closers, domain.ItemCompleted{ID: id, Status: domain.ItemDone})
+			for _, m := range l.seenMsgs {
+				closers = append(closers, domain.ItemCompleted{ID: m.id, Status: domain.ItemDone})
 			}
-			l.seenMsgs = map[string]string{}
+			l.seenMsgs = map[string]openMsg{}
 			// seenTools is per turn like seenMsgs: a tool id from last turn
 			// must not turn this turn's start into an update, and the map
 			// would otherwise grow for the life of the session.
@@ -1722,16 +1724,17 @@ func (a *App) pump(l *live) {
 func (a *App) delta(l *live, append_ func(...any), itemID func(string) string, kind, msgID, text, parent string) {
 	key := kind + ":" + msgID
 	l.mu.Lock()
-	id, ok := l.seenMsgs[key]
+	m, ok := l.seenMsgs[key]
+	id := m.id
 	l.mu.Unlock()
 	if !ok {
 		id = itemID(kind[:1] + "-" + msgID)
-		// A message can stream again after it was closed: Claude puts a
-		// background subagent's tool calls into the main stream with no
-		// parent, in the middle of a reply. The rest of the reply is then
-		// a new item after those calls. Starting the old id again would
-		// move it to the end with only the new text in it, and leave the
-		// page with two elements of that id.
+		// A message can stream again after it was closed (closeMessages
+		// keeps the main conversation and each subagent apart, but an
+		// older Claude sent a background subagent's calls with no
+		// parent). The rest of the message is then a new item. Starting
+		// the old id again would move it to the end with only the new
+		// text in it, and leave the page with two elements of that id.
 		for n := 2; ; n++ {
 			if _, err := a.Store.Item(context.Background(), id); err != nil {
 				break
@@ -1739,12 +1742,12 @@ func (a *App) delta(l *live, append_ func(...any), itemID func(string) string, k
 			id = itemID(fmt.Sprintf("%s-%s-%d", kind[:1], msgID, n))
 		}
 		l.mu.Lock()
-		l.seenMsgs[key] = id
+		l.seenMsgs[key] = openMsg{id: id, parent: parent}
 		l.mu.Unlock()
 	}
 	if !ok {
 		// A new message means the previous streamed one is finished.
-		evs := a.closeMessages(l, id)
+		evs := a.closeMessages(l, id, parent)
 		var meta json.RawMessage
 		if parent != "" {
 			// A subagent's text sits under its Task in the transcript.
@@ -1773,19 +1776,25 @@ func nilIfBlank(s string) any {
 	return s
 }
 
-// closeMessages marks every streamed message item except keep as done and
-// forgets it, so a later delta for it would start a fresh item. Streaming
-// adapters do not send an explicit end for text or thinking blocks; the
-// next block starting is the signal.
-func (a *App) closeMessages(l *live, keep string) []any {
+// openMsg is a message item still streaming, and the Task it belongs to
+// ("" for the main conversation).
+type openMsg struct{ id, parent string }
+
+// closeMessages marks the streamed message items of one conversation,
+// the main one or the subagent under parent, as done and forgets them,
+// keeping keep. Streaming adapters do not send an explicit end for text
+// or thinking blocks; the next block of the same conversation starting
+// is the signal. A background subagent works while the main reply
+// streams, and its steps must not end that reply.
+func (a *App) closeMessages(l *live, keep, parent string) []any {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var evs []any
-	for key, id := range l.seenMsgs {
-		if id == keep {
+	for key, m := range l.seenMsgs {
+		if m.id == keep || m.parent != parent {
 			continue
 		}
-		evs = append(evs, domain.ItemCompleted{ID: id, Status: domain.ItemDone})
+		evs = append(evs, domain.ItemCompleted{ID: m.id, Status: domain.ItemDone})
 		delete(l.seenMsgs, key)
 	}
 	return evs

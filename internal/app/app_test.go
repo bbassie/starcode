@@ -265,6 +265,65 @@ func TestReplyResumedAfterToolsIsANewItem(t *testing.T) {
 	}
 }
 
+// A background subagent works while the main reply streams. Its steps
+// and its text go under its Task and leave the reply whole.
+func TestBackgroundSubagentLeavesReplyWhole(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "bg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "", domain.ProjectAdded{ID: "p1", Path: t.TempDir(), Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	sess := newQueueSession()
+	a := New(st, bus.New(64), map[string]agent.Agent{"queue-test": &queueAgent{session: sess}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer a.Shutdown()
+	threadID, err := a.CreateThread(ctx, "p1", "queue-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendPrompt(ctx, threadID, "go"); err != nil {
+		t.Fatal(err)
+	}
+	receivePrompt(t, sess.sent)
+	main := func(s string) agent.Event {
+		return agent.Event{Kind: agent.KindTextDelta, TextDelta: &agent.TextDelta{MessageID: "m1", Text: s}}
+	}
+	sess.events <- agent.Event{Kind: agent.KindTurnStarted, TurnStarted: &agent.TurnStarted{TurnID: "turn-1"}}
+	sess.events <- agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: "task", Name: "Agent"}}
+	sess.events <- agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: "task", Status: "done", Output: "Async agent launched"}}
+	sess.events <- main("Clouds ")
+	sess.events <- agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: "sub1", Name: "Bash", Parent: "task"}}
+	sess.events <- main("are ")
+	sess.events <- agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: "sub1", Status: "done"}}
+	sess.events <- agent.Event{Kind: agent.KindTextDelta, TextDelta: &agent.TextDelta{MessageID: "s1", Text: "480", Parent: "task"}}
+	sess.events <- main("water.")
+	sess.events <- agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{TurnID: "turn-1", Status: "done", DurationMS: 10}}
+	var items []store.Item
+	deadline := time.Now().Add(time.Second)
+	for {
+		items, _ = st.Items(ctx, threadID)
+		if len(items) > 0 && items[len(items)-1].Kind == domain.KindResult {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("turn did not end: %+v", items)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var replies []string
+	for _, it := range items {
+		if it.Kind == domain.KindAssistant && !strings.Contains(string(it.Meta), "parent") {
+			replies = append(replies, it.Body)
+		}
+	}
+	if len(replies) != 1 || replies[0] != "Clouds are water." {
+		t.Fatalf("main replies = %q", replies)
+	}
+}
+
 func receivePrompt(t *testing.T, ch <-chan string) string {
 	t.Helper()
 	select {
