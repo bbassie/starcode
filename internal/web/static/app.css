@@ -403,10 +403,14 @@ select.in {
   align-items: center;
   gap: 8px;
   padding: 8px var(--pad);
-  border-bottom: var(--border-w) solid var(--border);
-  min-height: 48px;
+  border-bottom: var(--border-w) solid transparent;
+  min-height: 52px;
 }
 .navtoggle { display: none; }
+.mainhead .btn.ghost { color: var(--fg-dim); }
+.mainhead .btn.ghost:hover { color: var(--fg); }
+/* A panel toggle whose panel is open. */
+.mainhead .btn.on { color: var(--fg); background: var(--sel); }
 .crumbs { display: flex; gap: 8px; align-items: center; min-width: 0; flex: 1; font-weight: 600; }
 .show-sm { display: none; }
 .crumbs > .ellipsis { flex: 1; }
@@ -424,26 +428,31 @@ select.in {
   padding: 2px 8px;
   border-radius: 999px;
   background: var(--bg-3);
-  border: var(--border-w) solid var(--border);
+  border: var(--border-w) solid transparent;
   white-space: nowrap;
 }
+/* An idle thread needs no word for it; the pill stays in the page for
+   the notification script, which reads the status off it. */
+.mainhead > span.status-pill.st-idle:not([title]) { display: none; }
 button.status-pill { cursor: pointer; font-family: inherit; color: inherit; }
 /* The status text ("needs approval", "error") lives in the pill; the
    reason behind it opens under the header, since a title attribute never
    shows on a phone. */
-.status-detail { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; padding: 8px var(--pad); background: var(--bg-3); border-bottom: var(--border-w) solid var(--border); box-shadow: var(--shadow); font-size: 0.9em; color: var(--fg-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
+.status-detail { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; padding: 8px var(--pad); background: var(--menu); border-bottom: var(--border-w) solid var(--line-soft); box-shadow: var(--shadow); font-size: 0.9em; color: var(--fg-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Pin, branch, hand off, settle and delete fold into the "more" menu on
    every screen; the header keeps the title, the status and two buttons. */
 .mainhead { overflow: visible; }
-.head-more { display: none; position: absolute; top: calc(100% + 4px); right: 8px; z-index: 20; flex-direction: column; align-items: stretch; gap: 2px; min-width: 200px; padding: 6px; background: var(--bg-3); border: var(--border-w) solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+.head-more { display: none; position: absolute; top: calc(100% + 4px); right: 8px; z-index: 20; flex-direction: column; align-items: stretch; gap: 2px; min-width: 220px; padding: 6px; background: var(--menu); border: var(--border-w) solid var(--line-soft); border-radius: var(--radius); box-shadow: var(--shadow); }
+.head-more .btn { background: transparent; color: var(--fg); }
+.head-more .btn:hover { background: var(--menu-hover); }
 .head-more.open { display: flex; }
 .head-more .btn { justify-content: flex-start; min-height: 34px; }
 .head-more .btn .ui-icon { margin: 0; }
 .head-more .hide-sm { display: inline; }
 .head-more .show-sm { display: none; }
-.status-pill.st-running { border-color: var(--accent); }
-.status-pill.st-awaiting_approval { border-color: var(--warn); }
-.status-pill.st-error { border-color: var(--err); }
+.status-pill.st-running { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.status-pill.st-awaiting_approval { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.status-pill.st-error { background: color-mix(in srgb, var(--err) 16%, transparent); }
 .status-pill .ui-icon { margin-right: 3px; }
 
 /* ---- transcript ---- */

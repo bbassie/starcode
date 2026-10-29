@@ -402,9 +402,11 @@ templ MainHead(d ThreadData) {
 		// layout's vscodeOpen builds the link. Left out on a phone, which
 		// has no VS Code to hand it to.
 		{{ dir := d.Project.Path }}
-		<button class="btn ghost vscode-open" type="button" data-on:click={ VSCodeOpen(dir) } title={ "Open " + dir + " in VS Code" }>@Icon("brand-vscode", "ui-icon") <span class="hide-sm">VS Code</span></button>
-		<button class="btn ghost" data-on:click="$term = !$term" title="Toggle terminal">@Icon("terminal", "ui-icon") <span class="hide-sm">terminal</span></button>
-		<button class="btn ghost gittoggle" data-on:click="$git = !$git" title="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon") <span class="hide-sm">changes</span></button>
+		// Icons only, like the panel toggles of an editor; the one whose
+		// panel is open is lit.
+		<button class="btn icon ghost vscode-open" type="button" data-on:click={ VSCodeOpen(dir) } title={ "Open " + dir + " in VS Code" } aria-label="Open in VS Code">@Icon("brand-vscode", "ui-icon")</button>
+		<button class="btn icon ghost termtoggle" data-on:click="$term = !$term" data-class:on="$term" title="Toggle terminal" aria-label="Toggle terminal">@Icon("terminal", "ui-icon")</button>
+		<button class="btn icon ghost gittoggle" data-on:click="$git = !$git" data-class:on="$git" title="Toggle changes panel" aria-label="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon")</button>
 		// Pin, branch, hand off, settle and delete live behind this
 		// button on every screen; terminal and changes stay in the row.
 		<button class="btn icon ghost more-toggle" type="button" data-on:click="$more = !$more" title="More" aria-label="More actions">@Icon("ellipsis-vertical", "ui-icon")</button>
