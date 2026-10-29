@@ -1442,6 +1442,15 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   #git-head > .git-branch { flex: 0 1 auto; }
   .files li a, .tree-dir > summary { min-height: var(--tap); }
   .rule-x { width: 28px; height: 28px; }
+  /* .btn.icon's 32px minimum outranks a plain class, so these name it. */
+  .side-brand .btn.icon, .side-search .btn.icon, .side-foot .btn.icon, .btn.icon.palette-close, .composer .btn.icon.attach-btn { min-width: var(--tap); min-height: var(--tap); }
+  .segmented a { min-height: 36px; }
+  .turn-files > summary { min-height: var(--tap); }
+  .crumb-title { min-height: 36px; }
+  .project-card > header .btn { min-height: 36px; }
+  .prov-color { width: 32px; height: 32px; }
+  /* The switch keeps its size and gets a bigger target around it. */
+  .switch::before { content: ""; position: absolute; inset: -10px -6px; }
   .attach-remove { width: 26px; height: 26px; top: -8px; right: -8px; font-size: 15px; }
   .work > summary, details.item > summary { min-height: 36px; }
   .term-head { min-height: 40px; }
@@ -1714,6 +1723,7 @@ details.item.agent[open] > summary::after { transform: rotate(90deg); }
 .snooze-opts { display: flex; flex-wrap: wrap; gap: 4px; }
 .snooze-opts .btn.sel { background: var(--sel); color: var(--fg); }
 .head-more .snooze-opts .btn { min-height: 28px; justify-content: center; }
+@media (max-width: 900px) { .head-more .snooze-opts .btn { min-height: 36px; } }
 .snooze-at { display: flex; align-items: center; gap: 6px; }
 .snooze-at input { flex: 1; min-width: 0; padding: 3px 6px; }
 
