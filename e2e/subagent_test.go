@@ -16,14 +16,15 @@ import (
 func TestStopSubagent(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	// Slow enough to click while the subagent runs.
-	e.fake.Delay = 300 * time.Millisecond
+	// Slow enough to click while the subagent runs; the rest of the turn
+	// runs at the usual pace.
+	e.fake.SubagentDelay = 300 * time.Millisecond
 	id := e.thread()
 	p := e.page("/threads/"+id, false)
 	if err := e.app.SendPrompt(ctx, id, "go"); err != nil {
 		t.Fatal(err)
 	}
-	btn := p.Timeout(30 * time.Second).MustElement(`details.item.agent.st-running .agent-stop`)
+	btn := p.MustElement(`details.item.agent.st-running .agent-stop`)
 	click(btn)
 	e.waitIdle(id)
 	items, err := e.store.Items(ctx, id)
@@ -46,6 +47,5 @@ func TestStopSubagent(t *testing.T) {
 	if th, _ := e.store.Thread(ctx, id); th.Status != domain.StatusIdle || !reply {
 		t.Errorf("turn did not run on after the stop: status %q, reply %v", th.Status, reply)
 	}
-	// The slow turn may have used up the page's deadline.
-	wait(p.CancelTimeout().Timeout(timeout), `() => !document.querySelector('.agent-stop')`)
+	wait(p, `() => !document.querySelector('.agent-stop')`)
 }

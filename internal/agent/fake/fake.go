@@ -30,6 +30,9 @@ const fakeWindow = 100_000
 type Agent struct {
 	// Delay between streamed chunks. Zero means as fast as possible.
 	Delay time.Duration
+	// SubagentDelay, when set, replaces Delay while a subagent runs, so a
+	// test can slow down only that stretch, to click its stop button.
+	SubagentDelay time.Duration
 }
 
 func New() *Agent { return &Agent{Delay: 40 * time.Millisecond} }
@@ -136,9 +139,11 @@ func (s *session) emit(e agent.Event) {
 	}
 }
 
-func (s *session) sleep() bool {
+func (s *session) sleep() bool { return s.sleepFor(s.a.Delay) }
+
+func (s *session) sleepFor(d time.Duration) bool {
 	select {
-	case <-time.After(s.a.Delay):
+	case <-time.After(d):
 		return true
 	case <-s.stop:
 		return false
@@ -350,11 +355,15 @@ func (s *session) subagent(t3 string) string {
 		defer s.mu.Unlock()
 		return s.taskStop
 	}
+	delay := s.a.Delay
+	if s.a.SubagentDelay > 0 {
+		delay = s.a.SubagentDelay
+	}
 	for i, name := range []string{"Glob", "Read"} {
 		nid := fmt.Sprintf("%s-n%d", t3, i)
 		nin, _ := json.Marshal(map[string]any{"pattern": "**/*_test.go"})
 		s.emit(agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: nid, Name: name, Input: nin, Summary: "**/*_test.go", Parent: t3}})
-		if !s.sleep() {
+		if !s.sleepFor(delay) {
 			return "interrupted"
 		}
 		if stopped() {
@@ -366,7 +375,7 @@ func (s *session) subagent(t3 string) string {
 	}
 	for _, w := range strings.SplitAfter("The tests cover the queue, restarts and the store. ", " ") {
 		s.emit(agent.Event{Kind: agent.KindTextDelta, TextDelta: &agent.TextDelta{MessageID: t3 + "-m", Text: w, Parent: t3}})
-		if !s.sleep() {
+		if !s.sleepFor(delay) {
 			return "interrupted"
 		}
 		if stopped() {
