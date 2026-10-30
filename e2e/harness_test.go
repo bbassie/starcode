@@ -3,7 +3,9 @@
 // Package e2e drives the real pages in a headless Chromium through Rod.
 // Each test builds the whole server in-process (store, app, web) on a
 // temporary data directory with only the scripted fake agent, so no test
-// can reach a paid agent, and serves it with httptest.
+// can reach a paid agent, and serves it with httptest. Tests run in
+// parallel, each with its own server and its own incognito browser
+// context, so no two share cookies or storage.
 //
 //	go test -tags e2e ./e2e/...
 //
@@ -29,6 +31,7 @@ import (
 	"github.com/go-rod/rod/lib/devices"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
+	"github.com/go-rod/rod/lib/utils"
 
 	"starcode/internal/agent"
 	"starcode/internal/agent/fake"
@@ -49,8 +52,8 @@ var (
 	browserErr  error
 )
 
-// sharedBrowser starts one browser for the whole run; each test gets its
-// own pages.
+// sharedBrowser starts one browser for the whole run; each test opens
+// its own incognito context in it.
 func sharedBrowser(t *testing.T) *rod.Browser {
 	t.Helper()
 	browserOnce.Do(func() {
@@ -67,7 +70,12 @@ func sharedBrowser(t *testing.T) *rod.Browser {
 			browserErr = err
 			return
 		}
-		browser = rod.New().ControlURL(u)
+		// Rod polls a wait every 100ms, backing off to a second; a
+		// page here changes within milliseconds, so poll at 10ms and
+		// back off only to 100ms.
+		browser = rod.New().ControlURL(u).Sleeper(func() utils.Sleeper {
+			return utils.BackoffSleeper(10*time.Millisecond, 100*time.Millisecond, nil)
+		})
 		browserErr = browser.Connect()
 	})
 	if browserErr != nil {
@@ -98,10 +106,14 @@ type env struct {
 	dir     string // the project's checkout
 	srv     *httptest.Server
 	fake    *fake.Agent
+	browser *rod.Browser // this test's incognito context
 }
 
+// newEnv starts a server for t and marks t parallel: nothing in an env
+// is shared with another test.
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
@@ -146,7 +158,12 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, url: srv.URL, app: a, store: st, project: pid, dir: dir, srv: srv, fake: fk}
+	b, err := sharedBrowser(t).Incognito()
+	if err != nil {
+		t.Fatalf("open an incognito context: %v", err)
+	}
+	t.Cleanup(func() { b.Close() })
+	return &env{t: t, url: srv.URL, app: a, store: st, project: pid, dir: dir, srv: srv, fake: fk, browser: b}
 }
 
 // thread makes a fake-agent thread in the never-ask mode, so a turn runs
@@ -165,9 +182,13 @@ func (e *env) thread() string {
 }
 
 // turns sends prompts over the app and waits for each turn to end, for
-// tests that need a transcript to start from.
+// tests that need a transcript to start from. Nothing watches these
+// turns stream, so the fake runs them with no delay between chunks.
 func (e *env) turns(id string, prompts ...string) {
 	e.t.Helper()
+	d := e.fake.Delay
+	e.fake.Delay = 0
+	defer func() { e.fake.Delay = d }()
 	for _, p := range prompts {
 		if err := e.app.SendPrompt(context.Background(), id, p); err != nil {
 			e.t.Fatal(err)
@@ -212,8 +233,10 @@ func (e *env) until(what string, ok func() bool) {
 // answers yes, and a script error on the page fails the test.
 func (e *env) page(path string, phone bool) *rod.Page {
 	e.t.Helper()
-	p := sharedBrowser(e.t).MustPage("")
-	e.t.Cleanup(func() { p.Close() })
+	p := e.browser.MustPage("")
+	// Closing the target skips beforeunload, so a page that still holds
+	// an unsaved edit does not wait out the deadline on a dialog.
+	e.t.Cleanup(func() { proto.TargetCloseTarget{TargetID: p.TargetID}.Call(e.browser) })
 	if phone {
 		p.MustEmulate(devices.IPhoneX)
 	} else {
@@ -264,4 +287,20 @@ func wait(p *rod.Page, js string, args ...any) {
 // value is a form control's current value.
 func value(p *rod.Page, selector string) string {
 	return p.MustElement(selector).MustEval(`() => this.value`).String()
+}
+
+// reconnect makes the page reopen its stream and waits until the new
+// stream has drawn the page: the server sends its first heartbeat after
+// the initial render, and the heartbeat calls streamAlive.
+func reconnect(p *rod.Page) {
+	p.MustEval(`() => {
+		window._alive = 0;
+		if (!window._aliveWrapped) {
+			const f = window.streamAlive;
+			window.streamAlive = () => { window._alive++; f(); };
+			window._aliveWrapped = true;
+		}
+		window.dispatchEvent(new Event('stream'));
+	}`)
+	wait(p, `() => window._alive > 0`)
 }

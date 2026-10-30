@@ -33,6 +33,7 @@ func TestEditorSaves(t *testing.T) {
 		b, _ := os.ReadFile(filepath.Join(e.dir, "notes.txt"))
 		return string(b) == "one\ntwo\n"
 	})
+	wait(p, `() => !document.querySelector('form.git-editor.dirty')`)
 	// The file now shows in the changes list.
 	click(p.MustElementR(".panel-tab", "changes"))
 	p.MustElementR("#git-files a", "notes.txt")
@@ -82,8 +83,7 @@ func TestEarlierItems(t *testing.T) {
 	}
 	// A reconnect keeps the whole transcript: the page's $full rides
 	// along, and the redraw does not cut it again.
-	p.MustEval(`() => window.dispatchEvent(new Event('stream'))`)
-	time.Sleep(time.Second)
+	reconnect(p)
 	wait(p, `() => !document.getElementById('load-earlier') && document.querySelectorAll('.item.user').length === 9`)
 }
 
@@ -97,8 +97,7 @@ func TestPanelSurvivesReconnect(t *testing.T) {
 	p := e.page("/threads/"+id, false)
 	click(p.MustElementR("#git-files a", "README.md"))
 	p.MustElementR("#git-detail .diff span.add", "changed")
-	p.MustEval(`() => window.dispatchEvent(new Event('stream'))`)
-	time.Sleep(time.Second)
+	reconnect(p)
 	wait(p, `() => [...document.querySelectorAll('#git-detail .diff span.add')].some((s) => s.textContent.includes('changed'))`)
 }
 
@@ -182,16 +181,19 @@ func TestReopenSettles(t *testing.T) {
 		const f = window.fetch;
 		window.fetch = (u, o) => { if (String(u).includes('/events')) window._opens++; return f(u, o); };
 	}`)
+	// A stray reopen comes 1s after the stream it follows (the page's
+	// first retry wait), so 2s without one is enough to tell.
+	const quiet = 2 * time.Second
 	p.MustEval(`() => window.dispatchEvent(new Event('stream'))`)
-	time.Sleep(3 * time.Second)
+	time.Sleep(quiet)
 	if n := p.MustEval(`() => window._opens`).Int(); n != 1 {
-		t.Fatalf("one reopen opened the stream %d times in 3s", n)
+		t.Fatalf("one reopen opened the stream %d times in %v", n, quiet)
 	}
 	e.srv.CloseClientConnections()
 	wait(p, `() => window._opens >= 2`)
-	time.Sleep(3 * time.Second)
+	time.Sleep(quiet)
 	if n := p.MustEval(`() => window._opens`).Int(); n != 2 {
-		t.Fatalf("a stream the server ended came back %d times in 3s, want once", n-1)
+		t.Fatalf("a stream the server ended came back %d times in %v, want once", n-1, quiet)
 	}
 }
 
