@@ -291,6 +291,20 @@ type PromptsReordered struct {
 	IDs []string `json:"ids"`
 }
 
+// PromptSteered hands a queued prompt to the running turn: the agent reads
+// it at its next step, without the turn stopping. It waits above the
+// composer until the agent takes it, which dequeues it and puts it in the
+// transcript there.
+type PromptSteered struct {
+	ID string `json:"id"`
+}
+
+// PromptSteerDropped puts a steered prompt back in the queue: the agent
+// session ended before it took it.
+type PromptSteerDropped struct {
+	ID string `json:"id"`
+}
+
 // ItemStarted opens a new item in the transcript. Body may be empty and be
 // filled by ItemDelta events (assistant text, thinking, tool output).
 type ItemStarted struct {
@@ -534,6 +548,10 @@ func TypeOf(p any) string {
 		return "prompt.edited"
 	case PromptsReordered, *PromptsReordered:
 		return "prompt.reordered"
+	case PromptSteered, *PromptSteered:
+		return "prompt.steered"
+	case PromptSteerDropped, *PromptSteerDropped:
+		return "prompt.steer_dropped"
 	case ItemStarted, *ItemStarted:
 		return "item.started"
 	case ItemDelta, *ItemDelta:
@@ -632,6 +650,10 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &PromptEdited{}
 	case "prompt.reordered":
 		p = &PromptsReordered{}
+	case "prompt.steered":
+		p = &PromptSteered{}
+	case "prompt.steer_dropped":
+		p = &PromptSteerDropped{}
 	case "item.started":
 		p = &ItemStarted{}
 	case "item.delta":

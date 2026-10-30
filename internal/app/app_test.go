@@ -1028,7 +1028,7 @@ func TestQueueEditMoveSteer(t *testing.T) {
 		t.Fatalf("order %s", got)
 	}
 	a.SendPrompt(ctx, id, "d")
-	if err := a.Steer(ctx, id, "now!"); err != nil {
+	if err := a.StopAndSend(ctx, id, "now!"); err != nil {
 		t.Fatal(err)
 	}
 	if got := order(); got != "now!,c,a,B,d" {

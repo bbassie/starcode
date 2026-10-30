@@ -3,7 +3,9 @@
 // narration, a tool call that needs approval (except in the yolo mode),
 // streamed prose, a result. A prompt with "ask me" in it first puts a
 // question to the human, the way Claude Code's AskUserQuestion does, in
-// every mode; one with "screenshot" in it reads a picture.
+// every mode; one with "screenshot" in it reads a picture. A message
+// steered in mid-turn is taken after the next tool call and quoted in the
+// reply; one that comes during the reply starts the next turn.
 package fake
 
 import (
@@ -117,8 +119,11 @@ type session struct {
 	running   bool
 	// task is the subagent running now and taskStop whether StopTask
 	// asked it to end.
-	task      string
-	taskStop  bool
+	task     string
+	taskStop bool
+	// steers are the messages Steer handed in that the turn has not
+	// taken yet.
+	steers    []steer
 	closeOnce sync.Once
 	// emitMu and closed keep emit off the channel once it is closed: the
 	// turn's goroutine can still be emitting when the session closes, and
@@ -152,6 +157,35 @@ func (s *session) sleepFor(d time.Duration) bool {
 	}
 }
 
+type steer struct{ id, text string }
+
+// Steer hands a message to the running turn, which takes it at its next
+// step (takeSteers).
+func (s *session) Steer(ctx context.Context, id, text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running {
+		return agent.ErrNoSteer
+	}
+	s.steers = append(s.steers, steer{id, text})
+	return nil
+}
+
+// takeSteers reports the steered messages as taken and returns their
+// text.
+func (s *session) takeSteers() []string {
+	s.mu.Lock()
+	taken := s.steers
+	s.steers = nil
+	s.mu.Unlock()
+	var texts []string
+	for _, st := range taken {
+		s.emit(agent.Event{Kind: agent.KindSteered, Steered: &agent.Steered{ID: st.id}})
+		texts = append(texts, st.text)
+	}
+	return texts
+}
+
 func (s *session) Send(ctx context.Context, text string) error {
 	s.mu.Lock()
 	if s.running {
@@ -162,29 +196,42 @@ func (s *session) Send(ctx context.Context, text string) error {
 	s.turn++
 	turnID := fmt.Sprintf("turn-%d", s.turn)
 	s.mu.Unlock()
-	go s.run(turnID, text)
+	go s.run(turnID, text, nil)
 	return nil
 }
 
-func (s *session) run(turnID, prompt string) {
+// run plays one turn. steered are messages the last turn ended too early
+// for, which this one starts with.
+func (s *session) run(turnID, prompt string, steered []steer) {
 	start := time.Now()
-	markIdle := func() {
-		s.mu.Lock()
-		s.running = false
-		s.mu.Unlock()
-	}
-	defer markIdle()
 	finish := func(status string) {
 		// A TurnCompleted event promises callers may start the next turn.
 		// Mark this one idle before publishing it so queued prompts can hand
-		// off immediately.
-		markIdle()
+		// off immediately. Messages steered in too late start the next
+		// turn here, as Claude's CLI does.
+		s.mu.Lock()
+		late := s.steers
+		s.steers = nil
+		s.running = len(late) > 0
+		next := ""
+		if len(late) > 0 {
+			s.turn++
+			next = fmt.Sprintf("turn-%d", s.turn)
+		}
+		s.mu.Unlock()
 		s.emit(agent.Event{Kind: agent.KindTurnCompleted, TurnCompleted: &agent.TurnCompleted{
 			TurnID: turnID, Anchor: fmt.Sprintf("%s-%d", turnID, start.UnixNano()), Status: status, DurationMS: time.Since(start).Milliseconds(),
 			CostUSD: 0.0042, InputTokens: 1234, OutputTokens: 321,
 		}})
+		if len(late) > 0 {
+			go s.run(next, late[0].text, late)
+		}
 	}
 	s.emit(agent.Event{Kind: agent.KindTurnStarted, TurnStarted: &agent.TurnStarted{TurnID: turnID}})
+	for _, st := range steered {
+		s.emit(agent.Event{Kind: agent.KindSteered, Steered: &agent.Steered{ID: st.id}})
+	}
+	var heard []string
 	// Each turn takes another bite out of the window, in two readings, so
 	// the meter both climbs and moves mid-turn.
 	s.context(9_000)
@@ -217,6 +264,7 @@ func (s *session) run(turnID, prompt string) {
 		return
 	}
 	s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t1, Status: "done", Output: "main.go\ninternal/app/app.go\ninternal/web/server.go"}})
+	heard = append(heard, s.takeSteers()...)
 
 	if strings.Contains(strings.ToLower(prompt), "screenshot") {
 		// Read on a picture, which comes back as the image itself.
@@ -262,6 +310,10 @@ func (s *session) run(turnID, prompt string) {
 		s.emit(agent.Event{Kind: agent.KindToolCompleted, ToolCompleted: &agent.ToolCompleted{ID: t2, Status: "done"}})
 	}
 
+	// The call may have waited on the human; a message steered in
+	// meanwhile is read once it is done.
+	heard = append(heard, s.takeSteers()...)
+
 	// An edit, which the transcript shows as a diff and the turn's
 	// changed-files card counts. Nothing is written: it is only the call.
 	t4 := turnID + "-t4"
@@ -290,9 +342,15 @@ func (s *session) run(turnID, prompt string) {
 	s.task = ""
 	s.mu.Unlock()
 
+	heard = append(heard, s.takeSteers()...)
+
 	s.context(4_500)
 	msg2 := turnID + "-m2"
-	prose := "You asked: *" + firstWords(prompt, 12) + "*\n\nHere is what I did:\n\n1. Listed the Go files with `Glob`.\n2. Ran the tests (decision: **" + string(d) + "**).\n\n```go\nfunc main() {\n\tfmt.Println(\"hello from the fake agent\")\n}\n```\n\nNothing else needed changing."
+	asked := "You asked: *" + firstWords(prompt, 12) + "*"
+	for _, h := range heard {
+		asked += "\n\nYou also said: *" + firstWords(h, 12) + "*"
+	}
+	prose := asked + "\n\nHere is what I did:\n\n1. Listed the Go files with `Glob`.\n2. Ran the tests (decision: **" + string(d) + "**).\n\n```go\nfunc main() {\n\tfmt.Println(\"hello from the fake agent\")\n}\n```\n\nNothing else needed changing."
 	for _, w := range strings.SplitAfter(prose, " ") {
 		s.emit(agent.Event{Kind: agent.KindTextDelta, TextDelta: &agent.TextDelta{MessageID: msg2, Text: w}})
 		if !s.sleep() {

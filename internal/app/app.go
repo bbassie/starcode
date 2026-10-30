@@ -255,6 +255,13 @@ func (a *App) Recover(ctx context.Context) error {
 	}
 	resume := a.Store.ResumeAfterRestart(ctx)
 	for _, t := range threads {
+		// No session survives to deliver a steered prompt; it goes out
+		// with the queue.
+		if evs := a.dropSteered(ctx, t.ID); len(evs) > 0 {
+			if _, err := a.Store.Append(ctx, t.ID, evs...); err != nil {
+				return err
+			}
+		}
 		queued, err := a.Store.QueuedPrompts(ctx, t.ID)
 		if err != nil {
 			return err
@@ -943,38 +950,6 @@ func (a *App) queuedIndex(ctx context.Context, threadID, promptID string) (int, 
 	return 0, errors.New("queued prompt not found")
 }
 
-// Steer sends text now: on a busy thread it goes to the front of the
-// queue and the running turn is stopped, so it is the next thing the
-// agent reads; on an idle one it is an ordinary send.
-func (a *App) Steer(ctx context.Context, threadID, text string) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return errors.New("prompt is empty")
-	}
-	a.promptMu.Lock()
-	t, err := a.Store.Thread(ctx, threadID)
-	if err != nil {
-		a.promptMu.Unlock()
-		return err
-	}
-	if !busyThread(t) {
-		a.promptMu.Unlock()
-		return a.SendPrompt(ctx, threadID, text)
-	}
-	id := newID()
-	if _, err := a.Store.Append(ctx, threadID, domain.PromptQueued{ID: id, Body: text}); err != nil {
-		a.promptMu.Unlock()
-		return err
-	}
-	a.Store.SaveDraft(ctx, threadID, "")
-	err = a.moveQueuedLocked(ctx, threadID, id, -1<<30)
-	a.promptMu.Unlock()
-	if err != nil {
-		return err
-	}
-	return a.Interrupt(ctx, threadID)
-}
-
 // startPromptLocked moves an optional queued prompt into the transcript and
 // sends it. promptMu must be held so an arriving HTTP send cannot overtake a
 // turn-completion handoff.
@@ -1487,6 +1462,8 @@ func (a *App) pump(l *live) {
 			l.interrupted = false
 			l.mu.Unlock()
 			append_(domain.TurnStarted{TurnID: e.TurnStarted.TurnID}, domain.ThreadStatusChanged{Status: domain.StatusRunning})
+		case agent.KindSteered:
+			append_(a.steered(ctx, l, e.Steered.ID)...)
 		case agent.KindTextDelta:
 			a.delta(l, append_, itemID, domain.KindAssistant, e.TextDelta.MessageID, e.TextDelta.Text, e.TextDelta.Parent)
 		case agent.KindThinkingDelta:
@@ -1625,6 +1602,11 @@ func (a *App) pump(l *live) {
 			if queueErr != nil {
 				log.Error("read prompt queue", "err", queueErr)
 			}
+			// Steered prompts the turn ended too early for start the next
+			// turn in the session itself (agent.Steerer): the thread stays
+			// busy, and the queue waits behind them.
+			steering, _ := a.Store.SteeredPrompts(ctx, tid)
+			owed := len(steering) > 0
 			// An approval the turn never got an answer for (Stop was pressed,
 			// or the agent gave up) is over with the turn. Left pending, its
 			// card would come back on every reload and answering it would
@@ -1654,7 +1636,7 @@ func (a *App) pump(l *live) {
 			// on the Snoozed shelf and resumes then (see wakeDue). A queued
 			// prompt would only hit the same limit, so it waits too.
 			limited := tc.Status == "error" && !tc.LimitReset.IsZero() && a.Store.ResumeAfterLimit(ctx)
-			if len(queued) == 0 || limited {
+			if (len(queued) == 0 && !owed) || limited {
 				completed = append(completed, domain.ThreadStatusChanged{Status: status, Detail: detail})
 			}
 			if limited {
@@ -1675,11 +1657,16 @@ func (a *App) pump(l *live) {
 			stale := l.stale
 			l.mu.Unlock()
 			next := l
-			if stale {
+			if stale && !owed {
 				a.retire(l)
 				next = nil
 			}
-			if len(queued) > 0 && !limited {
+			if owed {
+				l.mu.Lock()
+				turnID := l.turnID
+				l.mu.Unlock()
+				go a.watchSteered(l, turnID)
+			} else if len(queued) > 0 && !limited {
 				t, err := a.Store.Thread(ctx, tid)
 				if err == nil && next == nil {
 					next, err = a.session(ctx, t)
@@ -1692,7 +1679,7 @@ func (a *App) pump(l *live) {
 				}
 			}
 			a.promptMu.Unlock()
-			if len(queued) == 0 || limited {
+			if (len(queued) == 0 && !owed) || limited {
 				a.childDone(tid)
 			}
 			a.Bus.Publish(domain.GitChanged{ProjectID: l.projectID})
@@ -1710,6 +1697,12 @@ func (a *App) pump(l *live) {
 				continue
 			}
 			busy := t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval
+			if current {
+				// Whatever the session was to deliver waits for the next turn.
+				a.promptMu.Lock()
+				append_(a.dropSteered(ctx, tid)...)
+				a.promptMu.Unlock()
+			}
 			if e.Closed.Err != nil {
 				append_(domain.ItemStarted{ID: newID(), Kind: domain.KindError, Body: "agent exited: " + e.Closed.Err.Error()},
 					domain.ThreadStatusChanged{Status: domain.StatusError, Detail: e.Closed.Err.Error()})

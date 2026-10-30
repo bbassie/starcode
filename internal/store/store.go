@@ -540,6 +540,12 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 			}
 		}
 		return nil
+	case domain.PromptSteered:
+		_, err := tx.ExecContext(ctx, `UPDATE queued_prompts SET steered=1 WHERE thread_id=? AND id=?`, ev.ThreadID, p.ID)
+		return err
+	case domain.PromptSteerDropped:
+		_, err := tx.ExecContext(ctx, `UPDATE queued_prompts SET steered=0 WHERE thread_id=? AND id=?`, ev.ThreadID, p.ID)
+		return err
 	case domain.PromptDequeued:
 		_, err := tx.ExecContext(ctx, `DELETE FROM queued_prompts WHERE thread_id=? AND id=?`, ev.ThreadID, p.ID)
 		if err != nil {
@@ -755,6 +761,10 @@ func deref(p any) any {
 	case *domain.PromptEdited:
 		return *v
 	case *domain.PromptsReordered:
+		return *v
+	case *domain.PromptSteered:
+		return *v
+	case *domain.PromptSteerDropped:
 		return *v
 	case *domain.ItemStarted:
 		return *v
@@ -999,8 +1009,19 @@ func (s *Store) ItemsFrom(ctx context.Context, threadID, firstID string) ([]Item
 
 // QueuedPrompts returns follow-ups waiting behind the active turn, oldest
 // first. They are projected separately from items to preserve transcript order.
+// Prompts handed to the running turn are not among them (SteeredPrompts).
 func (s *Store) QueuedPrompts(ctx context.Context, threadID string) ([]QueuedPrompt, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,thread_id,seq,body,created_at FROM queued_prompts WHERE thread_id=? ORDER BY pos, seq`, threadID)
+	return s.queuedPrompts(ctx, threadID, false)
+}
+
+// SteeredPrompts returns the prompts handed to the running turn that the
+// agent has not taken yet, oldest first.
+func (s *Store) SteeredPrompts(ctx context.Context, threadID string) ([]QueuedPrompt, error) {
+	return s.queuedPrompts(ctx, threadID, true)
+}
+
+func (s *Store) queuedPrompts(ctx context.Context, threadID string, steered bool) ([]QueuedPrompt, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,thread_id,seq,body,created_at FROM queued_prompts WHERE thread_id=? AND steered=? ORDER BY pos, seq`, threadID, steered)
 	if err != nil {
 		return nil, err
 	}

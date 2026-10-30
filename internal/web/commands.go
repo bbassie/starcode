@@ -278,7 +278,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	send := s.App.SendPrompt
 	switch {
 	case r.URL.Query().Get("steer") == "1":
-		send = s.App.Steer
+		send = s.App.StopAndSend
 	case r.URL.Query().Get("compact") == "1":
 		send = s.App.CompactAndSend
 	}

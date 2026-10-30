@@ -855,7 +855,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		if mine {
 			return c.sse.Redirect("/")
 		}
-	case domain.PromptQueued, domain.PromptDequeued, domain.PromptEdited, domain.PromptsReordered:
+	case domain.PromptQueued, domain.PromptDequeued, domain.PromptEdited, domain.PromptsReordered, domain.PromptSteered, domain.PromptSteerDropped:
 		if mine {
 			return c.renderPromptQueue(ctx)
 		}
