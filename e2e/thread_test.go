@@ -411,10 +411,17 @@ func TestEffortStep(t *testing.T) {
 		}
 		return th.Effort
 	}
+	// effortStep reads the level the page shows, so each step waits for
+	// the composer the server drew with the new level. A redraw for the
+	// step before can otherwise land after the next click and undo it.
+	drawn := func(want string) {
+		wait(p, `(want) => document.querySelector('form.composer').getAttribute('data-signals').includes('effort: ' + JSON.stringify(want))`, want)
+	}
 	// The fake's levels are default, low and high.
 	for _, want := range []string{"low", "high", ""} {
 		p.MustEval(`() => effortStep(1)`)
 		e.until("effort "+want, func() bool { return effort() == want })
+		drawn(want)
 	}
 	p.MustEval(`() => effortStep(-1)`)
 	e.until("effort wraps back to high", func() bool { return effort() == "high" })
