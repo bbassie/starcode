@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +70,8 @@ func describe(evs []agent.Event) string {
 			out += " " + e.TurnCompleted.Status
 		case agent.KindNotice:
 			out += " " + e.Notice.Text
+		case agent.KindSteered:
+			out += " " + e.Steered.ID
 		}
 	}
 	return out
@@ -113,5 +116,41 @@ func TestIntegrationFileChangeAndCommand(t *testing.T) {
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "hello.txt")); err != nil || string(b) != "hi from starcode\n" && string(b) != "hi from starcode" {
 		t.Errorf("hello.txt = %q, %v", b, err)
+	}
+}
+
+// A message steered in while a command runs reaches the same turn: the
+// agent reports taking it before it starts the work the message asks for,
+// and the turn ends once.
+func TestIntegrationSteer(t *testing.T) {
+	dir := t.TempDir()
+	s := startIntegration(t, dir)
+	collect(t, s, func(e agent.Event) bool { return e.Kind == agent.KindSessionInfo }, 30*time.Second)
+	if err := s.Send(t.Context(), "Run the shell command `sleep 5 && echo one`, then run `sleep 5 && echo two` as a separate command, then reply with the outputs."); err != nil {
+		t.Fatal(err)
+	}
+	seen := collect(t, s, func(e agent.Event) bool { return e.Kind == agent.KindToolStarted }, time.Minute)
+	time.Sleep(time.Second)
+	if err := s.(agent.Steerer).Steer(t.Context(), "steer-1", "Also run `echo three` after the second command."); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	seen = append(seen, collect(t, s, func(e agent.Event) bool { return e.Kind == agent.KindTurnCompleted }, 3*time.Minute)...)
+	t.Logf("events: %s", describe(seen))
+	steered, three := -1, -1
+	for i, e := range seen {
+		switch {
+		case e.Kind == agent.KindSteered && e.Steered.ID == "steer-1":
+			steered = i
+		case e.Kind == agent.KindToolStarted && strings.Contains(e.ToolStarted.Summary, "echo three"):
+			three = i
+		}
+	}
+	if steered < 0 || three < steered {
+		t.Errorf("steered at %d, echo three at %d", steered, three)
+	}
+	select {
+	case e := <-s.Events():
+		t.Errorf("after the turn: %s", describe([]agent.Event{e}))
+	case <-time.After(3 * time.Second):
 	}
 }

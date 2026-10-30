@@ -65,6 +65,9 @@ type session struct {
 	// the same numbers are not reported twice.
 	ctxTokens, ctxWindow int64
 	turnStart            time.Time
+	// steered are the ids of messages turn/steer put into the running
+	// turn, which the agent has not acted on yet.
+	steered []string
 }
 
 type usage struct{ input, output int64 }
@@ -183,6 +186,43 @@ func (s *session) SendImages(ctx context.Context, text string, paths []string) e
 func (s *session) Compact(ctx context.Context) error {
 	_, err := s.c.call(ctx, "thread/compact/start", map[string]any{"threadId": s.threadID})
 	return err
+}
+
+// Steer hands text to the running turn with turn/steer. The server takes
+// it into the turn's input at once (a userMessage item with our id as its
+// clientId) and the model reads it when it next samples, after the
+// running command; Steered goes out then, ahead of the next item. A turn
+// that ended, or one that takes no input (a review, a compaction), fails
+// the request, and the app keeps the message for the next turn.
+func (s *session) Steer(ctx context.Context, id, text string) error {
+	s.mu.Lock()
+	turnID := s.turnID
+	s.mu.Unlock()
+	if turnID == "" {
+		return agent.ErrNoSteer
+	}
+	_, err := s.c.call(ctx, "turn/steer", map[string]any{
+		"threadId":            s.threadID,
+		"expectedTurnId":      turnID,
+		"clientUserMessageId": id,
+		"input":               []any{map[string]any{"type": "text", "text": text}},
+	})
+	if err != nil {
+		return fmt.Errorf("%w: %v", agent.ErrNoSteer, err)
+	}
+	return nil
+}
+
+// flushSteered reports the steered messages the turn has taken in, once
+// the agent goes on to its next item (or the turn ends).
+func (s *session) flushSteered() {
+	s.mu.Lock()
+	ids := s.steered
+	s.steered = nil
+	s.mu.Unlock()
+	for _, id := range ids {
+		s.emit(agent.Event{Kind: agent.KindSteered, Steered: &agent.Steered{ID: id}})
+	}
 }
 
 func (s *session) Interrupt(ctx context.Context) error {
@@ -353,6 +393,8 @@ type item struct {
 	Path          string  `json:"path"`
 	SavedPath     string  `json:"savedPath"`
 	RevisedPrompt *string `json:"revisedPrompt"`
+	// ClientID is the id starcode gave a userMessage it sent.
+	ClientID string `json:"clientId"`
 }
 
 type itemNotification struct {
@@ -490,6 +532,15 @@ func decodeItem(params json.RawMessage) (itemNotification, item, bool) {
 }
 
 func (s *session) itemStarted(n itemNotification, it item) {
+	if it.Type == "userMessage" {
+		if it.ClientID != "" {
+			s.mu.Lock()
+			s.steered = append(s.steered, it.ClientID)
+			s.mu.Unlock()
+		}
+		return
+	}
+	s.flushSteered()
 	switch it.Type {
 	case "agentMessage", "reasoning", "userMessage", "plan", "todoList":
 		// Text arrives as deltas; nothing to show yet.
@@ -642,6 +693,7 @@ func (s *session) turnCompleted(params json.RawMessage) {
 		return
 	}
 
+	s.flushSteered()
 	s.mu.Lock()
 	turnID := p.Turn.ID
 	if turnID == "" {

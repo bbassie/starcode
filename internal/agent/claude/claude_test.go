@@ -1155,6 +1155,39 @@ func TestIntegrationInterrupt(t *testing.T) {
 	}
 }
 
+// A message steered in while a Bash call runs reaches the same turn: the
+// call is not stopped, Steered comes before the work the message asks for,
+// and the turn ends once.
+func TestIntegrationSteer(t *testing.T) {
+	s := startIntegrationCfg(t, agent.Config{Cwd: t.TempDir(), Model: "haiku", PermissionMode: "bypassPermissions"})
+	var seen []agent.Event
+	if err := s.Send(t.Context(), "Run the bash command `sleep 5 && echo one`, then run `sleep 5 && echo two` as a separate call, then reply with the outputs."); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	first := waitFor(t, s, &seen, "bash tool call", func(ev agent.Event) bool {
+		return ev.Kind == agent.KindToolStarted && ev.ToolStarted.Name == "Bash"
+	}).ToolStarted
+	if err := s.Steer(t.Context(), "p1", "Also run `echo three` after the second command."); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	waitFor(t, s, &seen, "steered", isKind(agent.KindSteered))
+	waitFor(t, s, &seen, "turn completion", isKind(agent.KindTurnCompleted))
+	steered, three, firstDone := -1, -1, ""
+	for i, ev := range seen {
+		switch {
+		case ev.Kind == agent.KindSteered:
+			steered = i
+		case ev.Kind == agent.KindToolStarted && strings.Contains(ev.ToolStarted.Summary, "echo three"):
+			three = i
+		case ev.Kind == agent.KindToolCompleted && ev.ToolCompleted.ID == first.ID:
+			firstDone = ev.ToolCompleted.Status
+		}
+	}
+	if firstDone != "done" || three < steered || len(only(t, seen, agent.KindTurnStarted)) != 1 {
+		t.Errorf("first call %q, steered at %d, echo three at %d, events %v", firstDone, steered, three, kinds(seen))
+	}
+}
+
 func TestIntegrationCloseEndsSession(t *testing.T) {
 	s := startIntegration(t, t.TempDir())
 
@@ -1363,5 +1396,50 @@ func TestMCPArgs(t *testing.T) {
 	s := cfg.MCPServers["starcode"]
 	if s.Type != "stdio" || s.Command != "/bin/starcode" || s.Env["K"] != "v" {
 		t.Fatalf("config %s", args[1])
+	}
+}
+
+// A steered message reports Steered when the CLI echoes it: inside the
+// running turn when it arrived in time, or as the start of a turn the CLI
+// began for it after the result (the shapes 2.1.312 sends). The echo of an
+// ordinary prompt says nothing, and does not move the fork anchor.
+func TestParseSteerReplay(t *testing.T) {
+	st := newState(nil)
+	st.turnID = "t1"
+	st.steers["u-steer"] = "p1"
+	evs := feed(st,
+		`{"type":"user","message":{"role":"user","content":"first"},"uuid":"u-first","isReplay":true,"session_id":"s1"}`,
+		lineTextMsgUsage,
+		`{"type":"user","message":{"role":"user","content":"steer"},"uuid":"u-steer","isReplay":true,"session_id":"s1"}`,
+	)
+	if got := one(t, evs, agent.KindSteered).Steered.ID; got != "p1" {
+		t.Fatalf("steered %q", got)
+	}
+	if len(only(t, evs, agent.KindTurnStarted)) != 0 || st.turnID != "t1" {
+		t.Fatalf("an in-turn steer started a turn: %v", kinds(evs))
+	}
+	if st.anchor == "u-first" || st.anchor == "u-steer" {
+		t.Fatalf("anchor moved to an echo: %q", st.anchor)
+	}
+
+	// Too late for the turn: the result first, then the echo.
+	st.steers["u-late"] = "p2"
+	evs = feed(st, lineResultOK,
+		`{"type":"system","subtype":"init","session_id":"s1","model":"claude-haiku-4-5-20251001"}`,
+		`{"type":"user","message":{"role":"user","content":"late"},"uuid":"u-late","isReplay":true,"session_id":"s1"}`,
+		lineResultOK,
+	)
+	var got []agent.EventKind
+	for _, k := range kinds(evs) {
+		if k != agent.KindContextUsage && k != agent.KindSessionInfo {
+			got = append(got, k)
+		}
+	}
+	want := []agent.EventKind{agent.KindTurnCompleted, agent.KindTurnStarted, agent.KindSteered, agent.KindTurnCompleted}
+	if !slices.Equal(got, want) {
+		t.Fatalf("late steer events %v, want %v", got, want)
+	}
+	if evs := only(t, evs, agent.KindTurnCompleted); evs[1].TurnCompleted.TurnID == "" || evs[1].TurnCompleted.TurnID == "t1" {
+		t.Fatalf("second turn id %q", evs[1].TurnCompleted.TurnID)
 	}
 }

@@ -394,6 +394,9 @@ func (a *Agent) Start(ctx context.Context, cfg agent.Config) (agent.Session, err
 		"--verbose",
 		"--include-partial-messages",
 		"--permission-prompt-tool", "stdio",
+		// Echo user messages back at the point the CLI takes them: that is
+		// how a steered message reports where it went in (see Steer).
+		"--replay-user-messages",
 	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
@@ -682,6 +685,29 @@ func (s *session) SendImages(ctx context.Context, text string, paths []string) e
 		return err
 	}
 	return s.write(userTurnImages(text, images))
+}
+
+// Steer writes text as another user message while the turn runs. The CLI
+// holds it until the running tool calls finish and gives it to the model
+// with their results, in the same turn; nothing is stopped. It echoes the
+// message back then (--replay-user-messages), under the uuid written here,
+// which is when Steered goes out. A message that arrives too late for the
+// turn (the model was writing its last reply, or the turn was stopped)
+// starts the next turn on its own after the result: the echo then comes
+// with no turn open, and the session reports TurnStarted before Steered.
+func (s *session) Steer(ctx context.Context, id, text string) error {
+	if err := s.alive(); err != nil {
+		return err
+	}
+	uuid := newUUID()
+	s.mu.Lock()
+	if s.st.turnID == "" {
+		s.mu.Unlock()
+		return agent.ErrNoSteer
+	}
+	s.st.steers[uuid] = id
+	s.mu.Unlock()
+	return s.write(steerTurn(uuid, text))
 }
 
 // Compact runs the CLI's own /compact, which it takes as a user turn over
@@ -989,6 +1015,16 @@ func userTurn(text string) []byte {
 	return encodeLine(msg)
 }
 
+// steerTurn is a user turn under a uuid of ours, which the CLI's echo of
+// it carries.
+func steerTurn(uuid, text string) []byte {
+	return encodeLine(map[string]any{
+		"type":    "user",
+		"uuid":    uuid,
+		"message": map[string]any{"role": "user", "content": text},
+	})
+}
+
 func interruptRequest(id string) []byte {
 	return encodeLine(map[string]any{
 		"type":       "control_request",
@@ -1105,6 +1141,10 @@ type state struct {
 	// tasks maps the tool call that started a subagent or background task
 	// to the CLI's task id, which stop_task takes.
 	tasks map[string]string
+	// steers maps the uuid of a steered message the CLI has not echoed
+	// yet to the id Steer was given. It outlives a turn: a late message
+	// starts the next one.
+	steers map[string]string
 
 	// outbox holds lines the session must write back to the CLI.
 	outbox [][]byte
@@ -1140,6 +1180,7 @@ func newState(log *slog.Logger) *state {
 		denied:           map[string]bool{},
 		subTools:         map[string]bool{},
 		tasks:            map[string]string{},
+		steers:           map[string]string{},
 	}
 }
 
@@ -1208,6 +1249,8 @@ type outLine struct {
 	ParentToolUseID string `json:"parent_tool_use_id"`
 	// UUID names the line in the CLI's own transcript.
 	UUID string `json:"uuid"`
+	// IsReplay marks the echo of a user message starcode wrote.
+	IsReplay bool `json:"isReplay"`
 
 	// system/init
 	SessionID string `json:"session_id"`
@@ -1389,6 +1432,9 @@ func parseOut(out *outLine, line []byte, st *state) []agent.Event {
 		st.mark(out)
 		return parseAssistant(out, st)
 	case "user":
+		if out.IsReplay {
+			return parseReplay(out, st)
+		}
 		st.mark(out)
 		return parseUser(out, st)
 	case "control_request":
@@ -1643,6 +1689,23 @@ func parseUser(out *outLine, st *state) []agent.Event {
 		})
 	}
 	return events
+}
+
+// parseReplay reads the echo of a user message. Only a steered one says
+// anything: the model has it now. With no turn open it is the start of
+// a turn the CLI began for it after the last result.
+func parseReplay(out *outLine, st *state) []agent.Event {
+	id, ok := st.steers[out.UUID]
+	if !ok {
+		return nil
+	}
+	delete(st.steers, out.UUID)
+	var events []agent.Event
+	if st.turnID == "" {
+		st.turnID = newID()
+		events = append(events, agent.Event{Kind: agent.KindTurnStarted, TurnStarted: &agent.TurnStarted{TurnID: st.turnID}})
+	}
+	return append(events, agent.Event{Kind: agent.KindSteered, Steered: &agent.Steered{ID: id}})
 }
 
 func parseControlRequest(out *outLine, st *state) []agent.Event {

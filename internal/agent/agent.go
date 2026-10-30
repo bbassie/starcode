@@ -104,6 +104,21 @@ type TaskStopper interface {
 	StopTask(ctx context.Context, toolID string) error
 }
 
+// Steerer is implemented by sessions whose agent can take a message into
+// the running turn without stopping it: the agent reads it at its next
+// step, after the tool call that runs now. id names the message; the
+// session emits Steered with it at the point the agent takes it. Once
+// Steer returns nil the session owns the message: if the turn ends before
+// the agent reads it, the session starts a turn with it itself, emitting
+// TurnStarted and then Steered. Steer returns ErrNoSteer when no turn
+// runs or the running one cannot take input (a compaction, a review).
+type Steerer interface {
+	Steer(ctx context.Context, id, text string) error
+}
+
+// ErrNoSteer is a Steer the running turn cannot take now.
+var ErrNoSteer = errors.New("the running turn cannot take a message")
+
 // ErrNoTask is a StopTask for a tool call that runs no task (any more).
 var ErrNoTask = errors.New("that subagent is not running")
 
@@ -138,6 +153,7 @@ type Event struct {
 	Approval      *ApprovalRequested
 	ContextUsage  *ContextUsage
 	TurnCompleted *TurnCompleted
+	Steered       *Steered
 	Notice        *Notice
 	Limits        *Limits
 	Closed        *Closed
@@ -157,6 +173,7 @@ const (
 	KindApproval      EventKind = "approval"
 	KindContextUsage  EventKind = "context_usage"
 	KindTurnCompleted EventKind = "turn_completed"
+	KindSteered       EventKind = "steered"
 	KindNotice        EventKind = "notice"
 	KindLimits        EventKind = "limits"
 	KindClosed        EventKind = "closed"
@@ -177,6 +194,12 @@ type ThreadTitle struct {
 
 type TurnStarted struct {
 	TurnID string
+}
+
+// Steered says the agent took the message Steer sent with ID: what the
+// agent does from here on follows it.
+type Steered struct {
+	ID string
 }
 
 // TextDelta is streamed assistant prose. MessageID groups deltas of one
