@@ -17,6 +17,9 @@ type ThreadData struct {
 	Project   store.Project
 	Items     []store.Item
 	Queued    []store.QueuedPrompt
+	// Steering are the prompts handed to the running turn that the agent
+	// has not taken yet.
+	Steering  []store.QueuedPrompt
 	Approvals []store.Approval // every approval of the thread, oldest first
 	Rules     []string
 	Settings  SettingsData
@@ -722,7 +725,22 @@ templ WorkSummary(items []store.Item, aps []store.Approval) {
 }
 
 templ PromptQueue(d ThreadData) {
-	<div id="prompt-queue" class={ "prompt-queue", templ.KV("empty", len(d.Queued) == 0 && len(d.Scheduled) == 0) }>
+	<div id="prompt-queue" class={ "prompt-queue", templ.KV("empty", len(d.Queued) == 0 && len(d.Scheduled) == 0 && len(d.Steering) == 0) }>
+		if len(d.Steering) > 0 {
+			// Handed to the running turn: the agent reads them after the
+			// step it is on, and they go into the transcript there.
+			<div class="queue-head">
+				<span>@Icon("corner-down-right", "ui-icon") <span>{ fmt.Sprintf("%s in after the current step", plural(len(d.Steering), "Goes", "Go")) }</span></span>
+			</div>
+			<div class="queue-list">
+				for _, q := range d.Steering {
+					<div class="queue-item steering" title="Sent into the running turn; the agent reads it when the current step is done">
+						<span class="queue-position">@Icon("corner-down-right", "ui-icon")</span>
+						<span class="ellipsis shimmer">{ promptSummary(q.Body) }</span>
+					</div>
+				}
+			</div>
+		}
 		if len(d.Scheduled) > 0 {
 			<div class="queue-list">
 				for _, sc := range d.Scheduled {
@@ -744,9 +762,9 @@ templ PromptQueue(d ThreadData) {
 							<textarea class="in" rows="3" data-bind:qbody data-on:keydown="evt.key === 'Escape' ? (evt.preventDefault(), $qedit = '') : sendKey(evt) && (evt.preventDefault(), el.form.requestSubmit())"></textarea>
 							<button class="btn icon tiny" type="submit" title="Save">@Icon("check", "ui-icon")</button>
 						</form>
-						if i == 0 && busy(d.Thread) {
-							// Steer: stop the running turn so this goes out now.
-							<button class="btn ghost tiny queue-now" type="button" title="Send now: stop the running turn and send this message" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/steer')" }>@Icon("fast-forward", "ui-icon") <span>now</span></button>
+						if busy(d.Thread) {
+							// Into the running turn, after its current step.
+							<button class="btn ghost tiny queue-now" type="button" title="Send now: into the running turn, after its current step" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/queue/" + q.ID + "/steer')" }>@Icon("corner-down-right", "ui-icon") <span>now</span></button>
 						}
 						if len(d.Queued) > 1 {
 							<button class="btn icon ghost queue-move" type="button" title="Move up" disabled?={ i == 0 } data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/queue/" + q.ID + "/move?by=-1')" }>@Icon("arrow-up", "ui-icon")</button>
@@ -1097,6 +1115,14 @@ templ ComposerActions(d ThreadData) {
 	{{ locked := busy(d.Thread) }}
 	<div id="composer-actions" class="composer-actions">
 		if locked {
+			// What a send does while the turn runs (sendQuery in
+			// layout.templ): the browser's choice, flipped for one send
+			// by a tap here or by Ctrl+Enter.
+			<button class="chip busy-mode" type="button" data-init="busyModeShow(el)" data-preserve-attr="data-mode data-alt" data-on:click="el.dataset.alt = el.dataset.alt ? '' : '1'; busyModeShow(el)">
+				<span class="m-steer" title="Sends into the running turn: the agent reads it after its current step. Tap to queue it for after the turn instead.">@Icon("corner-down-right", "ui-icon") <span>steer</span></span>
+				<span class="m-queue" title="Queues it for after the turn. Tap to send it into the running turn instead.">@Icon("list-end", "ui-icon") <span>queue</span></span>
+				<span class="m-stop" title="Stops the turn and sends it first. Tap to queue it for after the turn instead.">@Icon("square", "ui-icon") <span>stop + send</span></span>
+			</button>
 			<button class="btn round warn" type="button" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/interrupt')" } title="Stop">@Icon("square", "ui-icon")</button>
 		}
 		@SendLater(d.Thread.ID)
@@ -1117,10 +1143,10 @@ func ComposerSignals(d ThreadData) map[string]any {
 
 func promptPlaceholder(d ThreadData) string {
 	if d.Thread.Status == domain.StatusAwaitingApproval {
-		return "Answer the approval above, or queue a follow-up…"
+		return "Answer the approval above, or send a follow-up…"
 	}
 	if busy(d.Thread) {
-		return "Add a follow-up… (sent when this turn ends)"
+		return "Add a follow-up…"
 	}
 	if len(d.Items) == 0 {
 		return "Describe what " + d.Thread.Agent + " should do in " + d.Project.Name + "…"
@@ -1134,9 +1160,9 @@ func promptPlaceholder(d ThreadData) string {
 // sendTitle is the send button's tooltip. The key hint is only true on a
 // hardware keyboard (see sendKey in layout.templ), which is also the only
 // place a tooltip shows.
-func sendTitle(queued bool) string {
-	if queued {
-		return "Queue message (Enter, or Ctrl+Enter)"
+func sendTitle(busy bool) string {
+	if busy {
+		return "Send as the chip beside says (Enter); Ctrl+Enter does the other"
 	}
 	return "Send (Enter, or Ctrl+Enter)"
 }

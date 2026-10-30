@@ -678,11 +678,12 @@ templ SettingsPage(d SettingsPageData) {
 							<div class="setting-row">
 								<div>
 									<label for="busy-send">Sending while a turn runs</label>
-									<p class="dim">Queue puts the message after the running turn. Steer stops the turn and sends the message first, so the agent reads it right away. Ctrl+Enter (Cmd+Enter on a Mac) does the other one. Saved for this browser.</p>
+									<p class="dim">Steer sends the message into the running turn: the agent reads it once the step it is on is done (a command, an edit), and carries on with it. Nothing is stopped. Queue puts it after the turn. Stop and send stops the turn and sends it first. Ctrl+Enter (Cmd+Enter on a Mac), or a tap on the chip beside the send button, swaps steer and queue for one message. An agent that cannot steer at that moment queues it. Saved for this browser.</p>
 								</div>
-								<select id="busy-send" class="in" data-init="el.value = localStorage.getItem('busy-send') || 'queue'" data-on:change="el.value === 'steer' ? localStorage.setItem('busy-send', 'steer') : localStorage.removeItem('busy-send')">
-									<option value="queue">queue</option>
+								<select id="busy-send" class="in" data-init="el.value = busyMode()" data-on:change="el.value === 'steer' ? localStorage.removeItem('busy-send') : localStorage.setItem('busy-send', el.value)">
 									<option value="steer">steer</option>
+									<option value="queue">queue</option>
+									<option value="stop">stop and send</option>
 								</select>
 							</div>
 							<div class="setting-row">

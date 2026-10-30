@@ -275,9 +275,13 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// busy says what a send does while a turn runs: into the turn
+	// (steer), after it (queue, the default), or first after stopping it.
 	send := s.App.SendPrompt
 	switch {
-	case r.URL.Query().Get("steer") == "1":
+	case r.URL.Query().Get("busy") == "steer":
+		send = s.App.SteerPrompt
+	case r.URL.Query().Get("busy") == "stop":
 		send = s.App.StopAndSend
 	case r.URL.Query().Get("compact") == "1":
 		send = s.App.CompactAndSend
@@ -562,10 +566,10 @@ func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r)
 }
 
-// steer stops the running turn so the queued prompts start now; the
-// button sits on the first queued message, which is what goes out next.
-func (s *Server) steer(w http.ResponseWriter, r *http.Request) {
-	if err := s.App.Interrupt(r.Context(), r.PathValue("id")); err != nil {
+// steerQueuedPrompt is "now" on a queued message: into the running turn
+// when the agent can take it, else the turn stops so it goes next.
+func (s *Server) steerQueuedPrompt(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.SteerQueued(r.Context(), r.PathValue("id"), r.PathValue("qid")); err != nil {
 		s.fail(w, r, err)
 		return
 	}

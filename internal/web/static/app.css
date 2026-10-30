@@ -2210,3 +2210,15 @@ button.pending, .btn.pending { cursor: progress; animation: pending-pulse 0.9s e
 .queue-edit textarea { flex: 1; resize: vertical; font: inherit; font-size: 0.9em; }
 .queue-item .queue-move[disabled] { opacity: 0.3; }
 .queue-item.editing > .btn:not(.queue-edit .btn) { display: none; }
+
+/* ---- steering ---- */
+/* The composer's mode chip shows one of its three labels (busyModeShow). */
+.busy-mode { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 10px; font-size: 0.82em; color: var(--fg-dim); }
+.busy-mode > span { display: inline-flex; align-items: center; gap: 4px; }
+.busy-mode .m-queue, .busy-mode .m-stop { display: none; }
+.busy-mode[data-mode=queue] .m-steer, .busy-mode[data-mode=stop] .m-steer { display: none; }
+.busy-mode[data-mode=queue] .m-queue, .busy-mode[data-mode=stop] .m-stop { display: inline-flex; }
+.busy-mode[data-mode=steer] { color: var(--accent); }
+.busy-mode[data-alt="1"] { border-color: var(--accent); }
+.queue-item.steering .queue-position { background: transparent; color: var(--accent); }
+.queue-list + .queue-head { margin-top: 6px; }

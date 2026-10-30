@@ -27,7 +27,7 @@ var spriteIcons = []string{
 	"clipboard-paste", "columns-2", "command", "copy", "ellipsis-vertical", "external-link", "eye", "eye-off",
 	"file", "folder", "folder-plus", "fold-vertical", "gauge",
 	"git-branch", "git-compare-arrows", "git-merge", "git-pull-request", "git-pull-request-closed", "git-pull-request-create", "git-pull-request-draft",
-	"fast-forward", "keyboard", "link", "list-end", "loader-circle", "log-in", "menu", "pin", "pin-off", "qr-code",
+	"corner-down-right", "fast-forward", "keyboard", "link", "list-end", "loader-circle", "log-in", "menu", "pin", "pin-off", "qr-code",
 	"mail", "message-square", "message-square-plus", "message-square-x", "palette", "paperclip", "pencil", "pencil-line", "plug", "plus",
 	"refresh-cw", "rotate-ccw", "rotate-cw", "save", "search", "settings", "shield-check", "square", "square-pen", "square-x", "star",
 	"terminal", "trash-2", "triangle-alert", "undo-2", "unfold-horizontal", "unlink", "upload", "user", "x",

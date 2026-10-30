@@ -166,6 +166,8 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 						<span class="dim tiny-text user-auto">@Icon("eye", "ui-icon") <span>{ fmt.Sprintf("sent by starcode: pull request #%d changed", pm.PR) }</span></span>
 					} else if pm.Auto == "handoff" {
 						<span class="dim tiny-text user-auto">@Icon("arrow-right-left", "ui-icon") <span>sent by starcode to hand the work over</span></span>
+					} else if pm.Steered {
+						<span class="dim tiny-text user-auto" title="Sent while the turn ran; the agent read it here, after the step before">@Icon("corner-down-right", "ui-icon") <span>steered into the turn</span></span>
 					}
 					if text != "" {
 						// Hover tools: copy the prompt, put it back in the

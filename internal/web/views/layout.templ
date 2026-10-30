@@ -464,15 +464,27 @@ templ Layout(title string, p Page, parts Parts) {
 			<script>
 				window.sendKey = (evt) => evt.key === 'Enter' && !evt.isComposing
 					&& (evt.ctrlKey || evt.metaKey || (!evt.shiftKey && !matchMedia('(pointer: coarse)').matches));
+				// busyMode is what a send does while a turn runs, as this
+				// browser chose under Settings > This device: steer (into the
+				// turn, after its current step; the default), queue (after
+				// the turn) or stop (stop the turn and go first).
+				// busyModeOther is what Ctrl/Cmd+Enter or a tap on the
+				// composer's mode chip makes of it for one send.
+				window.busyMode = () => { const m = localStorage.getItem('busy-send'); return m === 'queue' || m === 'stop' ? m : 'steer'; };
+				window.busyModeOther = (m) => m === 'queue' ? 'steer' : 'queue';
+				window.busyModeShow = (el) => { el.dataset.mode = el.dataset.alt ? busyModeOther(busyMode()) : busyMode(); };
 				// sendQuery asks the send to compact first while the compact
 				// nudge is on screen with its chip on (views.CompactNudge).
-				// While a turn runs, a send queues or steers (stops the turn
-				// and goes first), as this browser chose under Settings > This
-				// device; Ctrl/Cmd+Enter does the other one.
+				// While a turn runs it says what the mode chip shows, or the
+				// other one for Ctrl/Cmd+Enter; a flipped chip goes back after
+				// the send.
 				window.sendQuery = (evt) => {
 					if (document.querySelector('form.composer.busy')) {
-						const steer = (localStorage.getItem('busy-send') === 'steer') !== !!(evt && (evt.ctrlKey || evt.metaKey));
-						if (steer) return '?steer=1';
+						const chip = document.querySelector('form.composer.busy .busy-mode');
+						let m = chip?.dataset.mode || busyMode();
+						if (evt && (evt.ctrlKey || evt.metaKey)) m = busyModeOther(m);
+						if (chip?.dataset.alt) { chip.dataset.alt = ''; busyModeShow(chip); }
+						return '?busy=' + m;
 					}
 					const n = document.querySelector('.compact-nudge');
 					return n && n.offsetParent && !n.classList.contains('off') ? '?compact=1' : '';

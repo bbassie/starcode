@@ -20,6 +20,9 @@ type promptMeta struct {
 	// Reports are the child threads whose replies went ahead of the
 	// prompt.
 	Reports []string `json:"reports"`
+	// Steered is a prompt sent into a running turn, which the agent took
+	// where it stands in the transcript.
+	Steered bool `json:"steered"`
 }
 
 func promptMetaOf(it store.Item) promptMeta {

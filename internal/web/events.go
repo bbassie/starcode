@@ -787,7 +787,11 @@ func (c *conn) renderPromptQueue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.sse.PatchElementTempl(views.PromptQueue(views.ThreadData{Thread: t, Queued: queued, Scheduled: scheduled}))
+	steering, err := c.s.App.Store.SteeredPrompts(ctx, c.threadID)
+	if err != nil {
+		return err
+	}
+	return c.sse.PatchElementTempl(views.PromptQueue(views.ThreadData{Thread: t, Queued: queued, Steering: steering, Scheduled: scheduled}))
 }
 
 func (c *conn) renderMessageRail(ctx context.Context) error {

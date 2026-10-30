@@ -172,6 +172,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/threads/{id}/queue/{qid}/remove", s.removeQueuedPrompt)
 	s.mux.HandleFunc("POST /api/threads/{id}/queue/{qid}/edit", s.editQueuedPrompt)
 	s.mux.HandleFunc("POST /api/threads/{id}/queue/{qid}/move", s.moveQueuedPrompt)
+	s.mux.HandleFunc("POST /api/threads/{id}/queue/{qid}/steer", s.steerQueuedPrompt)
 	s.mux.HandleFunc("POST /api/threads/{id}/interrupt", s.interrupt)
 	s.mux.HandleFunc("POST /api/threads/{id}/items/{item}/stop", s.stopSubagent)
 	s.mux.HandleFunc("POST /api/threads/{id}/compact", s.compactContext)
@@ -182,7 +183,6 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/threads/{id}/pin", s.pinThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/unpin", s.pinThread)
 	s.mux.HandleFunc("POST /api/threads/{id}/unread", s.markUnread)
-	s.mux.HandleFunc("POST /api/threads/{id}/steer", s.steer)
 	s.mux.HandleFunc("POST /api/limits/refresh", s.refreshLimits)
 	s.mux.HandleFunc("POST /api/limits/{name}/redeem", s.redeemReset)
 	s.mux.HandleFunc("POST /api/sidebar", s.setSidebarMode)
@@ -591,6 +591,10 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 	if err != nil {
 		return views.ThreadData{}, err
 	}
+	steering, err := s.App.Store.SteeredPrompts(ctx, id)
+	if err != nil {
+		return views.ThreadData{}, err
+	}
 	aps, err := s.App.Store.Approvals(ctx, id)
 	if err != nil {
 		return views.ThreadData{}, err
@@ -621,6 +625,6 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 	if err != nil {
 		return views.ThreadData{}, err
 	}
-	return views.ThreadData{Thread: t, Project: p, Items: items, Parent: parent, Scheduled: scheduled, Notify: s.App.Store.NotifyLevel(ctx, id), Queued: queued, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
+	return views.ThreadData{Thread: t, Project: p, Items: items, Parent: parent, Scheduled: scheduled, Notify: s.App.Store.NotifyLevel(ctx, id), Queued: queued, Steering: steering, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
 		Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }
