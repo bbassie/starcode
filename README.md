@@ -59,6 +59,17 @@ Every flag also reads an environment variable:
 | `-fake` | | off | add a scripted agent for UI work that costs no tokens |
 | `-debug` | | off | debug logging |
 
+`starcode thread` drives the running instance from a shell, a script or a cron job, over the agent socket in the data dir, so it needs no token:
+
+```sh
+starcode thread start . "fix the flaky test" -wait   # . is the project this folder is in
+starcode thread send <id> "now open a PR"            # a busy thread gets it after its turn; -steer puts it in
+starcode thread list -project starcode
+starcode thread show <id>
+```
+
+With `-wait`, start and send print the last reply once the turn ends, and exit 1 if it failed or 2 if it waits for an answer. `starcode thread help` lists the rest.
+
 Two subcommands work on the database: `starcode replay` rebuilds the projection tables from the event log, and `starcode compact` folds streamed token deltas into one row per item (starcode does this itself after every turn, so it only matters for an old log).
 
 To keep it running, `make service` installs a systemd user unit that runs the binary from the repo. [docs/dev-setup.md](docs/dev-setup.md) walks through that, and through the setup where starcode's own threads edit the repo it runs from: a rebuild puts a restart banner on every page, and nothing restarts until you press it.

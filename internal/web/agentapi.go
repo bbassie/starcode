@@ -65,6 +65,7 @@ func (s *Server) AgentHandler() http.Handler {
 		}
 		writeJSON(w, s.runAgentTool(r.Context(), caller, call))
 	})
+	s.cliRoutes(mux)
 	return mux
 }
 

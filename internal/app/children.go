@@ -134,6 +134,13 @@ func (a *App) WaitThread(ctx context.Context, id string) (store.Thread, error) {
 		}
 		a.kids.mu.Unlock()
 	}()
+	return a.AwaitThread(ctx, id)
+}
+
+// AwaitThread is WaitThread without the parent's part: it blocks until
+// the thread stops running or ctx ends, for a waiter that is not the
+// thread's parent (the command line).
+func (a *App) AwaitThread(ctx context.Context, id string) (store.Thread, error) {
 	sub, cancel := context.WithCancel(ctx)
 	defer cancel()
 	events := a.Bus.Subscribe(sub)

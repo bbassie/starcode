@@ -27,6 +27,7 @@ import (
 	"starcode/internal/agent"
 	"starcode/internal/app"
 	"starcode/internal/bus"
+	"starcode/internal/cli"
 	"starcode/internal/keys"
 	"starcode/internal/mcp"
 	"starcode/internal/providers"
@@ -39,6 +40,11 @@ import (
 
 func main() {
 	restart, err := run()
+	var exit cli.ExitError
+	if errors.As(err, &exit) {
+		// `starcode thread ... -wait` has printed how the turn ended.
+		os.Exit(exit.Code)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "starcode:", err)
 		os.Exit(1)
@@ -73,6 +79,11 @@ func run() (string, error) {
 	sub := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		sub, args = args[0], args[1:]
+	}
+	if sub == "thread" {
+		// The command line for threads has flags of its own and talks
+		// to the running instance, like `starcode mcp`.
+		return "", cli.Main(args, envOr("STARCODE_DATA", defaultDataDir()))
 	}
 	fs.Parse(args)
 	if sub == "mcp" {
