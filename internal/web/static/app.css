@@ -619,7 +619,7 @@ button.status-pill { cursor: pointer; font-family: inherit; color: inherit; }
 /* Streamed text between two full patches keeps its line breaks. */
 .tail { white-space: pre-wrap; }
 .item.user { display: flex; justify-content: flex-end; }
-.item.user .bubble {
+.item.user .bubble, details.item.auto-prompt .bubble {
   font-family: var(--font-ui);
   font-size: 1em;
   background: var(--bubble);
@@ -2053,6 +2053,16 @@ details.item.agent[open] > summary::after { transform: rotate(90deg); }
 .user-auto a { color: var(--accent); }
 .tool-link { color: var(--accent); text-decoration: none; }
 .item.user.auto .bubble { opacity: 0.75; }
+/* A prompt starcode or another thread sent: one line like a tool call,
+   opening to the bubble, its links and its tools. */
+details.item.auto-prompt { color: var(--fg-dim); }
+details.item.auto-prompt > summary { gap: 8px; }
+details.item.auto-prompt > summary::before { content: none; }
+details.item.auto-prompt > summary::after { content: "›"; flex: none; opacity: 0.6; transition: transform 0.15s; }
+details.item.auto-prompt[open] > summary::after { transform: rotate(90deg); }
+details.item.auto-prompt .tool-text { opacity: 0.8; }
+details.item.auto-prompt > .user-msg { position: relative; margin: 6px 0 2px 24px; align-items: flex-start; }
+details.item.auto-prompt .bubble { opacity: 0.85; max-width: 100%; }
 .item.user .msg-tools { left: auto; right: calc(100% + 6px); align-items: center; }
 .msg-time { white-space: nowrap; padding: 0 4px; }
 

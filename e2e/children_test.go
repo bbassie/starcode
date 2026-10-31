@@ -50,6 +50,13 @@ func TestSpawnedThreadNestsUnderItsParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	pp := e.page("/threads/"+parent, true)
-	wait(pp, `() => [...document.querySelectorAll('.user-from a')].some(a => a.getAttribute('href') === '/threads/`+child+`' && a.textContent === 'Child work')`)
+	// It folds to one line that says who sent it and how it starts, and
+	// opens to the message with the link.
+	wait(pp, `() => {
+		const d = [...document.querySelectorAll('details.item.auto-prompt')].pop();
+		return d && !d.open && d.querySelector('summary').textContent.replace(/\s+/g, ' ').includes('Message from Child work all done');
+	}`)
+	click(pp.MustElement("details.item.auto-prompt:last-of-type > summary"))
+	wait(pp, `() => [...document.querySelectorAll('.user-from a')].some(a => a.offsetWidth > 0 && a.getAttribute('href') === '/threads/`+child+`' && a.textContent === 'Child work')`)
 	shot(pp, "parent-phone.png")
 }

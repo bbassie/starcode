@@ -156,68 +156,21 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 		case domain.KindUser:
 			{{ text, atts := splitAttachments(it.Body) }}
 			{{ pm := promptMetaOf(it) }}
-			<div id={ "it-" + it.ID } class={ "item", "user", templ.KV("auto", pm.Auto != "") }>
-				<div class="user-msg">
-					if pm.Auto == "resume" {
-						<span class="dim tiny-text user-auto">@Icon("rotate-cw", "ui-icon") <span>sent by starcode to resume after a restart</span></span>
-					} else if pm.Auto == "limit" {
-						<span class="dim tiny-text user-auto">@Icon("rotate-cw", "ui-icon") <span>sent by starcode when the usage limit reset</span></span>
-					} else if pm.Auto == "prwatch" {
-						<span class="dim tiny-text user-auto">@Icon("eye", "ui-icon") <span>{ fmt.Sprintf("sent by starcode: pull request #%d changed", pm.PR) }</span></span>
-					} else if pm.Auto == "handoff" {
-						<span class="dim tiny-text user-auto">@Icon("arrow-right-left", "ui-icon") <span>sent by starcode to hand the work over</span></span>
-					} else if pm.Steered {
-						<span class="dim tiny-text user-auto" title="Sent while the turn ran; the agent read it here, after the step before">@Icon("corner-down-right", "ui-icon") <span>steered into the turn</span></span>
-					}
-					if text != "" {
-						// Hover tools: copy the prompt, put it back in the
-						// composer to send again with changes, rewind the
-						// conversation to before it, or branch from there.
-						<div class="msg-tools">
-							<span class="dim tiny-text msg-time" data-ts={ it.CreatedAt.UTC().Format(time.RFC3339) }></span>
-							<button type="button" class="btn icon ghost tiny" title="Copy this message" aria-label="Copy this message" onclick="copyText(this.closest('.user-msg').querySelector('.bubble').textContent, this)">@Icon("copy", "ui-icon")</button>
-							<button type="button" class="btn icon ghost tiny" title="Edit and resend: put this message in the composer" aria-label="Edit and resend" onclick="promptSet(this.closest('.user-msg').querySelector('.bubble').textContent)">@Icon("pencil-line", "ui-icon")</button>
-							if pm.rewindable() {
-								<button type="button" class="btn icon ghost tiny" title="Rewind: drop this message and everything after it, and put it back in the composer to edit. The agent forgets those turns; files stay as they are." aria-label="Rewind to before this message" data-on:click={ rewindAction(it) }>@Icon("history", "ui-icon")</button>
-								<button type="button" class="btn icon ghost tiny" title="Branch: a new thread with the conversation up to before this message, which goes into its composer. This thread stays as it is." aria-label="Branch from before this message" data-on:click={ "@post('/api/threads/" + it.ThreadID + "/branch?before=" + it.ID + "')" }>@Icon("git-fork", "ui-icon")</button>
-							}
-						</div>
-						<pre class="wrap bubble">{ text }</pre>
-					}
-					if from := fromThreads(pm, text); len(from) > 0 {
-						// A message another thread's agent sent, or the
-						// replies of threads that finished: each links.
-						<span class="dim tiny-text user-auto user-from">
-							@Icon("message-square", "ui-icon") <span>from</span>
-							for _, f := range from {
-								<a href={ templ.SafeURL("/threads/" + f.ID) }>{ f.Title }</a>
-							}
-						</span>
-					}
-					if len(pm.Reports) > 0 {
-						<span class="dim tiny-text user-auto" title="The agent got these threads' last replies along with this message">
-							@Icon("message-square", "ui-icon") <span>with the replies of</span>
-							for i, id := range pm.Reports {
-								<a href={ templ.SafeURL("/threads/" + id) }>{ firstNonEmpty(threadTitle(ctx, id), fmt.Sprintf("thread %d", i+1)) }</a>
-							}
-						</span>
-					}
-					if len(atts) > 0 {
-						<div class="attach-legend">
-							for _, a := range atts {
-								if a.Kind == "image" {
-									<a href={ templ.SafeURL(attachmentURL(a.Path)) } target="_blank" title={ a.Name }><img class="attach-thumb" src={ attachmentURL(a.Path) } alt={ a.Name } loading="lazy"/></a>
-								} else {
-									<a class="attach-chip" href={ templ.SafeURL(attachmentURL(a.Path)) } target="_blank">
-										@Icon("paperclip", "ui-icon")
-										<span class="ellipsis">{ a.Name }</span>
-									</a>
-								}
-							}
-						</div>
-					}
+			if ic, label, preview := autoSummary(pm, text); label != "" {
+				// A prompt starcode or another thread's agent sent reads as
+				// one line, like a tool call, and opens to the whole of it.
+				<details id={ "it-" + it.ID } class="item auto-prompt" data-preserve-attr="open">
+					<summary>
+						<span class="tool-ic">@Icon(ic, "ui-icon")</span>
+						<span class="tool-line"><span class="tool-verb">{ label }</span> <span class="tool-text">{ preview }</span></span>
+					</summary>
+					@userMsg(it, text, atts, pm)
+				</details>
+			} else {
+				<div id={ "it-" + it.ID } class={ "item", "user", templ.KV("auto", pm.Auto != "") }>
+					@userMsg(it, text, atts, pm)
 				</div>
-			</div>
+			}
 		case domain.KindAssistant:
 			<div id={ "it-" + it.ID } class={ "item", "assistant", "md", templ.KV("streaming", it.Status == domain.ItemRunning) }>
 				if it.Status != domain.ItemRunning {
@@ -621,4 +574,62 @@ templ TurnFiles(tf turnFiles) {
 templ tfRow(f fileStat) {
 	<code class="tf-path">{ relPath(ctx, f.Path) }</code>
 	<span class="tf-stat"><span class="plus">{ fmt.Sprintf("+%d", f.Add) }</span> <span class="minus">{ fmt.Sprintf("−%d", f.Del) }</span></span>
+}
+
+// userMsg is a prompt's bubble with its tools, labels and attachments.
+templ userMsg(it store.Item, text string, atts []attachmentRef, pm promptMeta) {
+	<div class="user-msg">
+		if pm.Auto == "schedule" {
+			<span class="dim tiny-text user-auto">@Icon("calendar-clock", "ui-icon") <span>sent on schedule</span></span>
+		} else if pm.Steered {
+			<span class="dim tiny-text user-auto" title="Sent while the turn ran; the agent read it here, after the step before">@Icon("corner-down-right", "ui-icon") <span>steered into the turn</span></span>
+		}
+		if text != "" {
+			// Hover tools: copy the prompt, put it back in the
+			// composer to send again with changes, rewind the
+			// conversation to before it, or branch from there.
+			<div class="msg-tools">
+				<span class="dim tiny-text msg-time" data-ts={ it.CreatedAt.UTC().Format(time.RFC3339) }></span>
+				<button type="button" class="btn icon ghost tiny" title="Copy this message" aria-label="Copy this message" onclick="copyText(this.closest('.user-msg').querySelector('.bubble').textContent, this)">@Icon("copy", "ui-icon")</button>
+				<button type="button" class="btn icon ghost tiny" title="Edit and resend: put this message in the composer" aria-label="Edit and resend" onclick="promptSet(this.closest('.user-msg').querySelector('.bubble').textContent)">@Icon("pencil-line", "ui-icon")</button>
+				if pm.rewindable() {
+					<button type="button" class="btn icon ghost tiny" title="Rewind: drop this message and everything after it, and put it back in the composer to edit. The agent forgets those turns; files stay as they are." aria-label="Rewind to before this message" data-on:click={ rewindAction(it) }>@Icon("history", "ui-icon")</button>
+					<button type="button" class="btn icon ghost tiny" title="Branch: a new thread with the conversation up to before this message, which goes into its composer. This thread stays as it is." aria-label="Branch from before this message" data-on:click={ "@post('/api/threads/" + it.ThreadID + "/branch?before=" + it.ID + "')" }>@Icon("git-fork", "ui-icon")</button>
+				}
+			</div>
+			<pre class="wrap bubble">{ text }</pre>
+		}
+		if from := fromThreads(pm, text); len(from) > 0 {
+			// A message another thread's agent sent, or the
+			// replies of threads that finished: each links.
+			<span class="dim tiny-text user-auto user-from">
+				@Icon("message-square", "ui-icon") <span>from</span>
+				for _, f := range from {
+					<a href={ templ.SafeURL("/threads/" + f.ID) }>{ f.Title }</a>
+				}
+			</span>
+		}
+		if len(pm.Reports) > 0 {
+			<span class="dim tiny-text user-auto" title="The agent got these threads' last replies along with this message">
+				@Icon("message-square", "ui-icon") <span>with the replies of</span>
+				for i, id := range pm.Reports {
+					<a href={ templ.SafeURL("/threads/" + id) }>{ firstNonEmpty(threadTitle(ctx, id), fmt.Sprintf("thread %d", i+1)) }</a>
+				}
+			</span>
+		}
+		if len(atts) > 0 {
+			<div class="attach-legend">
+				for _, a := range atts {
+					if a.Kind == "image" {
+						<a href={ templ.SafeURL(attachmentURL(a.Path)) } target="_blank" title={ a.Name }><img class="attach-thumb" src={ attachmentURL(a.Path) } alt={ a.Name } loading="lazy"/></a>
+					} else {
+						<a class="attach-chip" href={ templ.SafeURL(attachmentURL(a.Path)) } target="_blank">
+							@Icon("paperclip", "ui-icon")
+							<span class="ellipsis">{ a.Name }</span>
+						</a>
+					}
+				}
+			</div>
+		}
+	</div>
 }

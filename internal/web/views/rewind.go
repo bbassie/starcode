@@ -2,8 +2,10 @@ package views
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"starcode/internal/store"
 )
@@ -74,4 +76,45 @@ func fromThreads(m promptMeta, text string) []threadLink {
 		out = append(out, threadLink{ID: g[2], Title: title})
 	}
 	return out
+}
+
+// autoSummary is the one line a prompt starcode or another agent sent
+// folds to: an icon, what it was and the start of its text, past the
+// lines that name a thread. A prompt from the reader, a scheduled one
+// (often the reader's own words, sent later) and a steered one give ""
+// and show whole.
+func autoSummary(m promptMeta, text string) (icon, label, preview string) {
+	switch m.Auto {
+	case "resume":
+		icon, label = "rotate-cw", "Resumed after a restart"
+	case "limit":
+		icon, label = "rotate-cw", "Resumed when the usage limit reset"
+	case "prwatch":
+		icon, label = "eye", fmt.Sprintf("Pull request #%d changed", m.PR)
+	case "handoff":
+		icon, label = "arrow-right-left", "Handed over from another thread"
+	case "snooze":
+		icon, label = "alarm-clock", "Back from snooze"
+	case "agent", "child":
+		icon = "message-square"
+		from := fromThreads(m, text)
+		switch {
+		case m.Auto == "agent" && len(from) > 0:
+			label = "Message from " + from[0].Title
+		case m.Auto == "agent":
+			label = "Message from another thread"
+		case len(from) == 1:
+			label = "Reply from " + from[0].Title
+		default:
+			label = fmt.Sprintf("Replies from %d threads", len(from))
+		}
+	default:
+		return "", "", ""
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" && !threadRef.MatchString(line) {
+			return icon, label, firstLine(line)
+		}
+	}
+	return icon, label, ""
 }
