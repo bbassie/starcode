@@ -260,3 +260,25 @@ func TestThreadIDOf(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchThreads(t *testing.T) {
+	s, id := agentServer(t)
+	r := call(t, s, id, "spawn_thread", map[string]any{"prompt": "count the zebras in the stable", "title": "zebra count", "report": "none"})
+	if r.IsError {
+		t.Fatal(r.Text)
+	}
+	child := s.App.Children(context.Background(), id)[0].ID
+	if w := call(t, s, id, "wait_thread", map[string]any{"id": child, "timeout_seconds": 10}); w.IsError {
+		t.Fatal(w.Text)
+	}
+	got := call(t, s, id, "search_threads", map[string]any{"query": "zebr stable"})
+	if got.IsError || !strings.Contains(got.Text, child+" zebra count") || !strings.Contains(got.Text, "prompt: count the zebras") {
+		t.Fatalf("search:\n%s", got.Text)
+	}
+	if got := call(t, s, id, "search_threads", map[string]any{"query": "giraffe"}); got.Text != "No messages match." {
+		t.Fatalf("no match: %s", got.Text)
+	}
+	if got := call(t, s, id, "search_threads", map[string]any{"query": " "}); !got.IsError {
+		t.Fatal("empty query was taken")
+	}
+}

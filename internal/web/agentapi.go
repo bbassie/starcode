@@ -370,6 +370,23 @@ func init() {
 				}
 				return s.readThread(ctx, threadIDOf(a.ID), a.Last)
 			}),
+		tool("search_threads", "Find threads by what was said in them: every word of the query must appear in one prompt or reply (words match as prefixes). Lists the threads with the newest match first and a snippet of each match. Use list_threads to search titles only, and read_thread to read a thread found here.",
+			schema(map[string][2]string{
+				"query":        {"string", "the words to look for"},
+				"all_projects": {"boolean", "include other projects (default: only your project); each thread then names its project"},
+				"limit":        {"integer", "at most this many threads (default 10)"},
+			}, "query"),
+			func(s *Server, ctx context.Context, t store.Thread, args json.RawMessage) (string, error) {
+				a, err := decode[struct {
+					Query       string
+					AllProjects bool `json:"all_projects"`
+					Limit       int
+				}](args)
+				if err != nil {
+					return "", err
+				}
+				return s.searchThreads(ctx, t, a.Query, a.AllProjects, a.Limit)
+			}),
 		tool("spawn_thread", "Start a new thread with its own agent to work on a task in parallel with you. It shows under your thread in the user's sidebar. When it finishes, the user hears from it directly, and its reply comes to you with the next prompt you get, so you do not need to relay it. Set report to now only when you have more work to do with the result (a next step that depends on it); call wait_thread to block on it instead. The child works in the same checkout as you, so give parallel children separate files to touch.",
 			schema(map[string][2]string{
 				"prompt": {"string", "the task, written for an agent that has not seen your conversation"},
@@ -640,6 +657,80 @@ func (s *Server) listThreads(ctx context.Context, caller store.Thread, q, want s
 	}
 	if n == 0 {
 		return "No threads match.", nil
+	}
+	return b.String(), nil
+}
+
+// searchThreads groups message hits by thread, newest hit first, with up
+// to three snippets per thread.
+func (s *Server) searchThreads(ctx context.Context, caller store.Thread, q string, all bool, limit int) (string, error) {
+	if strings.TrimSpace(q) == "" {
+		return "", errors.New("query is empty")
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	hits, err := s.App.Store.SearchItems(ctx, q, 500)
+	if err != nil {
+		return "", err
+	}
+	projects := map[string]string{}
+	if all {
+		ps, err := s.App.Store.Projects(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, p := range ps {
+			projects[p.ID] = p.Name
+		}
+	}
+	type group struct {
+		hit   store.SearchHit
+		lines []string
+		more  int
+	}
+	var order []string
+	groups := map[string]*group{}
+	for _, h := range hits {
+		if !all && h.ProjectID != caller.ProjectID {
+			continue
+		}
+		g := groups[h.ThreadID]
+		if g == nil {
+			if len(order) == limit {
+				continue
+			}
+			g = &group{hit: h}
+			groups[h.ThreadID] = g
+			order = append(order, h.ThreadID)
+		}
+		if len(g.lines) == 3 {
+			g.more++
+			continue
+		}
+		who := "agent"
+		if h.Kind == domain.KindUser {
+			who = "prompt"
+		}
+		g.lines = append(g.lines, fmt.Sprintf("  %s %s: %s", h.CreatedAt.UTC().Format("2006-01-02"), who, strings.Join(strings.Fields(h.Snippet), " ")))
+	}
+	if len(order) == 0 {
+		return "No messages match.", nil
+	}
+	var b strings.Builder
+	for _, id := range order {
+		g := groups[id]
+		mark := ""
+		if id == caller.ID {
+			mark = " (you)"
+		}
+		if all {
+			mark += " [project " + projects[g.hit.ProjectID] + "]"
+		}
+		fmt.Fprintf(&b, "%s %s%s\n%s\n", id, g.hit.ThreadTitle, mark, strings.Join(g.lines, "\n"))
+		if g.more > 0 {
+			fmt.Fprintf(&b, "  and %d more\n", g.more)
+		}
 	}
 	return b.String(), nil
 }

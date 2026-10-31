@@ -365,6 +365,8 @@ func viewStarcodeTool(ctx context.Context, tool string, input json.RawMessage, o
 		v.Icon, v.Verb, v.Text = "triangle-alert", "Asked for your attention", a.Message
 	case "list_threads":
 		v.Icon, v.Verb, v.Text = "list-filter", "Listed threads", a.Query
+	case "search_threads":
+		v.Icon, v.Verb, v.Text = "search", "Searched threads", a.Query
 	case "read_thread":
 		v.Icon, v.Verb, v.Code = "file-text", "Read thread", a.ID
 	case "spawn_thread":
@@ -397,7 +399,7 @@ func viewStarcodeTool(ctx context.Context, tool string, input json.RawMessage, o
 		if m := startedThread.FindStringSubmatch(output); m != nil {
 			id = m[1]
 		}
-	} else if tool == "list_threads" || tool == "cancel_schedule" {
+	} else if tool == "list_threads" || tool == "search_threads" || tool == "cancel_schedule" {
 		id = ""
 	}
 	id = id[strings.LastIndex(id, "/")+1:] // read_thread and settle_thread take a /threads/<id> link too
