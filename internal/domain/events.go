@@ -68,6 +68,14 @@ type ProjectRemoved struct {
 	ID string `json:"id"`
 }
 
+// ProjectPromoted turns a scratch folder into a project the lists show,
+// under Name. The folder stays where it is: the agents' sessions are
+// keyed by its path.
+type ProjectPromoted struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type ThreadCreated struct {
 	ID        string `json:"id"`
 	ProjectID string `json:"project_id"`
@@ -506,6 +514,8 @@ func TypeOf(p any) string {
 		return "thread.worktree_set"
 	case ProjectSettingsChanged, *ProjectSettingsChanged:
 		return "project.settings_changed"
+	case ProjectPromoted, *ProjectPromoted:
+		return "project.promoted"
 	case ThreadPinned, *ThreadPinned:
 		return "thread.pinned"
 	case ThreadUnpinned, *ThreadUnpinned:
@@ -608,6 +618,8 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &ThreadWorktreeSet{}
 	case "project.settings_changed":
 		p = &ProjectSettingsChanged{}
+	case "project.promoted":
+		p = &ProjectPromoted{}
 	case "thread.pinned":
 		p = &ThreadPinned{}
 	case "thread.unpinned":

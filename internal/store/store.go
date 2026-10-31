@@ -373,6 +373,9 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 	case domain.ProjectRemoved:
 		_, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id=?`, p.ID)
 		return err
+	case domain.ProjectPromoted:
+		_, err := tx.ExecContext(ctx, `UPDATE projects SET scratch=0, name=? WHERE id=?`, p.Name, p.ID)
+		return err
 	case domain.ThreadCreated:
 		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO threads(id,project_id,title,agent,model,parent_id,wake_parent,report_parent,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
 			p.ID, p.ProjectID, p.Title, p.Agent, p.Model, p.Parent, p.WakeParent, p.ReportParent, ts, ts)
@@ -719,6 +722,8 @@ func deref(p any) any {
 	case *domain.ThreadWorktreeSet:
 		return *v
 	case *domain.ProjectSettingsChanged:
+		return *v
+	case *domain.ProjectPromoted:
 		return *v
 	case *domain.ThreadPinned:
 		return *v

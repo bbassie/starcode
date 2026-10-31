@@ -588,6 +588,9 @@ templ MainHead(d ThreadData) {
 					@notifyButton(d, store.NotifyOff, "never", "No notifications from this thread")
 				</div>
 			</div>
+			if d.Project.Scratch {
+				<button class="btn ghost dim" data-on:click={ "(window.projName = prompt('Name for the project', " + jsq(d.Thread.Title) + ")) && @post('/api/projects/" + d.Project.ID + "/promote?name=' + encodeURIComponent(window.projName))" } title={ "Make this thread's folder a project, so it shows in the project lists and new threads can start in it. The folder stays at " + d.Project.Path }>@Icon("folder-plus", "ui-icon") <span class="hide-sm">make it a project</span></button>
+			}
 			<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unread?leave=1')" } title="Mark unread and leave it for later">@Icon("mail", "ui-icon") <span class="hide-sm">mark unread</span></button>
 			if d.Thread.Pinned {
 				<button class="btn ghost dim" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/unpin')" } title="Unpin: back into date order">@Icon("pin-off", "ui-icon") <span class="hide-sm">unpin</span></button>

@@ -41,3 +41,22 @@ func (a *App) SetProjectSettings(ctx context.Context, id string, ps ProjectSetti
 	_, err = a.Store.Append(ctx, "", domain.ProjectSettingsChanged{ID: id, Agent: ps.Agent, Model: ps.Model, Effort: ps.Effort, Mode: ps.Mode})
 	return err
 }
+
+// PromoteProject turns the scratch folder of a thread started without a
+// project into a project under name, so it shows in the project lists
+// and new threads can start in it. The folder keeps its path.
+func (a *App) PromoteProject(ctx context.Context, id, name string) error {
+	p, err := a.Store.Project(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !p.Scratch {
+		return fmt.Errorf("%s is a project already", p.Name)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("the project needs a name")
+	}
+	_, err = a.Store.Append(ctx, "", domain.ProjectPromoted{ID: id, Name: name})
+	return err
+}

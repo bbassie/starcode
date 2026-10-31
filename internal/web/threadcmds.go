@@ -33,6 +33,7 @@ func (s *Server) threadCmdRoutes() {
 	s.mux.HandleFunc("POST /api/stash/{id}/restore", s.restoreStash)
 	s.mux.HandleFunc("POST /api/stash/{id}/delete", s.deleteStash)
 	s.mux.HandleFunc("POST /api/projects/{id}/settings", s.setProjectSettings)
+	s.mux.HandleFunc("POST /api/projects/{id}/promote", s.promoteProject)
 }
 
 // isUndo is whether the request is an undo toast's own post.
@@ -278,4 +279,14 @@ func (s *Server) projectsData(ctx context.Context, projects []store.Project, sel
 		d.Settings.Agent, d.Settings.Model, d.Settings.Effort, d.Settings.Mode = d.Sel.Agent, d.Sel.Model, d.Sel.Effort, d.Sel.Mode
 	}
 	return d
+}
+
+// promoteProject makes a scratch folder a project named ?name=, then
+// reloads the page that asked, whose header and lists now show it.
+func (s *Server) promoteProject(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.PromoteProject(r.Context(), r.PathValue("id"), r.URL.Query().Get("name")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	datastar.NewSSE(w, r).ExecuteScript("location.reload()")
 }

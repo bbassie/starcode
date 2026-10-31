@@ -811,7 +811,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		c.s.App.MarkSeen(ctx, c.threadID)
 	}
 	switch p := ev.Payload.(type) {
-	case domain.ProjectAdded, domain.ProjectRemoved, domain.ProjectSettingsChanged, domain.ThreadCreated:
+	case domain.ProjectAdded, domain.ProjectRemoved, domain.ProjectSettingsChanged, domain.ProjectPromoted, domain.ThreadCreated:
 		c.sideDirty, c.sideFull = true, true
 		if c.view == "home" {
 			return c.renderAll(ctx)
