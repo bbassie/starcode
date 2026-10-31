@@ -49,6 +49,8 @@ type ThreadData struct {
 	// a long thread does not cost its whole history on every open and
 	// every reconnect, which a phone does often.
 	Full bool
+	// NewSince puts the "new since you last looked" line (see NewMark).
+	NewSince time.Time
 }
 
 // tailKeep is how many items the transcript shows before the reader asks
@@ -217,6 +219,61 @@ func blockItems(bs []Block) []store.Item {
 	return out
 }
 
+// NewMark is the id of the first transcript row that came in after since,
+// in the order the page draws a turn (prompt, "Worked for" fold, the
+// rest), for the layout script to put a "new since you last looked" line
+// above. A fold counts as new when anything in it is. It is "" when
+// since is zero, nothing is newer, or the first row shown is already
+// new, where a line would mark nothing.
+func NewMark(items []store.Item, since time.Time) string {
+	if since.IsZero() {
+		return ""
+	}
+	first := true
+	for _, t := range GroupTurns(items) {
+		head, folded, rest := t.Fold()
+		// The turn's rows as drawn: an id and the items under it.
+		var ids []string
+		var under [][]store.Item
+		add := func(bs []Block) {
+			for _, b := range bs {
+				if b.Item != nil {
+					ids = append(ids, "it-"+b.Item.ID)
+				} else {
+					ids = append(ids, "work-"+b.Work[0].ID)
+				}
+				under = append(under, blockItems([]Block{b}))
+			}
+		}
+		add(head)
+		if len(folded) > 0 {
+			ids = append(ids, "fold-"+t.ID)
+			under = append(under, blockItems(folded))
+		}
+		add(rest)
+		for i, id := range ids {
+			if newer(under[i], since) {
+				if first {
+					return ""
+				}
+				return id
+			}
+			first = false
+		}
+	}
+	return ""
+}
+
+// newer is whether any of items was created after since.
+func newer(items []store.Item, since time.Time) bool {
+	for _, it := range items {
+		if it.CreatedAt.After(since) {
+			return true
+		}
+	}
+	return false
+}
+
 // pendingApprovals is the subset that still wants an answer.
 func pendingApprovals(aps []store.Approval) []store.Approval {
 	var out []store.Approval
@@ -285,7 +342,7 @@ templ Thread(d ThreadData) {
 		if d.Full {
 			{{ head, tail = nil, d.Items }}
 		}
-		<div id="items" class="items">
+		<div id="items" class="items" data-new-mark={ NewMark(tail, d.NewSince) }>
 			<div class="items-inner">
 				if len(head) > 0 {
 					@LoadEarlier(d.Thread.ID, len(head), tail[0].Seq)
@@ -300,6 +357,9 @@ templ Thread(d ThreadData) {
 				</div>
 			</div>
 		</div>
+		// Read while the page parses: the stream's first redraw leaves
+		// the attribute out (see newMark in the layout script).
+		<script>window.newMark ||= document.getElementById('items').dataset.newMark || '';</script>
 		@BusyBar(d)
 		// Shown by the layout's scroll script once the reader has scrolled
 		// up; the transcript stops following the stream at that point.

@@ -37,7 +37,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 		if err != nil {
 			return pt, err
 		}
-		d.Full = p.Full
+		d.Full, d.NewSince = p.Full, p.NewSince
 		pt.Thread = &d
 		pt.Main = views.Thread(d)
 		if d.Project.ID != "" {

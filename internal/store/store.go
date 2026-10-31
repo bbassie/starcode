@@ -1391,6 +1391,21 @@ func (s *Store) MarkUnread(ctx context.Context, threadID string) error {
 	return err
 }
 
+// SeenAt is when threadID was last on screen; ok is false when it never
+// was, or was marked unread since.
+func (s *Store) SeenAt(ctx context.Context, threadID string) (at time.Time, ok bool, err error) {
+	var ts string
+	err = s.db.QueryRowContext(ctx, `SELECT seen_at FROM seen WHERE thread_id=?`, threadID).Scan(&ts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	at, err = time.Parse(timeFmt, ts)
+	return at, err == nil, err
+}
+
 // Seen maps thread ids to when they were last on screen. A thread with
 // no entry was never opened.
 func (s *Store) Seen(ctx context.Context) (map[string]time.Time, error) {

@@ -31,3 +31,28 @@ func TestMarkUnread(t *testing.T) {
 		t.Errorf("thread still marked seen after mark unread")
 	}
 }
+
+// A thread opened after more came in shows a line above the first new
+// row and opens there; a reload, with everything seen, has no line.
+func TestNewSinceLastLooked(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	a := e.thread()
+	e.turns(a, "first", "second", "third", "4", "5", "6", "7", "8")
+	e.app.MarkSeen(ctx, a)
+	e.turns(a, "ninth", "10")
+	p := e.page("/threads/"+a, false)
+	// The page opens at the line, not at the bottom.
+	wait(p, `() => {
+		const line = document.getElementById('new-mark');
+		const row = line && line.nextElementSibling;
+		if (!row || !row.textContent.includes('ninth')) return false;
+		const box = document.getElementById('items').getBoundingClientRect(), at = line.getBoundingClientRect();
+		return at.top >= box.top && at.top < box.top + 60 && document.body.classList.contains('scrolled-up');
+	}`)
+	p = e.page("/threads/"+a, false)
+	p.MustElement(".turn")
+	if p.MustEval(`() => !!document.getElementById('new-mark')`).Bool() {
+		t.Error("the line is back on a thread with nothing new")
+	}
+}

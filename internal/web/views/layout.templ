@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"starcode/internal/store"
 	"sync"
+	"time"
 )
 
 // Page identifies what the SSE stream should render.
@@ -34,6 +35,9 @@ type Page struct {
 	// PanelTab is the side panel's tab the same way; with the tree open
 	// the redraw carries the root listing instead of an empty tree.
 	PanelTab string
+	// NewSince is when the reader last had the thread on screen, set on
+	// a page load when more came in after that; zero otherwise.
+	NewSince time.Time
 	// Full is whether the page had loaded the whole transcript, so a
 	// redraw keeps it instead of cutting it again (see views.SplitTail).
 	Full bool
@@ -419,7 +423,32 @@ templ Layout(title string, p Page, parts Parts) {
 						document.body.classList.add('scrolled-up');
 						row.scrollIntoView({ block: 'center' });
 					};
-					window.addEventListener('DOMContentLoaded', () => setTimeout(jumpToHash, 50));
+					// What came in since the reader last looked gets a line
+					// above it (views.NewMark), and the page opens there
+					// instead of at the bottom. views.Thread puts the row's
+					// id in window.newMark as the page parses; a turn
+					// morphed in loses the line, which onDOM puts back.
+					const markNew = () => {
+						const id = window.newMark;
+						if (!id || document.getElementById('new-mark')) return;
+						const row = document.getElementById(id);
+						if (!row) return;
+						const line = document.createElement('div');
+						line.id = 'new-mark';
+						line.className = 'new-mark';
+						line.innerHTML = '<span>new since you last looked</span>';
+						row.before(line);
+					};
+					window.addEventListener('DOMContentLoaded', () => setTimeout(() => {
+						markNew();
+						const line = document.getElementById('new-mark');
+						if (line && !location.hash.startsWith('#it-')) {
+							stick = false;
+							document.body.classList.add('scrolled-up');
+							line.scrollIntoView({ block: 'start' });
+						}
+						jumpToHash();
+					}, 50));
 					window.addEventListener('hashchange', jumpToHash);
 					const track = (m) => {
 						stick = near(m);
@@ -444,6 +473,7 @@ templ Layout(title string, p Page, parts Parts) {
 							m.scrollTop = anchor.top + (m.scrollHeight - anchor.h);
 							anchor = null;
 						}
+						markNew();
 						if (wantRow && document.getElementById(wantRow)) { jumpToHash(); return; }
 						// A finger on the screen may be starting to scroll up;
 						// pulling the transcript down under it would fight it.

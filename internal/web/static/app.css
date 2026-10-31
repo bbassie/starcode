@@ -593,6 +593,9 @@ button.status-pill { cursor: pointer; font-family: inherit; color: inherit; }
 .item { min-width: 0; }
 .load-earlier { align-self: center; color: var(--fg-dim); }
 .earlier { display: contents; }
+/* The line above what came in since the reader last looked. */
+.new-mark { display: flex; align-items: center; gap: 10px; color: var(--accent); font-size: 12px; scroll-margin-top: 12px; }
+.new-mark::before, .new-mark::after { content: ""; flex: 1; border-top: 1px solid var(--accent); opacity: .5; }
 .composer-actions { display: inline-flex; gap: 6px; align-items: center; flex: none; }
 /* Streamed text between two full patches keeps its line breaks. */
 .tail { white-space: pre-wrap; }

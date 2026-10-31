@@ -3,6 +3,7 @@ package views
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"starcode/internal/domain"
 	"starcode/internal/store"
@@ -55,6 +56,37 @@ func TestTurnFold(t *testing.T) {
 	} {
 		if got := shape(c.items...); got != c.want {
 			t.Errorf("%s:\n got %s\nwant %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestNewMark(t *testing.T) {
+	t0 := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	n := 0
+	it := func(kind, status string, min int) store.Item {
+		n++
+		return store.Item{ID: string(rune('a' + n)), Kind: kind, Status: status, CreatedAt: t0.Add(time.Duration(min) * time.Minute)}
+	}
+	done := domain.ItemDone
+	// A finished turn: prompt b, fold of c..e, reply f, result g.
+	turn1 := []store.Item{it(domain.KindUser, "", 0), it(domain.KindAssistant, done, 1), it(domain.KindTool, done, 2), it(domain.KindTool, done, 3), it(domain.KindAssistant, done, 4), it(domain.KindResult, done, 5)}
+	// A second one, still running: prompt h, tool i.
+	turn2 := []store.Item{it(domain.KindUser, "", 10), it(domain.KindTool, done, 11)}
+	items := append(append([]store.Item{}, turn1...), turn2...)
+	for _, c := range []struct {
+		name  string
+		since time.Time
+		want  string
+	}{
+		{"never looked", time.Time{}, ""},
+		{"nothing new", t0.Add(20 * time.Minute), ""},
+		{"a new prompt", t0.Add(6 * time.Minute), "it-" + turn2[0].ID},
+		{"new work inside a fold marks the fold", t0.Add(150 * time.Second), "fold-" + turn1[0].ID},
+		{"only the running turn's tool", t0.Add(10*time.Minute + 30*time.Second), "work-" + turn2[1].ID},
+		{"everything is new", t0.Add(-time.Minute), ""},
+	} {
+		if got := NewMark(items, c.since); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 	}
 }

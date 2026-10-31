@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
 
@@ -532,8 +533,14 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Before the look below counts: what came in since the last one gets
+	// a line above it (views.NewMark).
+	var since time.Time
+	if at, ok, _ := s.App.Store.SeenAt(r.Context(), id); ok && t.UpdatedAt.After(at) {
+		since = at
+	}
 	s.App.MarkSeen(r.Context(), id)
-	s.page(r.Context(), views.TabTitle(t), views.Page{View: "thread", ThreadID: id, Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), Draft: s.draft(r, id)}).Render(r.Context(), w)
+	s.page(r.Context(), views.TabTitle(t), views.Page{View: "thread", ThreadID: id, NewSince: since, Theme: s.theme(r), Appearance: s.appearanceMode(r), Sidebar: s.sidebarMode(r), Dense: s.denseMode(r), Draft: s.draft(r, id)}).Render(r.Context(), w)
 }
 
 // ---- helpers shared by events and commands ----
