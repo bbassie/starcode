@@ -1257,9 +1257,12 @@ type outLine struct {
 	Model     string `json:"model"`
 	AITitle   string `json:"aiTitle"`
 
-	// system/task_started, system/task_notification
-	TaskID    string `json:"task_id"`
-	ToolUseID string `json:"tool_use_id"`
+	// system/task_started, system/task_notification (whose status is
+	// the Status below)
+	TaskID      string `json:"task_id"`
+	ToolUseID   string `json:"tool_use_id"`
+	TaskType    string `json:"task_type"`
+	Description string `json:"description"`
 
 	// system/compact_boundary. PostTokens is the CLI's count of what the
 	// conversation is after the fold.
@@ -1495,13 +1498,23 @@ func parseSystem(out *outLine, st *state) []agent.Event {
 		if out.TaskID != "" && out.ToolUseID != "" {
 			st.tasks[out.ToolUseID] = out.TaskID
 		}
-		return nil
+		if out.TaskID == "" {
+			return nil
+		}
+		return []agent.Event{{Kind: agent.KindBackground, Background: &agent.Background{
+			ID: out.TaskID, ToolID: out.ToolUseID, Kind: taskKind(out.TaskType), Label: strings.TrimSpace(out.Description),
+		}}}
 	case "task_notification":
 		// The task ended: completed, failed or stopped.
 		if out.ToolUseID != "" {
 			delete(st.tasks, out.ToolUseID)
 		}
-		return nil
+		if out.TaskID == "" {
+			return nil
+		}
+		return []agent.Event{{Kind: agent.KindBackground, Background: &agent.Background{
+			ID: out.TaskID, ToolID: out.ToolUseID, Done: true, Status: out.Status,
+		}}}
 	default:
 		st.log.Debug("ignored system message", "subtype", out.Subtype)
 		return nil
@@ -1980,4 +1993,16 @@ func (t *tailBuffer) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return strings.TrimSpace(string(t.buf))
+}
+
+// taskKind maps the CLI's task_type to a background kind: local_bash is
+// a command run in the background, the agent types are subagents.
+func taskKind(taskType string) string {
+	switch taskType {
+	case "local_bash":
+		return agent.BackgroundCommand
+	case "local_agent", "remote_agent", "in_process_teammate":
+		return agent.BackgroundSubagent
+	}
+	return agent.BackgroundTask
 }

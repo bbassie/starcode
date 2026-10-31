@@ -156,6 +156,7 @@ type Event struct {
 	Steered       *Steered
 	Notice        *Notice
 	Limits        *Limits
+	Background    *Background
 	Closed        *Closed
 }
 
@@ -176,7 +177,29 @@ const (
 	KindSteered       EventKind = "steered"
 	KindNotice        EventKind = "notice"
 	KindLimits        EventKind = "limits"
+	KindBackground    EventKind = "background"
 	KindClosed        EventKind = "closed"
+)
+
+// Background is work the agent runs beside its turn (a background
+// command, a subagent) starting or, with Done, ending. Such work can
+// outlive the turn that started it, and dies with the agent process.
+type Background struct {
+	ID     string // the agent's task id
+	ToolID string // the tool call that started it, when known
+	Kind   string // BackgroundCommand, BackgroundSubagent or BackgroundTask
+	Label  string // what it is, in the agent's words
+	Done   bool
+	Status string // how it ended: completed, failed, stopped
+}
+
+// Background kinds. A command is often a dev server or a watcher that
+// nobody waits on; a subagent or other task is work the agent expects
+// back.
+const (
+	BackgroundCommand  = "command"
+	BackgroundSubagent = "subagent"
+	BackgroundTask     = "task"
 )
 
 // SessionInfo carries the agent-side session id and, when known, the model

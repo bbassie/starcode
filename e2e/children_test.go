@@ -56,7 +56,7 @@ func TestSpawnedThreadNestsUnderItsParent(t *testing.T) {
 		const d = [...document.querySelectorAll('details.item.auto-prompt')].pop();
 		return d && !d.open && d.querySelector('summary').textContent.replace(/\s+/g, ' ').includes('Message from Child work all done');
 	}`)
-	click(pp.MustElement("details.item.auto-prompt:last-of-type > summary"))
+	pp.MustEval(`() => [...document.querySelectorAll('details.item.auto-prompt > summary')].pop().click()`)
 	wait(pp, `() => [...document.querySelectorAll('.user-from a')].some(a => a.offsetWidth > 0 && a.getAttribute('href') === '/threads/`+child+`' && a.textContent === 'Child work')`)
 	shot(pp, "parent-phone.png")
 }

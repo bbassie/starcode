@@ -65,6 +65,9 @@ type App struct {
 	// cutOff are the threads Recover found cut off by a restart and left
 	// for ResumeCutOff.
 	cutOff []string
+	// bgWake are the idle threads Recover found with background work the
+	// agent waits on, which a restart cut off (see background.go).
+	bgWake []string
 	// bg counts the work started after a turn ends (recordTurnFiles),
 	// which tests wait for.
 	bg sync.WaitGroup
@@ -225,6 +228,14 @@ func (a *App) reapIdle(now time.Time) {
 		if t, err := a.Store.Thread(ctx, l.threadID); err == nil && (t.Status == domain.StatusRunning || t.Status == domain.StatusAwaitingApproval) {
 			continue
 		}
+		// Background work (a dev server, a subagent) dies with the
+		// process, so it gets the longer wait a running subagent gets.
+		l.mu.Lock()
+		since := l.idleSince
+		l.mu.Unlock()
+		if now.Sub(since) < 4*a.idleTimeout && a.hasBackground(ctx, l.threadID) {
+			continue
+		}
 		a.mu.Lock()
 		if a.sessions[l.threadID] == l {
 			delete(a.sessions, l.threadID)
@@ -255,6 +266,15 @@ func (a *App) Recover(ctx context.Context) error {
 	}
 	resume := a.Store.ResumeAfterRestart(ctx)
 	for _, t := range threads {
+		// Background work died with the processes. A turn cut off gets
+		// the note with its resume prompt; an idle thread whose agent
+		// waited on the work gets a prompt of its own (ResumeCutOff),
+		// and otherwise the note waits for the next prompt.
+		if lost := a.loseBackground(ctx, t.ID); awaited(lost) && resume && t.Status != domain.StatusRunning && t.Status != domain.StatusAwaitingApproval && !t.Archived && !t.Snoozed() && t.ExternalSessionID != "" {
+			if _, ok := a.Agent(t.Agent); ok {
+				a.bgWake = append(a.bgWake, t.ID)
+			}
+		}
 		// No session survives to deliver a steered prompt; it goes out
 		// with the queue.
 		if evs := a.dropSteered(ctx, t.ID); len(evs) > 0 {
@@ -318,6 +338,13 @@ func (a *App) Recover(ctx context.Context) error {
 func (a *App) ResumeCutOff(ctx context.Context) {
 	ids := a.cutOff
 	a.cutOff = nil
+	defer func() {
+		wake := a.bgWake
+		a.bgWake = nil
+		for _, id := range wake {
+			a.wakeForBackground(ctx, id)
+		}
+	}()
 	for _, id := range ids {
 		var evs []any
 		aps, _ := a.Store.PendingApprovals(ctx, id)
@@ -1032,7 +1059,7 @@ func (a *App) startPromptMeta(ctx context.Context, l *live, t store.Thread, queu
 			send = func(ctx context.Context, text string) error { return is.SendImages(ctx, text, images) }
 		}
 	}
-	if err := send(ctx, reports+text); err != nil {
+	if err := send(ctx, a.pendingBackground(ctx, t.ID)+reports+text); err != nil {
 		a.Store.Append(ctx, t.ID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
 		return err
 	}
@@ -1685,7 +1712,15 @@ func (a *App) pump(l *live) {
 			a.Bus.Publish(domain.GitChanged{ProjectID: l.projectID})
 		case agent.KindNotice:
 			append_(domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: e.Notice.Text})
+		case agent.KindBackground:
+			a.background(ctx, tid, e.Background, append_)
 		case agent.KindClosed:
+			// Background work dies with the process; the next prompt
+			// tells the agent.
+			if lost := a.loseBackground(ctx, tid); len(lost) > 0 {
+				append_(domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Quiet: true,
+					Body: fmt.Sprintf("The agent process closed with background work running (%d); the next prompt tells the agent.", len(lost))})
+			}
 			a.mu.Lock()
 			current := a.sessions[tid] == l
 			if current {

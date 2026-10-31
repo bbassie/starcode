@@ -1443,3 +1443,27 @@ func TestParseSteerReplay(t *testing.T) {
 		t.Fatalf("second turn id %q", evs[1].TurnCompleted.TurnID)
 	}
 }
+
+func TestBackgroundTasks(t *testing.T) {
+	st := newState(nil)
+	evs := feed(st,
+		`{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_1","description":"npm run dev","task_type":"local_bash"}`,
+		`{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_2","description":"look around","task_type":"local_agent"}`,
+		`{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_2","status":"failed"}`,
+	)
+	if len(evs) != 3 {
+		t.Fatalf("events %+v", evs)
+	}
+	if b := evs[0].Background; b.ID != "b1" || b.Kind != agent.BackgroundCommand || b.Label != "npm run dev" || b.Done {
+		t.Errorf("command %+v", b)
+	}
+	if b := evs[1].Background; b.Kind != agent.BackgroundSubagent || b.ToolID != "toolu_2" {
+		t.Errorf("subagent %+v", b)
+	}
+	if b := evs[2].Background; b.ID != "a1" || !b.Done || b.Status != "failed" {
+		t.Errorf("end %+v", b)
+	}
+	if st.tasks["toolu_1"] != "b1" || st.tasks["toolu_2"] != "" {
+		t.Errorf("tasks %v", st.tasks)
+	}
+}

@@ -316,7 +316,7 @@ func (s *Store) Replay(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	for _, t := range []string{"schedules", "items_fts", "session_rules", "queued_prompts", "approvals", "items", "threads", "projects"} {
+	for _, t := range []string{"background", "schedules", "items_fts", "session_rules", "queued_prompts", "approvals", "items", "threads", "projects"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+t); err != nil {
 			return 0, err
 		}
@@ -460,6 +460,18 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		return err
 	case domain.ThreadReported:
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET report_pending=0 WHERE id=?`, ev.ThreadID)
+		return err
+	case domain.ThreadBackgroundStarted:
+		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO background(thread_id,task_id,kind,label,lost,created_at) VALUES(?,?,?,?,0,?)`, ev.ThreadID, p.TaskID, p.Kind, p.Label, ts)
+		return err
+	case domain.ThreadBackgroundEnded:
+		_, err := tx.ExecContext(ctx, `DELETE FROM background WHERE thread_id=? AND task_id=? AND lost=0`, ev.ThreadID, p.TaskID)
+		return err
+	case domain.ThreadBackgroundLost:
+		_, err := tx.ExecContext(ctx, `UPDATE background SET lost=1 WHERE thread_id=?`, ev.ThreadID)
+		return err
+	case domain.ThreadBackgroundReported:
+		_, err := tx.ExecContext(ctx, `DELETE FROM background WHERE thread_id=? AND lost=1`, ev.ThreadID)
 		return err
 	case domain.ScheduleSet:
 		_, err := tx.ExecContext(ctx, `INSERT INTO schedules(id,thread_id,project_id,prompt,title,next_at,cron,tz,agent,model,effort,mode,paused,by_thread,created_at)
@@ -740,6 +752,14 @@ func deref(p any) any {
 	case *domain.ThreadReportPending:
 		return *v
 	case *domain.ThreadReported:
+		return *v
+	case *domain.ThreadBackgroundStarted:
+		return *v
+	case *domain.ThreadBackgroundEnded:
+		return *v
+	case *domain.ThreadBackgroundLost:
+		return *v
+	case *domain.ThreadBackgroundReported:
 		return *v
 	case *domain.ScheduleSet:
 		return *v
@@ -1797,4 +1817,30 @@ func (s *Store) compactRange(ctx context.Context, threadID string, lo, hi int64,
 		return 0, err
 	}
 	return removed, nil
+}
+
+// BackgroundTask is work an agent runs beside its turn that has not
+// ended (see domain.ThreadBackgroundStarted); Lost is one that died with
+// the agent process.
+type BackgroundTask struct {
+	TaskID, Kind, Label string
+	Lost                bool
+}
+
+// Background lists threadID's background work, oldest first.
+func (s *Store) Background(ctx context.Context, threadID string) ([]BackgroundTask, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id, kind, label, lost FROM background WHERE thread_id=? ORDER BY created_at, task_id`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BackgroundTask
+	for rows.Next() {
+		var b BackgroundTask
+		if err := rows.Scan(&b.TaskID, &b.Kind, &b.Label, &b.Lost); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }

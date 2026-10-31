@@ -99,6 +99,27 @@ type ThreadReportPending struct{}
 
 type ThreadReported struct{}
 
+// ThreadBackgroundStarted is work the agent started beside its turn (see
+// agent.Background), which can outlive the turn; ThreadBackgroundEnded
+// is its end.
+type ThreadBackgroundStarted struct {
+	TaskID string `json:"task_id"`
+	Kind   string `json:"kind"`
+	Label  string `json:"label,omitempty"`
+}
+
+type ThreadBackgroundEnded struct {
+	TaskID string `json:"task_id"`
+	Status string `json:"status,omitempty"`
+}
+
+// ThreadBackgroundLost says the thread's background work died with its
+// agent process (a restart, or the process closed) before it ended.
+// ThreadBackgroundReported says the agent has been told.
+type ThreadBackgroundLost struct{}
+
+type ThreadBackgroundReported struct{}
+
 type ThreadRenamed struct {
 	Title string `json:"title"`
 }
@@ -532,6 +553,14 @@ func TypeOf(p any) string {
 		return "thread.report_pending"
 	case ThreadReported, *ThreadReported:
 		return "thread.reported"
+	case ThreadBackgroundStarted, *ThreadBackgroundStarted:
+		return "thread.background_started"
+	case ThreadBackgroundEnded, *ThreadBackgroundEnded:
+		return "thread.background_ended"
+	case ThreadBackgroundLost, *ThreadBackgroundLost:
+		return "thread.background_lost"
+	case ThreadBackgroundReported, *ThreadBackgroundReported:
+		return "thread.background_reported"
 	case ScheduleSet, *ScheduleSet:
 		return "schedule.set"
 	case ScheduleRan, *ScheduleRan:
@@ -636,6 +665,14 @@ func Decode(typ string, raw []byte) (any, error) {
 		p = &ThreadReportPending{}
 	case "thread.reported":
 		p = &ThreadReported{}
+	case "thread.background_started":
+		p = &ThreadBackgroundStarted{}
+	case "thread.background_ended":
+		p = &ThreadBackgroundEnded{}
+	case "thread.background_lost":
+		p = &ThreadBackgroundLost{}
+	case "thread.background_reported":
+		p = &ThreadBackgroundReported{}
 	case "schedule.set":
 		p = &ScheduleSet{}
 	case "schedule.ran":
