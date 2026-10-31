@@ -184,11 +184,21 @@ templ ItemWith(it store.Item, kids map[string][]store.Item) {
 						</div>
 						<pre class="wrap bubble">{ text }</pre>
 					}
+					if from := fromThreads(pm, text); len(from) > 0 {
+						// A message another thread's agent sent, or the
+						// replies of threads that finished: each links.
+						<span class="dim tiny-text user-auto user-from">
+							@Icon("message-square", "ui-icon") <span>from</span>
+							for _, f := range from {
+								<a href={ templ.SafeURL("/threads/" + f.ID) }>{ f.Title }</a>
+							}
+						</span>
+					}
 					if len(pm.Reports) > 0 {
 						<span class="dim tiny-text user-auto" title="The agent got these threads' last replies along with this message">
 							@Icon("message-square", "ui-icon") <span>with the replies of</span>
 							for i, id := range pm.Reports {
-								<a href={ templ.SafeURL("/threads/" + id) }>{ fmt.Sprintf("thread %d", i+1) }</a>
+								<a href={ templ.SafeURL("/threads/" + id) }>{ firstNonEmpty(threadTitle(ctx, id), fmt.Sprintf("thread %d", i+1)) }</a>
 							}
 						</span>
 					}
@@ -326,10 +336,15 @@ templ Tool(it store.Item) {
 				if v.Verb != "" {
 					<span class="tool-verb">{ v.Verb }</span>
 				}
-				if v.Text != "" {
+				if v.Href != "" {
+					// The row about a thread opens it; the tap does not
+					// also fold the row open.
+					<a class="tool-text tool-link" href={ templ.SafeURL(v.Href) } onclick="event.stopPropagation()">{ firstNonEmpty(v.Text, v.Code) }</a>
+				} else if v.Text != "" {
 					<span class="tool-text">{ v.Text }</span>
 				}
-				if v.Code != "" && v.Kind == toolCommand {
+				if v.Href != "" {
+				} else if v.Code != "" && v.Kind == toolCommand {
 					<code class="tool-code">@templ.Raw(shellHTML(v.Code))</code>
 				} else if v.Code != "" {
 					<code class="tool-code">{ v.Code }</code>

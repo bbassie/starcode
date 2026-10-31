@@ -2,6 +2,8 @@ package views
 
 import (
 	"encoding/json"
+	"regexp"
+	"strconv"
 
 	"starcode/internal/store"
 )
@@ -43,4 +45,33 @@ func rewindAction(it store.Item) string {
 	msg := "Rewind to before this message?\n\nIt and everything after it leave the conversation, and the agent forgets them. The message comes back into the composer to edit.\n\nFiles stay as they are."
 	url := "/api/threads/" + it.ThreadID + "/rewind/" + it.ID
 	return "confirm(" + jsq(msg) + " + ($prompt.trim() ? '\\n\\nWhat is in the composer now is replaced.' : '')) && @post('" + url + "')"
+}
+
+// threadRef matches how starcode names a thread in a message it passes
+// on: thread "title" (id), as send_to_thread and a finished child's
+// report write it.
+var threadRef = regexp.MustCompile(`[Tt]hread "((?:[^"\\]|\\.)*)" \(([0-9a-f]{16,})\)`)
+
+type threadLink struct{ ID, Title string }
+
+// fromThreads are the threads a prompt that another thread's agent sent,
+// or that carried finished children's replies, names, each once.
+func fromThreads(m promptMeta, text string) []threadLink {
+	if m.Auto != "agent" && m.Auto != "child" {
+		return nil
+	}
+	var out []threadLink
+	seen := map[string]bool{}
+	for _, g := range threadRef.FindAllStringSubmatch(text, -1) {
+		if seen[g[2]] {
+			continue
+		}
+		seen[g[2]] = true
+		title, err := strconv.Unquote(`"` + g[1] + `"`)
+		if err != nil {
+			title = g[1]
+		}
+		out = append(out, threadLink{ID: g[2], Title: title})
+	}
+	return out
 }

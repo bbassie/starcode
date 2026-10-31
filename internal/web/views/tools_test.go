@@ -108,3 +108,41 @@ func TestUnwrapShell(t *testing.T) {
 		}
 	}
 }
+
+// A starcode tool about one thread links to it, under its title when
+// the thread is known.
+func TestStarcodeToolLinksThread(t *testing.T) {
+	ctx := WithThreadTitles(context.Background(), func(id string) string {
+		if id == "aaaa1111bbbb2222cccc3333" {
+			return "UI pass"
+		}
+		return ""
+	})
+	cases := []struct {
+		it               store.Item
+		href, text, code string
+	}{
+		{toolItem("mcp__starcode__spawn_thread", map[string]any{"title": "UI pass", "prompt": "go"}, "Started thread aaaa1111bbbb2222cccc3333. The user hears from it."), "/threads/aaaa1111bbbb2222cccc3333", "UI pass", ""},
+		{toolItem("mcp__starcode__send_to_thread", map[string]any{"id": "aaaa1111bbbb2222cccc3333", "prompt": "hi"}, "Sent."), "/threads/aaaa1111bbbb2222cccc3333", "UI pass", ""},
+		{toolItem("starcode/settle_thread", map[string]any{"id": "/threads/dddd4444eeee5555ffff6666"}, ""), "/threads/dddd4444eeee5555ffff6666", "", "/threads/dddd4444eeee5555ffff6666"},
+		{toolItem("mcp__starcode__spawn_thread", map[string]any{"title": "Running"}, ""), "", "Running", ""},
+		{toolItem("mcp__starcode__list_threads", map[string]any{"query": "ui"}, ""), "", "ui", ""},
+	}
+	for _, c := range cases {
+		v := viewTool(ctx, c.it)
+		if v.Href != c.href || v.Text != c.text || v.Code != c.code {
+			t.Errorf("%s: got %q|%q|%q, want %q|%q|%q", c.it.ToolName, v.Href, v.Text, v.Code, c.href, c.text, c.code)
+		}
+	}
+}
+
+func TestFromThreads(t *testing.T) {
+	text := "Message from thread \"Fix \\\"x\\\"\" (aaaa1111bbbb2222cccc3333):\n\nhello, see thread \"Fix \\\"x\\\"\" (aaaa1111bbbb2222cccc3333)"
+	got := fromThreads(promptMeta{Auto: "agent"}, text)
+	if len(got) != 1 || got[0].ID != "aaaa1111bbbb2222cccc3333" || got[0].Title != `Fix "x"` {
+		t.Errorf("got %+v", got)
+	}
+	if got := fromThreads(promptMeta{}, text); got != nil {
+		t.Errorf("a prompt the user typed got links: %+v", got)
+	}
+}

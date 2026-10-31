@@ -52,6 +52,9 @@ type toolView struct {
 	// Paths the call touched, for the group's summary: files read or
 	// changed.
 	Paths []string
+	// Href is the page the row links to: the thread a starcode tool
+	// started, messaged or read.
+	Href string
 }
 
 // fileDiff is one file's change in an edit.
@@ -76,6 +79,22 @@ type dirKey struct{}
 // in its tool calls show relative to it.
 func WithDir(ctx context.Context, dir string) context.Context {
 	return context.WithValue(ctx, dirKey{}, filepath.Clean(dir))
+}
+
+type titlesKey struct{}
+
+// WithThreadTitles gives the views a lookup from a thread id to its
+// title, so a row that names a thread shows and links it.
+func WithThreadTitles(ctx context.Context, title func(id string) string) context.Context {
+	return context.WithValue(ctx, titlesKey{}, title)
+}
+
+// threadTitle is the title of thread id, empty when unknown.
+func threadTitle(ctx context.Context, id string) string {
+	if f, _ := ctx.Value(titlesKey{}).(func(string) string); f != nil {
+		return f(id)
+	}
+	return ""
 }
 
 // relPath is p relative to the thread's folder when it is inside it, and
@@ -280,7 +299,7 @@ func viewTool(ctx context.Context, it store.Item) toolView {
 			v.Note = fmt.Sprintf("%d of %d done", done, len(in.Todos))
 		}
 	case starcodeTool(name) != "":
-		v = viewStarcodeTool(starcodeTool(name), m.Input, v)
+		v = viewStarcodeTool(ctx, starcodeTool(name), m.Input, it.Output, v)
 	case strings.HasPrefix(name, "mcp__"):
 		parts := strings.SplitN(strings.TrimPrefix(name, "mcp__"), "__", 2)
 		v.Verb = strings.Join(parts, " · ")
@@ -304,8 +323,11 @@ func starcodeTool(name string) string {
 	return ""
 }
 
+// startedThread matches spawn_thread's answer, which names the new thread.
+var startedThread = regexp.MustCompile(`Started thread ([0-9a-f]+)`)
+
 // viewStarcodeTool says in words what the agent did to starcode.
-func viewStarcodeTool(tool string, input json.RawMessage, v toolView) toolView {
+func viewStarcodeTool(ctx context.Context, tool string, input json.RawMessage, output string, v toolView) toolView {
 	var a struct {
 		Title, PR, Prompt, ID, Message, Query, Until, Cron string
 		Minutes                                            int
@@ -364,8 +386,26 @@ func viewStarcodeTool(tool string, input json.RawMessage, v toolView) toolView {
 		v.Icon, v.Verb, v.Code = "x", "Cancelled schedule", a.ID
 	case "stop_thread":
 		v.Icon, v.Verb, v.Code = "square", "Stopped thread", a.ID
+	case "settle_thread":
+		v.Icon, v.Verb, v.Code = "archive", "Settled thread", a.ID
 	default:
 		v.Verb = "starcode · " + tool
+	}
+	// A row about one thread links to it, under its title when known.
+	id := a.ID
+	if tool == "spawn_thread" {
+		if m := startedThread.FindStringSubmatch(output); m != nil {
+			id = m[1]
+		}
+	} else if tool == "list_threads" || tool == "cancel_schedule" {
+		id = ""
+	}
+	id = id[strings.LastIndex(id, "/")+1:] // read_thread and settle_thread take a /threads/<id> link too
+	if id != "" {
+		v.Href = "/threads/" + id
+		if t := threadTitle(ctx, id); t != "" && v.Code == id {
+			v.Text, v.Code = t, ""
+		}
 	}
 	return v
 }

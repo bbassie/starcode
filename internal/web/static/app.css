@@ -342,6 +342,7 @@ body.panel-dragging { cursor: col-resize; user-select: none; }
   .hide-sm { display: none; }
   /* .mid in front: the plain .show-sm rule further down would win. */
   .mid .show-sm { display: inline; }
+  .mid .crumb-up { display: inline-flex; flex: none; }
   .mainhead { gap: 4px; padding: 6px 8px; }
   .mainhead .btn { padding: 0 8px; }
 }
@@ -538,6 +539,7 @@ select.in {
 .mainhead .btn.on { color: var(--fg); background: var(--sel); }
 .crumbs { display: flex; gap: 8px; align-items: center; min-width: 0; flex: 1; font-weight: 600; }
 .show-sm { display: none; }
+.crumb-up { display: none; }
 .crumbs > .ellipsis { flex: 1; }
 .crumbs a { color: var(--fg-dim); font-weight: 500; }
 .crumb-title { flex: 1; text-align: left; background: none; border: 0; padding: 2px 4px; margin: 0 -4px; border-radius: var(--radius-sm); font-weight: 600; cursor: text; }
@@ -1661,6 +1663,7 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   .hide-sm { display: none; }
   /* .mid in front: the plain .show-sm rule further down would win. */
   .mid .show-sm { display: inline; }
+  .mid .crumb-up { display: inline-flex; flex: none; }
   .mainhead { gap: 4px; padding: 6px 8px; }
   html, body { overscroll-behavior: none; touch-action: manipulation; }
   /* Installed to the home screen the page runs under the status bar. */
@@ -2024,6 +2027,9 @@ details.item.agent[open] > summary::after { transform: rotate(90deg); }
 
 /* Prompts starcode sent itself, and the rewind tools beside each prompt. */
 .user-auto { display: inline-flex; align-items: center; gap: 4px; }
+/* The threads a message came from, or whose replies it carried, read as links. */
+.user-auto a { color: var(--accent); }
+.tool-link { color: var(--accent); text-decoration: none; }
 .item.user.auto .bubble { opacity: 0.75; }
 .item.user .msg-tools { left: auto; right: calc(100% + 6px); align-items: center; }
 .msg-time { white-space: nowrap; padding: 0 4px; }

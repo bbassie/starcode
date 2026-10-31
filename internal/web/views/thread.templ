@@ -478,6 +478,9 @@ templ MainHead(d ThreadData) {
 			if d.Parent.ID != "" {
 				<a class="hide-sm ellipsis crumb-parent" href={ templ.SafeURL("/threads/" + d.Parent.ID) } title="The thread whose agent started this one">{ d.Parent.Title }</a>
 				<span class="dim hide-sm">/</span>
+				// The phone has no room for the parent's title: an arrow
+				// up to it.
+				<a class="btn icon ghost crumb-up" href={ templ.SafeURL("/threads/" + d.Parent.ID) } title={ "Started from " + d.Parent.Title } aria-label={ "Started from " + d.Parent.Title }>@Icon("corner-left-up", "ui-icon")</a>
 			}
 			// The title is a button that swaps in the rename box; Enter or
 			// the save button posts, Escape and blur put the title back.

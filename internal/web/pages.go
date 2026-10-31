@@ -164,7 +164,7 @@ func (s *Server) page(ctx context.Context, title string, p views.Page) templ.Com
 	}
 	dir := pt.Thread.Project.Path
 	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
-		return views.Layout(title, p, pt).Render(views.WithDir(ctx, dir), w)
+		return views.Layout(title, p, pt).Render(s.threadTitles(views.WithDir(ctx, dir)), w)
 	})
 }
 
@@ -179,5 +179,19 @@ func (s *Server) withThreadDir(r *http.Request, threadID string) *http.Request {
 	if err != nil {
 		return r
 	}
-	return r.WithContext(views.WithDir(r.Context(), p.Path))
+	return r.WithContext(s.threadTitles(views.WithDir(r.Context(), p.Path)))
+}
+
+// threadTitles is ctx with a lookup of thread titles for the views, so
+// a tool call or a message that names a thread shows it by title. No
+// cache: a stream's context lives as long as the page, and a title can
+// change in that time.
+func (s *Server) threadTitles(ctx context.Context) context.Context {
+	return views.WithThreadTitles(ctx, func(id string) string {
+		t, err := s.App.Store.Thread(context.WithoutCancel(ctx), id)
+		if err != nil {
+			return ""
+		}
+		return t.Title
+	})
 }
