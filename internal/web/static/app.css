@@ -460,6 +460,25 @@ button .ui-icon { display: block; margin: auto; }
 /* A stop is the reader's choice, not a failure: neutral, with the stop icon. */
 .st-interrupted { color: var(--fg-dim); }
 @keyframes blink { to { opacity: 0.25; } }
+/* Select mode: a tick box leads each row, a ticked row is lit, and the
+   bar above the footer holds the actions. The hover actions stay off. */
+.side-search .btn.icon.on { color: var(--fg); background: var(--sel); }
+.sel-box { display: none; flex: none; color: var(--fg-dim); }
+.sel-box .sel-on { display: none; color: var(--accent); }
+#sidebar.selecting .sel-box { display: inline-flex; width: 1.2em; justify-content: center; }
+#sidebar.selecting .thread-row .glyph { display: none; }
+#sidebar.selecting .row-actions { display: none !important; }
+#sidebar.selecting .thread-row .row-age { visibility: visible !important; }
+#sidebar.selecting .thread-row.selected a { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.thread-row.selected .sel-on { display: block; }
+.thread-row.selected .sel-off { display: none; }
+.side-bulk { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-top: var(--border-w) solid var(--border); }
+.side-bulk-head { display: flex; align-items: center; gap: 4px; color: var(--fg-dim); }
+.side-bulk-acts { display: flex; flex-wrap: wrap; gap: 4px; }
+.side-bulk-acts .btn { display: inline-flex; align-items: center; gap: 5px; }
+.side-bulk-acts .btn .ui-icon { margin: 0; }
+.side-bulk-acts .btn.danger { color: var(--err); }
+.side-bulk-acts .btn:disabled { opacity: 0.45; }
 .side-foot { display: flex; align-items: center; gap: 2px; padding: 6px 8px 8px; }
 .side-quick { position: relative; color: var(--fg-dim); }
 .side-quick:hover { color: var(--fg); }

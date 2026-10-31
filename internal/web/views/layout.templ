@@ -170,7 +170,7 @@ templ Layout(title string, p Page, parts Parts) {
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, appearance: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', gfind: '', pr: 0, prsel: 0, prproject: '', prq: '', prkey: '', prstate: 'open', prinv: '', prauthor: '', prlabel: '', prdraft: '', prreview: '', prchecks: '', prfproj: '', prsort: 'ready', prfmenu: '', prv: 0, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, qedit: '', qbody: '', tid: %q, pid: pageID(), vis: !document.hidden, _hb: 0}`, p.View == "thread", p.Theme, p.Appearance, draftJSON(p.Draft), p.ThreadID) }
+			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, appearance: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', gfind: '', pr: 0, prsel: 0, prproject: '', prq: '', prkey: '', prstate: 'open', prinv: '', prauthor: '', prlabel: '', prdraft: '', prreview: '', prchecks: '', prfproj: '', prsort: 'ready', prfmenu: '', prv: 0, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, qedit: '', qbody: '', sel: '', selecting: false, tid: %q, pid: pageID(), vis: !document.hidden, _hb: 0}`, p.View == "thread", p.Theme, p.Appearance, draftJSON(p.Draft), p.ThreadID) }
 			data-class:nav-collapsed="$navhide"
 			data-class:panel-wide="$wide"
 			data-init={ streamOpen(p) }
@@ -618,6 +618,15 @@ templ Layout(title string, p Page, parts Parts) {
 					}
 					return d.toISOString();
 				};
+				// The sidebar's select mode keeps the ticked thread ids in
+				// $sel as " a b c ", so a row can test for " id " without
+				// an array signal. selVisible is every row the list shows
+				// now, after the filter, outside Snoozed and Settled.
+				window.selToggle = (s, id) => s.includes(' ' + id + ' ') ? s.replace(' ' + id + ' ', ' ') : (s || ' ') + id + ' ';
+				window.selCount = (s) => s.trim() ? s.trim().split(' ').length : 0;
+				window.selIDs = (s) => s.trim().split(' ').join(',');
+				window.selVisible = () => ' ' + [...document.querySelectorAll('#sidebar .threads:not(.compact) .thread-row')]
+					.filter((r) => r.offsetParent).map((r) => r.dataset.id).join(' ') + ' ';
 				// promptInsert puts text into the composer at the caret (or
 				// the end when the composer does not have the focus), on a
 				// line of its own, and focuses it.

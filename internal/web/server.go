@@ -190,6 +190,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/pull-main", s.pullMain)
 	s.mux.HandleFunc("POST /api/settle", s.setSettle)
 	s.prActionRoutes()
+	s.bulkRoutes()
 	s.slashRoutes()
 	s.threadCmdRoutes()
 	s.pushRoutes()

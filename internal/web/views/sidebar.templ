@@ -128,7 +128,7 @@ templ Sidebar(d SidebarData) {
 		{{ byID[p.ID] = p }}
 	}
 	// The inline style is the swipe drag position; a refresh mid-swipe must not wipe it.
-	<aside id="sidebar" class={ templ.KV("dense", d.Dense) } data-class:open="$nav" data-preserve-attr="style">
+	<aside id="sidebar" class={ templ.KV("dense", d.Dense) } data-class:open="$nav" data-class:selecting="$selecting" data-preserve-attr="style">
 		<div class="side-brand">
 			<a class="brand" href="/" title="New thread">@Icon("star", "brand-mark") starcode</a>
 			<span class="spacer"></span>
@@ -140,6 +140,7 @@ templ Sidebar(d SidebarData) {
 				<input class="in" type="search" placeholder="Filter threads" aria-label="Filter threads" data-bind:q autocomplete="off" enterkeyhint="search"/>
 			</label>
 			<button class="btn icon ghost" type="button" title="Search threads and messages, run a command (Ctrl+K)" aria-label="Search and commands" data-on:click="runHotkey('mod+k')">@Icon("command", "ui-icon")</button>
+			<button class="btn icon ghost" data-on:click="$selecting = !$selecting; $sel = ''" data-class:on="$selecting" title="Select threads to settle, snooze, mark read or delete together" aria-label="Select threads">@Icon("list-checks", "ui-icon")</button>
 			<button class="btn icon ghost" data-on:click="$addproj = !$addproj" title="Add project folder" aria-label="Add project folder">@Icon("folder-plus", "ui-icon")</button>
 			// The new-thread page with this thread's project picked, like
 			// T3 Code's.
@@ -251,6 +252,22 @@ templ Sidebar(d SidebarData) {
 				</details>
 			}
 		</nav>
+		// Select mode's actions, for the rows ticked in the list above
+		// ($sel, see selToggle in the layout script).
+		<div class="side-bulk" data-show="$selecting" data-preserve-attr="style" style="display: none">
+			<div class="side-bulk-head">
+				<span class="tiny-text" data-text="selCount($sel) + ' selected'">0 selected</span>
+				<span class="spacer"></span>
+				<button class="btn ghost tiny" type="button" title="Select every thread the list shows (after the filter)" data-on:click="$sel = selVisible()">all</button>
+				<button class="btn ghost tiny" type="button" data-on:click="$selecting = false; $sel = ''">done</button>
+			</div>
+			<div class="side-bulk-acts">
+				<button class="btn tiny" type="button" data-attr:disabled="!selCount($sel)" title="Settle: move them to the Settled section" data-on:click="@post('/api/bulk/settle?ids=' + selIDs($sel))">@Icon("circle-check", "ui-icon") <span>settle</span></button>
+				<button class="btn tiny" type="button" data-attr:disabled="!selCount($sel)" title="Snooze until tomorrow 9:00" data-on:click="@post('/api/bulk/snooze?ids=' + selIDs($sel) + '&until=' + encodeURIComponent(snoozeAt('tomorrow')))">@Icon("alarm-clock", "ui-icon") <span>snooze</span></button>
+				<button class="btn tiny" type="button" data-attr:disabled="!selCount($sel)" title="Mark them read" data-on:click="@post('/api/bulk/read?ids=' + selIDs($sel))">@Icon("mail-open", "ui-icon") <span>read</span></button>
+				<button class="btn tiny danger" type="button" data-attr:disabled="!selCount($sel)" title="Delete them for good" data-on:click="confirm('Delete ' + selCount($sel) + ' threads? This cannot be undone.') && @post('/api/bulk/delete?ids=' + selIDs($sel))">@Icon("trash-2", "ui-icon") <span>delete</span></button>
+			</div>
+		</div>
 		// The footer is one row of icons: settings, the pull requests page,
 		// and Usage, Providers and Keys, so each is a click away from any
 		// page. The update badge sits on Providers, where updates are
@@ -500,8 +517,10 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 		data-id={ t.ID }
 		data-k={ searchKey(t, p) }
 		data-show="$q == '' || el.dataset.k.includes($q.toLowerCase())"
+		data-class:selected="$sel.includes(' ' + el.dataset.id + ' ')"
 	>
-		<a href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$nav = false">
+		// In select mode a tap ticks the row instead of opening it.
+		<a href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$selecting ? (evt.preventDefault(), $sel = selToggle($sel, el.closest('li').dataset.id)) : ($nav = false)">
 			<span class="row-top">
 				if showProject {
 					@ProjMark(p, "")
@@ -514,6 +533,7 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 				if showProject {
 					@ProjMark(p, "dense-only")
 				}
+				<span class="sel-box" aria-hidden="true">@Icon("circle", "ui-icon sel-off") @Icon("circle-check", "ui-icon sel-on")</span>
 				<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
 				if t.Pinned {
 					<span class="pin-mark" title="Pinned">@Icon("pin", "ui-icon")</span>

@@ -30,7 +30,7 @@ var spriteIcons = []string{
 	"corner-down-right", "corner-left-up", "fast-forward", "keyboard", "link", "list-end", "loader-circle", "log-in", "menu", "pin", "pin-off", "qr-code",
 	"mail", "message-square", "message-square-plus", "message-square-x", "palette", "paperclip", "pencil", "pencil-line", "plug", "plus",
 	"refresh-cw", "rotate-ccw", "rotate-cw", "save", "search", "settings", "shield-check", "square", "square-pen", "square-x", "star",
-	"terminal", "trash-2", "triangle-alert", "undo-2", "unfold-horizontal", "unlink", "upload", "user", "x",
+	"mail-open", "terminal", "trash-2", "triangle-alert", "undo-2", "unfold-horizontal", "unlink", "upload", "user", "x",
 	"alarm-clock", "sun", "sun-moon", "moon", "monitor", "sunrise", "calendar", "calendar-clock", "history", "text-quote", "bookmark", "bookmark-plus",
 	"zoom-in", "zoom-out", "chevrons-down-up", "chevrons-up-down", "list-filter", "file-text", "image", "maximize-2", "code",
 	"git-fork", "arrow-right-left", "sparkles", "globe", "list-checks", "wrench", "file-plus", "file-diff",
