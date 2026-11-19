@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -25,7 +26,7 @@ import (
 // may take that up in a turn of its own next.
 func (a *App) background(ctx context.Context, tid string, b *agent.Background, append_ func(...any)) {
 	if !b.Done {
-		append_(domain.ThreadBackgroundStarted{TaskID: b.ID, Kind: b.Kind, Label: b.Label})
+		append_(domain.ThreadBackgroundStarted{TaskID: b.ID, Kind: b.Kind, Label: a.backgroundLabel(ctx, tid, b)})
 		return
 	}
 	var task store.BackgroundTask
@@ -50,6 +51,30 @@ func (a *App) background(ctx context.Context, tid string, b *agent.Background, a
 		append_(domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Quiet: true,
 			Body: fmt.Sprintf("Background %s %s: %s", task.Kind, how, taskLabel(task))})
 	}
+}
+
+// backgroundLabel is what a task is called: the description the agent
+// gave the tool call that started it, when it gave one. Claude labels a
+// background command with the command itself, while its Bash call
+// usually says in a few words what the command is for.
+func (a *App) backgroundLabel(ctx context.Context, tid string, b *agent.Background) string {
+	if b.ToolID == "" || len(tid) < 8 {
+		return b.Label
+	}
+	it, err := a.Store.Item(ctx, tid[:8]+"-"+b.ToolID)
+	if err != nil {
+		return b.Label
+	}
+	var m struct {
+		Input struct {
+			Description string `json:"description"`
+		} `json:"input"`
+	}
+	json.Unmarshal(it.Meta, &m)
+	if d := strings.TrimSpace(m.Input.Description); d != "" {
+		return d
+	}
+	return b.Label
 }
 
 // loseBackground marks the thread's running background work lost, when

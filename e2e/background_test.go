@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -49,6 +50,9 @@ func TestBackgroundWorkShows(t *testing.T) {
 	if got := box.MustEval(`() => this.offsetHeight`).Int(); got != h {
 		t.Fatalf("the prompt box went from %dpx to %dpx on a composer redraw", h, got)
 	}
+	// A height set from outside autoGrow is put back before a paint.
+	box.MustEval(`() => { this.style.height = '20px' }`)
+	wait(p, `() => document.querySelector('form.composer .prompt').offsetHeight === `+strconv.Itoa(h))
 
 	if _, err := e.store.Append(ctx, id, domain.ThreadBackgroundStarted{TaskID: "b1", Kind: "command", Label: "cd /home/x/proj && go test -tags e2e ./e2e/..."}); err != nil {
 		t.Fatal(err)

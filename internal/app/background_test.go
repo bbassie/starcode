@@ -122,3 +122,27 @@ func TestBackgroundWakeAfterRestart(t *testing.T) {
 		t.Fatalf("server thread: %+v", bg)
 	}
 }
+
+// A background command is listed by the description its tool call gave,
+// not by the command line the CLI reports.
+func TestBackgroundLabelIsTheCallsDescription(t *testing.T) {
+	ctx := context.Background()
+	a, st, ag := newFreshApp(t, "")
+	id, _ := a.CreateThread(ctx, "p1", "fresh-test", "")
+	if err := a.SendPrompt(ctx, id, "first"); err != nil {
+		t.Fatal(err)
+	}
+	s := ag.session(0)
+	receivePrompt(t, s.sent)
+	s.events <- agent.Event{Kind: agent.KindToolStarted, ToolStarted: &agent.ToolStarted{ID: "call1", Name: "Bash",
+		Input: []byte(`{"command":"cd /x && go test ./...","description":"Run the unit tests","run_in_background":true}`)}}
+	bg := bgEvent("t1", agent.BackgroundCommand, "cd /x && go test ./...", false)
+	bg.Background.ToolID = "call1"
+	s.events <- bg
+	s.events <- bgEvent("t2", agent.BackgroundCommand, "npm run dev", false)
+	waitFor(t, func() bool { b, _ := st.Background(ctx, id); return len(b) == 2 })
+	b, _ := st.Background(ctx, id)
+	if b[0].Label != "Run the unit tests" || b[1].Label != "npm run dev" {
+		t.Fatalf("labels %q, %q", b[0].Label, b[1].Label)
+	}
+}

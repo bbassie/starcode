@@ -627,6 +627,16 @@ templ Layout(title string, p Page, parts Parts) {
 					ta.setSelectionRange(end, end);
 				};
 				window.autoGrow = (el) => queueMicrotask(() => {
+					// Anything else that changes the height (a morph, a
+					// browser quirk) is undone before the next paint, so the
+					// box keeps the height of its text; _h is the last one
+					// set here.
+					if (!el._guard) {
+						el._guard = new MutationObserver(() => {
+							if (el._h && el.style.height !== el._h) el.style.height = el._h;
+						});
+						el._guard.observe(el, { attributes: true, attributeFilter: ['style'] });
+					}
 					// Text that only got longer needs no reset: scrollHeight
 					// already covers it. Dropping to auto on every keystroke
 					// made iOS lose the place being typed at for a moment,
@@ -636,6 +646,7 @@ templ Layout(title string, p Page, parts Parts) {
 					el._len = len;
 					if (longer && len > 0) {
 						if (el.scrollHeight > el.clientHeight) el.style.height = el.scrollHeight + 'px';
+						el._h = el.style.height;
 						return;
 					}
 					// Shorter text (a deletion, the clear after a send) is
@@ -643,6 +654,7 @@ templ Layout(title string, p Page, parts Parts) {
 					const top = el.scrollTop;
 					el.style.height = 'auto';
 					el.style.height = el.scrollHeight + 'px';
+					el._h = el.style.height;
 					el.scrollTop = top;
 				});
 				// A link to another site opens in a new tab, wherever it came
