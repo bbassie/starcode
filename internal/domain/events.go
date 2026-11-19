@@ -263,9 +263,13 @@ type ScheduleRemoved struct {
 }
 
 // ThreadPRWatchStopped ends the watch; Reason says why when starcode
-// stopped it, and is empty when the reader did.
+// stopped it, and is empty when the reader did. Off keeps the automatic
+// watch (the watch_linked_prs setting) from starting it again on this
+// pull request: the reader or the agent stopped it, or it hit the wake
+// limit.
 type ThreadPRWatchStopped struct {
 	Reason string `json:"reason,omitempty"`
+	Off    bool   `json:"off,omitempty"`
 }
 
 // ThreadSettingsChanged updates how the thread's agent is launched. The

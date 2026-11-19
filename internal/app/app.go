@@ -652,8 +652,16 @@ func (a *App) LinkPR(ctx context.Context, id, repo string, number int, url strin
 	if url == "" {
 		url = gitx.PullURL(repo, number)
 	}
-	_, err = a.Store.Append(ctx, id, domain.ThreadPRLinked{Repo: repo, Number: number, URL: url})
-	return err
+	if _, err = a.Store.Append(ctx, id, domain.ThreadPRLinked{Repo: repo, Number: number, URL: url}); err != nil {
+		return err
+	}
+	// The watch starts from the PR as it stands, which takes a read.
+	a.bg.Add(1)
+	go func() {
+		defer a.bg.Done()
+		a.autoWatchPR(context.Background(), id)
+	}()
+	return nil
 }
 
 func (a *App) UnlinkPR(ctx context.Context, id string) error {
@@ -1059,7 +1067,13 @@ func (a *App) startPromptMeta(ctx context.Context, l *live, t store.Thread, queu
 			send = func(ctx context.Context, text string) error { return is.SendImages(ctx, text, images) }
 		}
 	}
-	if err := send(ctx, a.pendingBackground(ctx, t.ID)+reports+text); err != nil {
+	// Remarks the PR watch held go along too, except with its own wake,
+	// whose prompt has them already.
+	prNote := ""
+	if extra["auto"] != "prwatch" {
+		prNote = a.pendingPRNote(ctx, t.ID)
+	}
+	if err := send(ctx, a.pendingBackground(ctx, t.ID)+prNote+reports+text); err != nil {
 		a.Store.Append(ctx, t.ID, domain.ThreadStatusChanged{Status: domain.StatusError, Detail: err.Error()})
 		return err
 	}

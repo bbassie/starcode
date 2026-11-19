@@ -1634,9 +1634,9 @@ func MainHead(d ThreadData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var59 string
-				templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.ResolveAttributeValue("Watching #" + strconv.Itoa(pr.Number) + ": " + prWatchWhat + " Click to stop.")
+				templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.ResolveAttributeValue("Watching #" + strconv.Itoa(pr.Number) + ": " + prWatchWhat + " Click to stop; it stays off for this thread.")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 592, Col: 207}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/thread.templ`, Line: 592, Col: 237}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var59)
 				if templ_7745c5c3_Err != nil {
@@ -2186,7 +2186,7 @@ func MainHead(d ThreadData) templ.Component {
 }
 
 // prWatchWhat says what a watch on a pull request does.
-const prWatchWhat = "starcode checks it every minute and tells the agent when a check fails or they all pass, someone else comments or reviews, or the branch starts to conflict. It stops when the PR merges or closes."
+const prWatchWhat = "starcode reads it on GitHub and wakes the agent when a check fails or they all pass, the branch starts to conflict, a review requests changes, or a comment @mentions the agent's account. Other comments reach the agent with its next prompt. It stops when the PR merges or closes."
 
 // snoozeTitle is the tooltip on the header's snooze pill.
 func snoozeTitle(t store.Thread) string {

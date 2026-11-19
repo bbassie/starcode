@@ -589,7 +589,7 @@ templ MainHead(d ThreadData) {
 			<button class="btn icon ghost tiny dim pr-unlink" data-on:click={ "confirm('Unlink pull request #" + strconv.Itoa(pr.Number) + " from this thread?') && @post('/api/threads/" + d.Thread.ID + "/pr/unlink')" } title="Unlink the pull request from this thread" aria-label="Unlink the pull request">@Icon("unlink", "ui-icon")</button>
 			// The watch wakes the agent when the PR changes (app.PRWatch).
 			if d.Thread.PRWatch != "" {
-				<button class="btn ghost tiny pr-watch on" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/pr/unwatch')" } title={ "Watching #" + strconv.Itoa(pr.Number) + ": " + prWatchWhat + " Click to stop." } aria-label="Stop watching the pull request">@Icon("eye", "ui-icon") <span class="hide-sm">watching</span></button>
+				<button class="btn ghost tiny pr-watch on" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/pr/unwatch')" } title={ "Watching #" + strconv.Itoa(pr.Number) + ": " + prWatchWhat + " Click to stop; it stays off for this thread." } aria-label="Stop watching the pull request">@Icon("eye", "ui-icon") <span class="hide-sm">watching</span></button>
 			} else if pr.State == "" || pr.State == "open" {
 				<button class="btn ghost tiny dim pr-watch" data-indicator:_watching data-attr:disabled="$_watching" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/pr/watch')" } title={ "Watch #" + strconv.Itoa(pr.Number) + ": " + prWatchWhat } aria-label="Watch the pull request">@Icon("eye", "ui-icon") <span class="hide-sm">watch</span></button>
 			}
@@ -666,7 +666,7 @@ templ MainHead(d ThreadData) {
 }
 
 // prWatchWhat says what a watch on a pull request does.
-const prWatchWhat = "starcode checks it every minute and tells the agent when a check fails or they all pass, someone else comments or reviews, or the branch starts to conflict. It stops when the PR merges or closes."
+const prWatchWhat = "starcode reads it on GitHub and wakes the agent when a check fails or they all pass, the branch starts to conflict, a review requests changes, or a comment @mentions the agent's account. Other comments reach the agent with its next prompt. It stops when the PR merges or closes."
 
 // snoozeTitle is the tooltip on the header's snooze pill.
 func snoozeTitle(t store.Thread) string {

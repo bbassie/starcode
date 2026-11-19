@@ -1406,6 +1406,8 @@ type SettingsPageData struct {
 	ResumeLimit bool
 	// AgentTools is whether agents get the starcode tools.
 	AgentTools bool
+	// WatchPRs is whether every open linked pull request is watched.
+	WatchPRs bool
 }
 
 // ThemeName is the display name of a theme id.
@@ -1510,9 +1512,9 @@ func SettingsPage(d SettingsPageData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var53 string
-		templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("{sidebar: %q, dense: %t, settleMerged: %t, settleDays: %d, settleKeepPr: %t, resume: %t, resumeLimit: %t, agentTools: %t}", d.Sidebar, d.Dense, d.SettleMerged, d.SettleDays, d.SettleKeepPR, d.Resume, d.ResumeLimit, d.AgentTools))
+		templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprintf("{sidebar: %q, dense: %t, settleMerged: %t, settleDays: %d, settleKeepPr: %t, resume: %t, resumeLimit: %t, agentTools: %t, watchPrs: %t}", d.Sidebar, d.Dense, d.SettleMerged, d.SettleDays, d.SettleKeepPR, d.Resume, d.ResumeLimit, d.AgentTools, d.WatchPRs))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 596, Col: 308}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 598, Col: 334}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var53)
 		if templ_7745c5c3_Err != nil {
@@ -1538,7 +1540,7 @@ func SettingsPage(d SettingsPageData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, ">By project</option></select></div><div class=\"setting-row\"><div><label for=\"dense-rows\">Compact rows</label><p class=\"dim\">One line per thread in the sidebar instead of two. Saved for this browser.</p></div><input id=\"dense-rows\" type=\"checkbox\" data-bind:dense data-on:change=\"@post('/api/sidebar')\"></div><div class=\"setting-row\"><div><label for=\"settle-merged\">Settle merged threads</label><p class=\"dim\">A thread settles when its pull request merges.</p></div><input id=\"settle-merged\" type=\"checkbox\" data-bind:settle-merged data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"settle-days\">Settle inactive threads after</label><p class=\"dim\">Days without activity before a thread settles on its own; 0 keeps them. Any new activity brings a thread back.</p></div><span class=\"num-unit\"><input id=\"settle-days\" class=\"in num\" type=\"number\" min=\"0\" max=\"365\" step=\"1\" inputmode=\"numeric\" data-bind:settle-days data-on:change__debounce.500ms=\"@post('/api/settle')\"> <span class=\"dim\">days</span></span></div><div class=\"setting-row\"><div><label for=\"settle-keep-pr\">Keep threads with an open pull request</label><p class=\"dim\">Inactive threads whose pull request is still open stay in the list while it waits on review.</p></div><input id=\"settle-keep-pr\" type=\"checkbox\" data-bind:settle-keep-pr data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"resume\">Resume turns after a restart</label><p class=\"dim\">A restart stops every running turn. With this on, each one picks up again when starcode is back: its session resumes and gets a prompt that says what happened.</p></div><input id=\"resume\" type=\"checkbox\" data-bind:resume data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"resume-limit\">Resume turns after the usage limit resets</label><p class=\"dim\">When a turn stops because the plan's usage ran out, the thread waits on the Snoozed shelf until the limit resets, and then starcode tells the agent to carry on. Waking the thread by hand cancels that.</p></div><input id=\"resume-limit\" type=\"checkbox\" data-bind:resume-limit data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"agent-tools\">Let agents use the starcode tools</label><p class=\"dim\">Agents can rename their thread, link and watch its pull request, snooze it with a prompt for later, ask for your attention, read other threads, and start threads of their own that show under theirs. A thread an agent starts never gets a looser permission mode than its own. Applies to agent processes started from now on.</p></div><input id=\"agent-tools\" type=\"checkbox\" data-bind:agent-tools data-on:change=\"@post('/api/settle')\"></div></div></section><section id=\"device\" class=\"settings-section\"><header><h1>This device</h1><p class=\"dim\">Notifications and VS Code on this browser, and signing a phone in.</p></header><div class=\"settings-card\"><div class=\"setting-row\"><div><label for=\"notify-btn\">Notifications</label><p class=\"dim\">A turn that ends or asks for an approval while starcode is out of sight posts a notification on this device. Needs the certificate installed (see the login page) or another secure context.</p></div><button id=\"notify-btn\" class=\"btn\" type=\"button\" data-init=\"el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)\" data-on:click=\"(el.dataset.state === 'on' ? notifyDisable() : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })\">notifications</button></div><div class=\"setting-row\"><div><label for=\"busy-send\">Sending while a turn runs</label><p class=\"dim\">Steer sends the message into the running turn: the agent reads it once the step it is on is done (a command, an edit), and carries on with it. Nothing is stopped. Queue puts it after the turn. Stop and send stops the turn and sends it first. Ctrl+Enter (Cmd+Enter on a Mac), or a tap on the chip beside the send button, swaps steer and queue for one message. An agent that cannot steer at that moment queues it. Saved for this browser.</p></div><select id=\"busy-send\" class=\"in\" data-init=\"el.value = busyMode()\" data-on:change=\"el.value === 'steer' ? localStorage.removeItem('busy-send') : localStorage.setItem('busy-send', el.value)\"><option value=\"steer\">steer</option> <option value=\"queue\">queue</option> <option value=\"stop\">stop and send</option></select></div><div class=\"setting-row\"><div><label for=\"vscode-host\">VS Code SSH host</label><p class=\"dim\">The VS Code button on a thread opens its folder over Remote-SSH on this host, named the way this computer's ssh config knows it (user@host works). Empty means the account starcode runs as at the address in the browser, or a local folder when that address is localhost. Saved for this browser.</p></div><input id=\"vscode-host\" class=\"in\" type=\"text\" autocomplete=\"off\" spellcheck=\"false\" autocapitalize=\"off\" data-init=\"el.value = vscodeHost(); el.placeholder = vscodeLocal() ? 'opens locally' : vscodeDefaultHost()\" data-preserve-attr=\"placeholder\" data-on:input=\"vscodeHostSet(el.value)\"></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, ">By project</option></select></div><div class=\"setting-row\"><div><label for=\"dense-rows\">Compact rows</label><p class=\"dim\">One line per thread in the sidebar instead of two. Saved for this browser.</p></div><input id=\"dense-rows\" type=\"checkbox\" data-bind:dense data-on:change=\"@post('/api/sidebar')\"></div><div class=\"setting-row\"><div><label for=\"settle-merged\">Settle merged threads</label><p class=\"dim\">A thread settles when its pull request merges.</p></div><input id=\"settle-merged\" type=\"checkbox\" data-bind:settle-merged data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"settle-days\">Settle inactive threads after</label><p class=\"dim\">Days without activity before a thread settles on its own; 0 keeps them. Any new activity brings a thread back.</p></div><span class=\"num-unit\"><input id=\"settle-days\" class=\"in num\" type=\"number\" min=\"0\" max=\"365\" step=\"1\" inputmode=\"numeric\" data-bind:settle-days data-on:change__debounce.500ms=\"@post('/api/settle')\"> <span class=\"dim\">days</span></span></div><div class=\"setting-row\"><div><label for=\"settle-keep-pr\">Keep threads with an open pull request</label><p class=\"dim\">Inactive threads whose pull request is still open stay in the list while it waits on review.</p></div><input id=\"settle-keep-pr\" type=\"checkbox\" data-bind:settle-keep-pr data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"watch-prs\">Watch linked pull requests</label><p class=\"dim\">Every thread with an open linked pull request watches it. The agent wakes for a failed check, all checks passing, a new conflict, a review that requests changes, or a comment that @mentions your GitHub account. Comments wake it only after two quiet minutes, so a burst is one wake. Other comments show in the thread and reach the agent with its next prompt. A watch you stop with the eye button stays off for that thread.</p></div><input id=\"watch-prs\" type=\"checkbox\" data-bind:watch-prs data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"resume\">Resume turns after a restart</label><p class=\"dim\">A restart stops every running turn. With this on, each one picks up again when starcode is back: its session resumes and gets a prompt that says what happened.</p></div><input id=\"resume\" type=\"checkbox\" data-bind:resume data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"resume-limit\">Resume turns after the usage limit resets</label><p class=\"dim\">When a turn stops because the plan's usage ran out, the thread waits on the Snoozed shelf until the limit resets, and then starcode tells the agent to carry on. Waking the thread by hand cancels that.</p></div><input id=\"resume-limit\" type=\"checkbox\" data-bind:resume-limit data-on:change=\"@post('/api/settle')\"></div><div class=\"setting-row\"><div><label for=\"agent-tools\">Let agents use the starcode tools</label><p class=\"dim\">Agents can rename their thread, link and watch its pull request, snooze it with a prompt for later, ask for your attention, read other threads, and start threads of their own that show under theirs. A thread an agent starts never gets a looser permission mode than its own. Applies to agent processes started from now on.</p></div><input id=\"agent-tools\" type=\"checkbox\" data-bind:agent-tools data-on:change=\"@post('/api/settle')\"></div></div></section><section id=\"device\" class=\"settings-section\"><header><h1>This device</h1><p class=\"dim\">Notifications and VS Code on this browser, and signing a phone in.</p></header><div class=\"settings-card\"><div class=\"setting-row\"><div><label for=\"notify-btn\">Notifications</label><p class=\"dim\">A turn that ends or asks for an approval while starcode is out of sight posts a notification on this device. Needs the certificate installed (see the login page) or another secure context.</p></div><button id=\"notify-btn\" class=\"btn\" type=\"button\" data-init=\"el.dataset.state = notifyState(); el.textContent = notifyWord(el.dataset.state)\" data-on:click=\"(el.dataset.state === 'on' ? notifyDisable() : notifyEnable()).then((st) => { el.dataset.state = st; el.textContent = notifyWord(st) })\">notifications</button></div><div class=\"setting-row\"><div><label for=\"busy-send\">Sending while a turn runs</label><p class=\"dim\">Steer sends the message into the running turn: the agent reads it once the step it is on is done (a command, an edit), and carries on with it. Nothing is stopped. Queue puts it after the turn. Stop and send stops the turn and sends it first. Ctrl+Enter (Cmd+Enter on a Mac), or a tap on the chip beside the send button, swaps steer and queue for one message. An agent that cannot steer at that moment queues it. Saved for this browser.</p></div><select id=\"busy-send\" class=\"in\" data-init=\"el.value = busyMode()\" data-on:change=\"el.value === 'steer' ? localStorage.removeItem('busy-send') : localStorage.setItem('busy-send', el.value)\"><option value=\"steer\">steer</option> <option value=\"queue\">queue</option> <option value=\"stop\">stop and send</option></select></div><div class=\"setting-row\"><div><label for=\"vscode-host\">VS Code SSH host</label><p class=\"dim\">The VS Code button on a thread opens its folder over Remote-SSH on this host, named the way this computer's ssh config knows it (user@host works). Empty means the account starcode runs as at the address in the browser, or a local folder when that address is localhost. Saved for this browser.</p></div><input id=\"vscode-host\" class=\"in\" type=\"text\" autocomplete=\"off\" spellcheck=\"false\" autocapitalize=\"off\" data-init=\"el.value = vscodeHost(); el.placeholder = vscodeLocal() ? 'opens locally' : vscodeDefaultHost()\" data-preserve-attr=\"placeholder\" data-on:input=\"vscodeHostSet(el.value)\"></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1550,7 +1552,7 @@ func SettingsPage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var54 string
 			templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.ResolveAttributeValue("copyText(" + jsq(d.PairURL) + ", el)")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 701, Col: 98}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 710, Col: 98}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var54)
 			if templ_7745c5c3_Err != nil {
@@ -1571,7 +1573,7 @@ func SettingsPage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var55 string
 			templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.PairQR)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 703, Col: 44}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 712, Col: 44}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var55)
 			if templ_7745c5c3_Err != nil {
@@ -1658,7 +1660,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var59 string
 			templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.ResolveAttributeValue("$appearance === " + jsq(a))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 738, Col: 142}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 747, Col: 142}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var59)
 			if templ_7745c5c3_Err != nil {
@@ -1671,7 +1673,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var60 string
 			templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.ResolveAttributeValue("String($appearance === " + jsq(a) + ")")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 738, Col: 210}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 747, Col: 210}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var60)
 			if templ_7745c5c3_Err != nil {
@@ -1684,7 +1686,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var61 string
 			templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprint(a == d.Appearance))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 738, Col: 257}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 747, Col: 257}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var61)
 			if templ_7745c5c3_Err != nil {
@@ -1697,7 +1699,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var62 string
 			templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.ResolveAttributeValue("$appearance = " + jsq(a) + "; @post('/api/theme')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 738, Col: 327}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 747, Col: 327}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var62)
 			if templ_7745c5c3_Err != nil {
@@ -1718,7 +1720,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var63 string
 			templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.JoinStringErrs(AppearanceName(a))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 738, Col: 391}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 747, Col: 391}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var63))
 			if templ_7745c5c3_Err != nil {
@@ -1759,7 +1761,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var66 string
 			templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.ResolveAttributeValue("$theme === " + jsq(theme))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 749, Col: 154}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 758, Col: 154}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var66)
 			if templ_7745c5c3_Err != nil {
@@ -1772,7 +1774,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var67 string
 			templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.ResolveAttributeValue("String($theme === " + jsq(theme) + ")")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 749, Col: 221}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 758, Col: 221}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var67)
 			if templ_7745c5c3_Err != nil {
@@ -1785,7 +1787,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var68 string
 			templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.ResolveAttributeValue(fmt.Sprint(theme == d.Theme))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 749, Col: 267}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 758, Col: 267}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var68)
 			if templ_7745c5c3_Err != nil {
@@ -1798,7 +1800,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var69 string
 			templ_7745c5c3_Var69, templ_7745c5c3_Err = templ.ResolveAttributeValue("$theme = " + jsq(theme) + "; @post('/api/theme')")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 749, Col: 336}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 758, Col: 336}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var69)
 			if templ_7745c5c3_Err != nil {
@@ -1823,7 +1825,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var70 string
 			templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.JoinStringErrs(themeName(theme))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 754, Col: 59}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 763, Col: 59}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var70))
 			if templ_7745c5c3_Err != nil {
@@ -1836,7 +1838,7 @@ func AppearancePage(d SettingsPageData) templ.Component {
 			var templ_7745c5c3_Var71 string
 			templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.JoinStringErrs(themeNote(theme))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 755, Col: 63}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 764, Col: 63}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var71))
 			if templ_7745c5c3_Err != nil {
@@ -2214,7 +2216,7 @@ func themeHalf(theme, mode string) templ.Component {
 		var templ_7745c5c3_Var90 string
 		templ_7745c5c3_Var90, templ_7745c5c3_Err = templ.ResolveAttributeValue(theme)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 817, Col: 44}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 826, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var90)
 		if templ_7745c5c3_Err != nil {
@@ -2227,7 +2229,7 @@ func themeHalf(theme, mode string) templ.Component {
 		var templ_7745c5c3_Var91 string
 		templ_7745c5c3_Var91, templ_7745c5c3_Err = templ.ResolveAttributeValue(mode)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 817, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/settings.templ`, Line: 826, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var91)
 		if templ_7745c5c3_Err != nil {

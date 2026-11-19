@@ -45,7 +45,7 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 	case "settings":
 		st := s.App.Store
 		pt.Main = views.SettingsPage(views.SettingsPageData{Theme: p.Theme, Themes: Themes, PairURL: p.PairURL, PairQR: pairQR(p.PairURL), Sidebar: p.Sidebar, Dense: p.Dense, SettleMerged: st.SettleMerged(ctx), SettleDays: st.SettleIdleDays(ctx), SettleKeepPR: st.SettleKeepPR(ctx),
-			Resume: st.ResumeAfterRestart(ctx), ResumeLimit: st.ResumeAfterLimit(ctx), AgentTools: st.AgentTools(ctx)})
+			Resume: st.ResumeAfterRestart(ctx), ResumeLimit: st.ResumeAfterLimit(ctx), AgentTools: st.AgentTools(ctx), WatchPRs: st.WatchLinkedPRs(ctx)})
 	case "projects":
 		pt.Main = views.ProjectsPage(s.projectsData(ctx, store.Named(side.Projects), p.ProjectSel))
 	case "providers":

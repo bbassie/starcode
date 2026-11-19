@@ -445,6 +445,7 @@ func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
 		Resume       bool `json:"resume"`
 		ResumeLimit  bool `json:"resumeLimit"`
 		AgentTools   bool `json:"agentTools"`
+		WatchPRs     bool `json:"watchPrs"`
 	}
 	datastar.ReadSignals(r, &sig)
 	days := min(max(sig.SettleDays, 0), 365)
@@ -461,6 +462,7 @@ func (s *Server) setSettle(w http.ResponseWriter, r *http.Request) {
 		"resume_after_restart": flag(sig.Resume),
 		"resume_after_limit":   flag(sig.ResumeLimit),
 		"agent_tools":          flag(sig.AgentTools),
+		"watch_linked_prs":     flag(sig.WatchPRs),
 	} {
 		if err := s.App.Store.SetSetting(ctx, k, v); err != nil {
 			s.fail(w, r, err)

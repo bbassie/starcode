@@ -15,13 +15,26 @@ import (
 	"starcode/internal/store"
 )
 
-// Watching a pull request: a thread linked to a PR can watch it, and the
-// sweep reads the PR every minute. When a check fails, the checks all
-// pass, someone else comments or reviews, or the branch starts to
-// conflict, the thread's agent gets a prompt that says what changed. The
-// watch starts from how the PR stands, so starting it wakes nobody.
+// Watching a pull request: a thread linked to a PR watches it, and the
+// sweep reads the PR every minute. With the watch_linked_prs setting on
+// (the default) every link starts the watch on its own; a watch stopped
+// by hand stays off for that PR (store.Thread PRWatchOff). The watch
+// starts from how the PR stands, so starting it wakes nobody.
+//
+// Only what asks for action wakes the thread's agent: a check that
+// fails, the checks all passing, the branch starting to conflict, a
+// review that requests changes, and a comment or review that @mentions
+// the account the agent works as (the PR's viewer, or its author when
+// there is none). Remarks wake once the PR has been quiet for
+// prWatchQuiet, so a burst of comments is one wake; checks and conflicts
+// wake on the sweep that sees them. Every other remark from someone else
+// (a plain comment, an approval) is held: it shows as a quiet line in the
+// transcript and goes to the agent with its next prompt, whichever that
+// is. Held remarks ride along with a wake too, so the agent hears
+// everything once.
+//
 // Watching ends when the PR merges or closes, when it is unlinked, after
-// prWatchWakeLimit wakes in a row that brought only comments (a bot and
+// prWatchWakeLimit wakes in a row that brought only remarks (a bot and
 // the agent answering each other), or when the PR could not be read for
 // prWatchReadGrace. The design follows T3 Code's watch_pull_request.
 
@@ -29,8 +42,15 @@ const (
 	prWatchEvery     = time.Minute
 	prWatchWakeLimit = 10
 	prWatchReadGrace = 15 * time.Minute
+	prWatchQuiet     = 2 * time.Minute
 	prWatchListed    = 10
 	prWatchSnippet   = 200
+	// prWatchAsk is how much of a remark that asks for action the agent
+	// reads; prWatchKeep how much of any remark a watch stores, and
+	// prWatchHeldMax how many held remarks it keeps.
+	prWatchAsk     = 1000
+	prWatchKeep    = 2000
+	prWatchHeldMax = 50
 )
 
 // PRWatch is a watch's bookkeeping: what the agent has been told, so the
@@ -44,15 +64,27 @@ type PRWatch struct {
 	Failed []string `json:"failed,omitempty"`
 	Passed bool     `json:"passed,omitempty"`
 	// Through is the newest remark told; Seen the ids of the remarks at
-	// that very second, since GitHub's times have no finer grain.
+	// that very second, since GitHub's times have no finer grain. Both
+	// move only when a remark is sent to the agent.
 	Through     time.Time `json:"through"`
 	Seen        []string  `json:"seen,omitempty"`
 	Conflicting bool      `json:"conflicting,omitempty"`
-	// Wakes counts wakes in a row that brought only comments.
+	// Held are remarks from others seen but not sent yet: ones that wait
+	// for the PR to go quiet, and ones that wait for the next prompt.
+	Held []heldRemark `json:"held,omitempty"`
+	// Wakes counts wakes in a row that brought only remarks.
 	Wakes int `json:"wakes,omitempty"`
 	// Unread is since when reads of the PR have failed; zero after a
 	// good one.
 	Unread time.Time `json:"unread,omitzero"`
+}
+
+// heldRemark is a remark waiting to be sent: Saw is when a sweep first
+// saw it, and Asks whether it asks for action (it wakes the agent).
+type heldRemark struct {
+	gitx.Remark
+	Saw  time.Time `json:"saw"`
+	Asks bool      `json:"asks,omitempty"`
 }
 
 // Watching is whether t watches its linked pull request.
@@ -63,7 +95,7 @@ type prChange struct {
 	kind    string // "failed", "passed", "remarks", "conflict"
 	checks  []gitx.Check
 	count   int
-	remarks []gitx.Remark
+	remarks []heldRemark
 }
 
 func failedChecks(cs []gitx.Check) []gitx.Check {
@@ -118,15 +150,113 @@ func prWatchBaseline(d gitx.PRDetail, now time.Time) PRWatch {
 	return w
 }
 
+// prOwn is the login the agent works as on GitHub: the PR's viewer (gh's
+// account), or its author when the read had no viewer.
+func prOwn(d gitx.PRDetail) string {
+	if d.Viewer != "" {
+		return d.Viewer
+	}
+	return d.Author
+}
+
+// mentions is whether body @mentions login as a whole word, in any case.
+func mentions(body, login string) bool {
+	if login == "" {
+		return false
+	}
+	low, at := strings.ToLower(body), "@"+strings.ToLower(login)
+	for i := 0; ; {
+		j := strings.Index(low[i:], at)
+		if j < 0 {
+			return false
+		}
+		j += i
+		end := j + len(at)
+		if (j == 0 || !loginChar(low[j-1])) && (end == len(low) || !loginChar(low[end])) {
+			return true
+		}
+		i = j + 1
+	}
+}
+
+func loginChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_'
+}
+
+// asksForAction is whether a remark wakes the agent: a review that
+// requests changes, or one that names the agent's account.
+func asksForAction(r gitx.Remark, own string) bool {
+	return r.State == "CHANGES_REQUESTED" || mentions(r.Body, own)
+}
+
+// told moves the watch past rs, which the agent has now been sent.
+func (w PRWatch) told(rs []heldRemark) PRWatch {
+	latest := w.Through
+	for _, r := range rs {
+		if r.CreatedAt.After(latest) {
+			latest = r.CreatedAt
+		}
+	}
+	if !latest.Equal(w.Through) {
+		w.Through, w.Seen = latest, nil
+	} else {
+		w.Seen = slices.Clone(w.Seen)
+	}
+	for _, r := range rs {
+		if r.CreatedAt.Equal(w.Through) && !slices.Contains(w.Seen, r.ID) {
+			w.Seen = append(w.Seen, r.ID)
+		}
+	}
+	return w
+}
+
+// fresh is whether r is news: newer than what was told, and not held yet.
+func (w PRWatch) fresh(r gitx.Remark) bool {
+	if r.CreatedAt.Before(w.Through) || r.CreatedAt.Equal(w.Through) && slices.Contains(w.Seen, r.ID) {
+		return false
+	}
+	return !slices.ContainsFunc(w.Held, func(h heldRemark) bool { return h.ID == r.ID })
+}
+
+// settled is whether no held remark arrived within prWatchQuiet of now.
+// A remark arrives at its CreatedAt or when a sweep first saw it,
+// whichever is later.
+func settled(held []heldRemark, now time.Time) bool {
+	for _, h := range held {
+		at := h.Saw
+		if h.CreatedAt.After(at) {
+			at = h.CreatedAt
+		}
+		if now.Sub(at) < prWatchQuiet {
+			return false
+		}
+	}
+	return true
+}
+
+// prEval is what one read of the PR comes to.
+type prEval struct {
+	// changes wake the agent; empty when nothing does.
+	changes []prChange
+	next    PRWatch
+	// exhausted is the last remark-only wake before the limit.
+	exhausted bool
+	// noted are remarks held this time that do not ask for action and
+	// were not sent: the transcript shows them.
+	noted []heldRemark
+}
+
 // evaluatePRWatch compares the PR with what the agent was last told. A
 // check is reported as soon as it fails, so one that never finishes
 // cannot hold the news back; "passed" once every check that ran passed.
-// Remarks count when someone other than the viewer (or, without one, the
-// PR's author) wrote them, so the agent's own replies never wake it.
-// exhausted is the last comment-only wake before the limit.
-func evaluatePRWatch(w PRWatch, d gitx.PRDetail) (changes []prChange, next PRWatch, exhausted bool) {
-	next = w
+// Remarks count when someone other than the agent's account wrote them,
+// so the agent's own replies never wake it; they wait in Held until a
+// wake or the next prompt takes them.
+func evaluatePRWatch(w PRWatch, d gitx.PRDetail, now time.Time) prEval {
+	var e prEval
+	next := w
 	next.Unread = time.Time{}
+	next.Held = slices.Clone(w.Held)
 	headMoved := d.HeadSHA != w.Head
 	failed, passed := w.Failed, w.Passed
 	if headMoved {
@@ -135,145 +265,196 @@ func evaluatePRWatch(w PRWatch, d gitx.PRDetail) (changes []prChange, next PRWat
 	if len(d.Checks) > 0 {
 		// An empty list keeps the state: a read can come back without the
 		// checks while they are created after a push.
-		now := failedChecks(d.Checks)
+		cur := failedChecks(d.Checks)
 		var fresh []gitx.Check
-		for _, c := range now {
+		for _, c := range cur {
 			if !slices.Contains(failed, c.Name) {
 				fresh = append(fresh, c)
 			}
 		}
 		if len(fresh) > 0 {
-			changes = append(changes, prChange{kind: "failed", checks: fresh})
+			e.changes = append(e.changes, prChange{kind: "failed", checks: fresh})
 		}
 		// A check that runs again leaves the list, so failing again is news.
-		failed = checkNames(now)
+		failed = checkNames(cur)
 		ok, n := checksPassed(d.Checks)
 		if ok && !passed {
-			changes = append(changes, prChange{kind: "passed", count: n})
+			e.changes = append(e.changes, prChange{kind: "passed", count: n})
 		}
 		passed = ok
 	}
 	next.Head, next.Failed, next.Passed = d.HeadSHA, failed, passed
 
-	own := strings.ToLower(d.Viewer)
-	if own == "" {
-		own = strings.ToLower(d.Author)
-	}
-	var fresh []gitx.Remark
-	for _, r := range d.Remarks {
-		newer := r.CreatedAt.After(w.Through) || r.CreatedAt.Equal(w.Through) && !slices.Contains(w.Seen, r.ID)
-		if newer && strings.ToLower(r.Author) != own {
-			fresh = append(fresh, r)
-		}
-	}
-	if len(fresh) > 0 {
-		changes = append(changes, prChange{kind: "remarks", remarks: fresh})
-		latest := w.Through
-		for _, r := range fresh {
-			if r.CreatedAt.After(latest) {
-				latest = r.CreatedAt
-			}
-		}
-		if !latest.Equal(w.Through) {
-			next.Through, next.Seen = latest, nil
-		}
-		for _, r := range fresh {
-			if r.CreatedAt.Equal(next.Through) {
-				next.Seen = append(next.Seen, r.ID)
-			}
-		}
-	}
-
 	if d.Mergeable == "CONFLICTING" && !w.Conflicting {
-		changes = append(changes, prChange{kind: "conflict"})
+		e.changes = append(e.changes, prChange{kind: "conflict"})
 	}
 	// UNKNOWN is GitHub still working it out after a push; only a clear
 	// answer ends a conflict.
 	if d.Mergeable != "UNKNOWN" {
 		next.Conflicting = d.Mergeable == "CONFLICTING"
 	}
+	urgent := len(e.changes) > 0
 
-	commentsOnly := len(changes) > 0
-	for _, c := range changes {
-		if c.kind != "remarks" {
-			commentsOnly = false
+	own := prOwn(d)
+	var arrived []heldRemark
+	for _, r := range d.Remarks {
+		if strings.EqualFold(r.Author, own) || !next.fresh(r) {
+			continue
+		}
+		if b := []rune(r.Body); len(b) > prWatchKeep {
+			r.Body = string(b[:prWatchKeep])
+		}
+		h := heldRemark{Remark: r, Saw: now, Asks: asksForAction(r, own)}
+		next.Held = append(next.Held, h)
+		arrived = append(arrived, h)
+	}
+	if n := len(next.Held) - prWatchHeldMax; n > 0 {
+		// A PR nobody prompts about for a long time: the oldest go untold.
+		next = next.told(next.Held[:n])
+		next.Held = next.Held[n:]
+	}
+
+	asks := slices.ContainsFunc(next.Held, func(h heldRemark) bool { return h.Asks })
+	wake := asks && settled(next.Held, now)
+	if (urgent || wake) && len(next.Held) > 0 {
+		e.changes = append(e.changes, prChange{kind: "remarks", remarks: next.Held})
+		next = next.told(next.Held)
+		next.Held = nil
+	} else {
+		for _, h := range arrived {
+			if !h.Asks {
+				e.noted = append(e.noted, h)
+			}
 		}
 	}
-	progress := headMoved || len(changes) > 0 && !commentsOnly
-	if progress {
+
+	if urgent || headMoved {
 		next.Wakes = 0
 	}
-	if commentsOnly {
+	if wake && !urgent {
 		next.Wakes++
+		e.exhausted = next.Wakes >= prWatchWakeLimit
 	}
-	return changes, next, commentsOnly && next.Wakes >= prWatchWakeLimit
+	e.next = next
+	return e
 }
 
-// prWatchPrompt is what the agent reads when the PR changed.
+// remarkLine is one remark as the agent reads it, its text cut to n
+// characters: "rev requested changes: ...", "ann mentioned you: ...",
+// "bob approved", "carol on a.go: ...".
+func remarkLine(r heldRemark, n int) string {
+	who := r.Author
+	if who == "" {
+		who = "someone"
+	}
+	if r.Path != "" {
+		who += " on " + r.Path
+	}
+	did := map[string]string{"CHANGES_REQUESTED": "requested changes", "APPROVED": "approved", "COMMENTED": "commented", "DISMISSED": "dismissed"}[r.State]
+	if r.Asks && r.State != "CHANGES_REQUESTED" {
+		did = "mentioned you"
+	}
+	said := snippetN(r.Body, n)
+	switch {
+	case said == "" && did == "" && r.State != "":
+		who += " reviewed"
+	case said == "":
+		who += " " + did
+	case did != "" && did != "commented":
+		who += " " + did + `: "` + said + `"`
+	default:
+		who += `: "` + said + `"`
+	}
+	return strings.TrimSpace(who + " " + r.URL)
+}
+
+// writeRemarks lists remarks: the ones asking for action in full, the
+// rest as one-line context.
+func writeRemarks(b *strings.Builder, rs []heldRemark, asks bool) {
+	var pick []heldRemark
+	for _, r := range rs {
+		if r.Asks == asks {
+			pick = append(pick, r)
+		}
+	}
+	n := prWatchSnippet
+	if asks {
+		n = prWatchAsk
+	}
+	listed(b, "- ", len(pick), func(i int) string { return remarkLine(pick[i], n) })
+}
+
+// prWatchPrompt is what the agent reads when the PR changed: first what
+// asks for action, then the rest as context.
 func prWatchPrompt(d gitx.PRDetail, changes []prChange, exhausted bool) string {
 	var b strings.Builder
 	commit := ""
 	if len(d.HeadSHA) >= 7 {
 		commit = " on " + d.HeadSHA[:7]
 	}
-	fmt.Fprintf(&b, "Update on pull request #%d (%s), which starcode is watching for you:\n", d.Number, d.URL)
+	var remarks []heldRemark
+	var other strings.Builder
+	fmt.Fprintf(&b, "Update on pull request #%d (%s), which starcode is watching for you.\n", d.Number, d.URL)
+	var act strings.Builder
 	for _, c := range changes {
 		switch c.kind {
+		case "remarks":
+			remarks = c.remarks
 		case "failed":
-			fmt.Fprintf(&b, "- Checks failed%s:\n", commit)
-			listed(&b, len(c.checks), func(i int) string {
+			fmt.Fprintf(&act, "- Checks failed%s:\n", commit)
+			listed(&act, "  - ", len(c.checks), func(i int) string {
 				ch := c.checks[i]
 				return strings.TrimSpace(ch.Name + " " + ch.URL)
 			})
-		case "passed":
-			fmt.Fprintf(&b, "- All %d %s passed%s.\n", c.count, plural(c.count, "check", "checks"), commit)
-		case "remarks":
-			fmt.Fprintf(&b, "- %d new %s:\n", len(c.remarks), plural(len(c.remarks), "comment", "comments"))
-			listed(&b, len(c.remarks), func(i int) string {
-				r := c.remarks[i]
-				who := r.Author
-				if who == "" {
-					who = "someone"
-				}
-				if r.Path != "" {
-					who += " on " + r.Path
-				}
-				said := snippet(r.Body)
-				if said == "" {
-					said = strings.ToLower(strings.ReplaceAll(r.State, "_", " "))
-					if said == "" {
-						said = "reviewed"
-					}
-				} else {
-					said = `"` + said + `"`
-				}
-				return strings.TrimSpace(who + ": " + said + " " + r.URL)
-			})
 		case "conflict":
-			fmt.Fprintf(&b, "- The branch now conflicts with %s.\n", d.Base)
+			fmt.Fprintf(&act, "- The branch now conflicts with %s.\n", d.Base)
+		case "passed":
+			fmt.Fprintf(&other, "- All %d %s passed%s.\n", c.count, plural(c.count, "check", "checks"), commit)
 		}
+	}
+	var asked strings.Builder
+	writeRemarks(&asked, remarks, true)
+	writeRemarks(&other, remarks, false)
+	if asked.Len()+act.Len() > 0 {
+		b.WriteString("\nNeeds action:\n" + asked.String() + act.String())
+	}
+	if other.Len() > 0 {
+		b.WriteString("\nAlso new, for context (nobody asked you for anything here):\n" + other.String())
 	}
 	b.WriteString("\n")
 	if exhausted {
-		fmt.Fprintf(&b, "starcode stopped watching after %d updates in a row that were only comments. Say so if the pull request needs more attention.", prWatchWakeLimit)
+		fmt.Fprintf(&b, "starcode stopped watching after %d wakes in a row that brought only comments. Say so if the pull request needs more attention.", prWatchWakeLimit)
 	} else {
-		b.WriteString("Look into each item and act on it as the task needs. starcode keeps watching and tells you about the next change, so end your turn when you are done.")
+		b.WriteString("Act on what needs action as the task requires. starcode keeps watching and tells you about the next change, so end your turn when you are done.")
 	}
 	return b.String()
 }
 
-func listed(b *strings.Builder, n int, line func(int) string) {
+// prHeldNote tells the agent, ahead of its next prompt, about remarks
+// that did not wake it.
+func prHeldNote(t store.Thread, held []heldRemark) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[starcode] New on pull request #%d (%s) since you last heard, which did not wake you:\n", t.PRNumber, t.PRURL)
+	writeRemarks(&b, held, true)
+	writeRemarks(&b, held, false)
+	return b.String()
+}
+
+func listed(b *strings.Builder, bullet string, n int, line func(int) string) {
 	for i := 0; i < n && i < prWatchListed; i++ {
-		b.WriteString("  - " + line(i) + "\n")
+		b.WriteString(bullet + line(i) + "\n")
 	}
 	if n > prWatchListed {
-		fmt.Fprintf(b, "  - and %d more\n", n-prWatchListed)
+		fmt.Fprintf(b, "%sand %d more\n", bullet, n-prWatchListed)
 	}
 }
 
 // snippet is a comment's text on one line, without HTML comments (bots
 // hide markers in them), cut to prWatchSnippet characters.
-func snippet(body string) string {
+func snippet(body string) string { return snippetN(body, prWatchSnippet) }
+
+// snippetN is snippet cut to n characters.
+func snippetN(body string, n int) string {
 	for {
 		i := strings.Index(body, "<!--")
 		if i < 0 {
@@ -287,8 +468,8 @@ func snippet(body string) string {
 		body = body[:i] + " " + body[i+j+3:]
 	}
 	body = strings.Join(strings.Fields(body), " ")
-	if r := []rune(body); len(r) > prWatchSnippet {
-		body = string(r[:prWatchSnippet-3]) + "..."
+	if r := []rune(body); len(r) > n {
+		body = string(r[:n-3]) + "..."
 	}
 	return body
 }
@@ -302,6 +483,13 @@ func plural(n int, one, many string) string {
 
 // prDetail reads a pull request; tests replace it.
 var prDetail = gitx.PullRequestDetail
+
+// Reasons a watch stops by hand; ThreadPRWatchStopped Off keeps those
+// off, as it does the wake limit.
+const (
+	StopByAgent = "the agent stopped watching"
+	stopWakeCap = "too many comment-only updates in a row"
+)
 
 // StartPRWatch starts watching the thread's linked pull request from how
 // it stands now.
@@ -324,19 +512,44 @@ func (a *App) StartPRWatch(ctx context.Context, id string) error {
 	if !d.Open() {
 		return fmt.Errorf("pull request #%d is %s", t.PRNumber, d.State)
 	}
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	// The read took a while: the thread may have moved to another PR.
+	if now, err := a.Store.Thread(ctx, id); err != nil || now.PRRepo != t.PRRepo || now.PRNumber != t.PRNumber {
+		return errors.New("the linked pull request changed meanwhile")
+	}
 	return a.setPRWatch(ctx, id, prWatchBaseline(d, time.Now()))
 }
 
+// autoWatchPR starts the watch on the thread's linked pull request when
+// the watch_linked_prs setting is on, it is not watched yet, and nobody
+// stopped a watch on it by hand.
+func (a *App) autoWatchPR(ctx context.Context, id string) {
+	if !a.Store.WatchLinkedPRs(ctx) {
+		return
+	}
+	t, err := a.Store.Thread(ctx, id)
+	if err != nil || t.PRNumber <= 0 || t.PRWatch != "" || t.PRWatchOff {
+		return
+	}
+	if err := a.StartPRWatch(ctx, id); err != nil {
+		a.Log.Debug("watch linked pull request", "thread", id, "err", err)
+	}
+}
+
 // StopPRWatch ends the watch; reason is empty when the reader stopped it.
+// A stop by the reader or the agent sticks: the automatic watch leaves
+// the PR alone from then on, even when no watch was running.
 func (a *App) StopPRWatch(ctx context.Context, id, reason string) error {
 	t, err := a.Store.Thread(ctx, id)
 	if err != nil {
 		return err
 	}
-	if t.PRWatch == "" {
+	off := reason == "" || reason == StopByAgent || reason == stopWakeCap
+	if t.PRWatch == "" && (!off || t.PRWatchOff || t.PRNumber <= 0) {
 		return nil
 	}
-	_, err = a.Store.Append(ctx, id, domain.ThreadPRWatchStopped{Reason: reason})
+	_, err = a.Store.Append(ctx, id, domain.ThreadPRWatchStopped{Reason: reason, Off: off})
 	return err
 }
 
@@ -355,7 +568,9 @@ var prWatchBusy atomic.Bool
 // watchPRs reads every watched pull request once and wakes the agents
 // whose PR changed. A thread with a turn running or an approval waiting
 // is left for a later sweep, so the news reaches the agent between
-// turns and nothing is lost meanwhile.
+// turns and nothing is lost meanwhile. Threads with an open linked PR
+// and no watch get one when the watch_linked_prs setting is on, which
+// covers links made before the setting existed.
 func (a *App) watchPRs(ctx context.Context, now time.Time) {
 	if !prWatchBusy.CompareAndSwap(false, true) {
 		return
@@ -365,11 +580,27 @@ func (a *App) watchPRs(ctx context.Context, now time.Time) {
 	if err != nil {
 		return
 	}
+	auto := a.Store.WatchLinkedPRs(ctx)
+	var states map[store.PR]store.PRState
 	for _, t := range ts {
 		select {
 		case <-a.stop:
 			return
 		default:
+		}
+		if auto && t.PRNumber > 0 && t.PRWatch == "" && !t.PRWatchOff && !t.Archived {
+			// Only PRs the badge poll knows to be open, so a merged one is
+			// not read every minute. A settled thread keeps a watch it
+			// has, but gets none here: most of those PRs are long done.
+			if states == nil {
+				if states, _ = a.Store.PRStates(ctx); states == nil {
+					states = map[store.PR]store.PRState{}
+				}
+			}
+			if st, ok := states[store.PR{Repo: t.PRRepo, Number: t.PRNumber}]; ok && strings.EqualFold(st.State, "open") {
+				a.autoWatchPR(ctx, t.ID)
+			}
+			continue
 		}
 		if Watching(t) && !busyThread(t) {
 			a.watchPR(ctx, t, now)
@@ -390,6 +621,20 @@ func (a *App) watchPR(ctx context.Context, t store.Thread, now time.Time) {
 	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	d, err := prDetail(rctx, p.Path, t.PRRepo, t.PRNumber)
 	cancel()
+	a.applyPRRead(ctx, t, w, d, err, now)
+}
+
+// applyPRRead acts on one read of a watched PR. It holds promptMu and
+// gives up when the watch record changed since t was read (a prompt took
+// the held remarks meanwhile) or a turn started: the next sweep reads
+// again, so nothing is sent twice or lost.
+func (a *App) applyPRRead(ctx context.Context, t store.Thread, w PRWatch, d gitx.PRDetail, err error, now time.Time) {
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	cur, cerr := a.Store.Thread(ctx, t.ID)
+	if cerr != nil || cur.PRWatch != t.PRWatch || busyThread(cur) {
+		return
+	}
 	if err != nil {
 		if w.Unread.IsZero() {
 			w.Unread = now
@@ -403,21 +648,51 @@ func (a *App) watchPR(ctx context.Context, t store.Thread, now time.Time) {
 		a.stopWatchWithNote(ctx, t, fmt.Sprintf("Stopped watching pull request #%d: it was %s.", t.PRNumber, d.State))
 		return
 	}
-	changes, next, exhausted := evaluatePRWatch(w, d)
-	if len(changes) > 0 {
-		if err := a.wakeForPR(ctx, t.ID, prWatchPrompt(d, changes, exhausted)); err != nil {
+	e := evaluatePRWatch(w, d, now)
+	if len(e.changes) > 0 {
+		if err := a.wakeForPRLocked(ctx, t.ID, prWatchPrompt(d, e.changes, e.exhausted)); err != nil {
 			// Not told: keep the old state, and the next sweep tries again.
 			a.Log.Warn("wake for pull request", "thread", t.ID, "err", err)
 			return
 		}
 	}
-	if exhausted {
-		a.StopPRWatch(ctx, t.ID, "too many comment-only updates in a row")
+	if e.exhausted {
+		a.StopPRWatch(ctx, t.ID, stopWakeCap)
 		return
 	}
-	if raw, _ := json.Marshal(next); string(raw) != t.PRWatch {
-		a.setPRWatch(ctx, t.ID, next)
+	if raw, _ := json.Marshal(e.next); string(raw) != t.PRWatch {
+		if err := a.setPRWatch(ctx, t.ID, e.next); err != nil {
+			return
+		}
 	}
+	if len(e.noted) > 0 {
+		var lines []string
+		for _, h := range e.noted {
+			lines = append(lines, remarkLine(h, prWatchSnippet))
+		}
+		a.Store.Append(ctx, t.ID, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Quiet: true,
+			Body: fmt.Sprintf("Pull request #%d: %s. The agent gets this with its next prompt.", t.PRNumber, strings.Join(lines, "; "))})
+	}
+}
+
+// pendingPRNote takes the remarks the watch holds as a note to send
+// ahead of the thread's next prompt, and marks them told. promptMu is
+// held.
+func (a *App) pendingPRNote(ctx context.Context, tid string) string {
+	t, err := a.Store.Thread(ctx, tid)
+	if err != nil || !Watching(t) {
+		return ""
+	}
+	var w PRWatch
+	if json.Unmarshal([]byte(t.PRWatch), &w) != nil || len(w.Held) == 0 {
+		return ""
+	}
+	next := w.told(w.Held)
+	next.Held = nil
+	if err := a.setPRWatch(ctx, tid, next); err != nil {
+		return ""
+	}
+	return prHeldNote(t, w.Held) + "[starcode] The prompt follows.\n\n"
 }
 
 // stopWatchWithNote ends the watch with a line in the transcript, since
@@ -429,11 +704,10 @@ func (a *App) stopWatchWithNote(ctx context.Context, t store.Thread, note string
 	a.Store.Append(ctx, t.ID, domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Status: domain.ItemDone, Body: note})
 }
 
-// wakeForPR sends the update as an automatic prompt. Like a reply, it
-// brings a settled or snoozed thread back into the list.
-func (a *App) wakeForPR(ctx context.Context, id, text string) error {
-	a.promptMu.Lock()
-	defer a.promptMu.Unlock()
+// wakeForPRLocked sends the update as an automatic prompt; promptMu is
+// held. Like a reply, it brings a settled or snoozed thread back into
+// the list.
+func (a *App) wakeForPRLocked(ctx context.Context, id, text string) error {
 	t, err := a.Store.Thread(ctx, id)
 	if err != nil {
 		return err

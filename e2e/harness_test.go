@@ -123,6 +123,8 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	// A linked PR would start a watch, which reads GitHub.
+	st.SetSetting(context.Background(), "watch_linked_prs", "0")
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	prov, err := providers.Open(filepath.Join(data, "providers.json"), map[string]string{}, true, log)
 	if err != nil {

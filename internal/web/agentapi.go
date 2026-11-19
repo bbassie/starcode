@@ -163,7 +163,7 @@ func init() {
 				}
 				return "Renamed.", nil
 			}),
-		tool("link_pr", "Link a pull request to your thread, so the user sees its state and checks next to the thread. A PR you open with `gh pr create` is linked on its own; use this for one you found or one opened another way.",
+		tool("link_pr", "Link a pull request to your thread, so the user sees its state and checks next to the thread, and starcode watches it for you (see watch_pr). A PR you open with `gh pr create` is linked on its own; use this for one you found or one opened another way.",
 			schema(map[string][2]string{"pr": {"string", "the pull request: a github.com URL, owner/repo#123, or #123 / 123 for the project's repository"}}, "pr"),
 			func(s *Server, ctx context.Context, t store.Thread, args json.RawMessage) (string, error) {
 				a, err := decode[struct{ PR string }](args)
@@ -186,7 +186,7 @@ func init() {
 				}
 				return "Unlinked.", nil
 			}),
-		tool("watch_pr", "Watch the linked pull request: starcode sends you a prompt when a check fails, all checks pass, someone else comments or reviews, or the branch conflicts. The watch ends when the PR is merged or closed. Pass on=false to stop.",
+		tool("watch_pr", "Watch the linked pull request (linking usually starts this on its own): starcode prompts you when a check fails, all checks pass, the branch conflicts, a review requests changes, or a comment @mentions you. Other comments come with your next prompt. The watch ends when the PR is merged or closed. Pass on=false to stop; it stays off.",
 			schema(map[string][2]string{"on": {"boolean", "true to watch (the default), false to stop"}}),
 			func(s *Server, ctx context.Context, t store.Thread, args json.RawMessage) (string, error) {
 				a, err := decode[struct{ On *bool }](args)
@@ -194,7 +194,7 @@ func init() {
 					return "", err
 				}
 				if a.On != nil && !*a.On {
-					if err := s.App.StopPRWatch(ctx, t.ID, "the agent stopped watching"); err != nil {
+					if err := s.App.StopPRWatch(ctx, t.ID, app.StopByAgent); err != nil {
 						return "", err
 					}
 					return "Stopped watching.", nil

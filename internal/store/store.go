@@ -82,9 +82,12 @@ type Thread struct {
 	PRURL    string
 	// PRWatch is the watch on that pull request as JSON (app.PRWatch),
 	// empty when the thread is not watching it.
-	PRWatch   string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	PRWatch string
+	// PRWatchOff is a watch on that pull request stopped by hand, which
+	// the automatic watch leaves off (domain.ThreadPRWatchStopped Off).
+	PRWatchOff bool
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 	// SettledAt is when the thread was settled, zero while it is not;
 	// HeldAt when it was last brought back by hand (unsettled, woken),
 	// which the idle sweep counts like activity. SnoozedUntil is when a
@@ -447,16 +450,16 @@ func apply(ctx context.Context, tx execer, ev domain.Event) error {
 		// A link is bookkeeping, not activity: no touch, so the thread does
 		// not go unread over it. A watch belongs to the PR it was started
 		// on, so linking another one ends it.
-		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_watch=CASE WHEN pr_repo=? AND pr_number=? THEN pr_watch ELSE '' END, pr_repo=?, pr_number=?, pr_url=? WHERE id=?`, p.Repo, p.Number, p.Repo, p.Number, p.URL, ev.ThreadID)
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_watch=CASE WHEN pr_repo=? AND pr_number=? THEN pr_watch ELSE '' END, pr_watch_off=CASE WHEN pr_repo=? AND pr_number=? THEN pr_watch_off ELSE 0 END, pr_repo=?, pr_number=?, pr_url=? WHERE id=?`, p.Repo, p.Number, p.Repo, p.Number, p.Repo, p.Number, p.URL, ev.ThreadID)
 		return err
 	case domain.ThreadPRUnlinked:
-		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_repo='', pr_number=0, pr_url='', pr_watch='' WHERE id=?`, ev.ThreadID)
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_repo='', pr_number=0, pr_url='', pr_watch='', pr_watch_off=0 WHERE id=?`, ev.ThreadID)
 		return err
 	case domain.ThreadPRWatchSet:
-		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_watch=? WHERE id=? AND pr_number>0`, string(p.State), ev.ThreadID)
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_watch=?, pr_watch_off=0 WHERE id=? AND pr_number>0`, string(p.State), ev.ThreadID)
 		return err
 	case domain.ThreadPRWatchStopped:
-		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_watch='' WHERE id=?`, ev.ThreadID)
+		_, err := tx.ExecContext(ctx, `UPDATE threads SET pr_watch='', pr_watch_off=CASE WHEN ? THEN 1 ELSE pr_watch_off END WHERE id=?`, p.Off, ev.ThreadID)
 		return err
 	case domain.ThreadReportPending:
 		_, err := tx.ExecContext(ctx, `UPDATE threads SET report_pending=1 WHERE id=?`, ev.ThreadID)
@@ -876,12 +879,12 @@ func scanProject(sc interface{ Scan(...any) error }) (Project, error) {
 	return p, err
 }
 
-const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,pinned,context_tokens,context_window,pr_repo,pr_number,pr_url,created_at,updated_at,settled_at,held_at,snoozed_until,anchor,fork_at,snooze_resume,pr_watch,snooze_prompt,parent_id,wake_parent,report_parent,report_pending,(SELECT count(*) FROM background b WHERE b.thread_id=threads.id AND b.lost=0)`
+const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,pinned,context_tokens,context_window,pr_repo,pr_number,pr_url,created_at,updated_at,settled_at,held_at,snoozed_until,anchor,fork_at,snooze_resume,pr_watch,snooze_prompt,parent_id,wake_parent,report_parent,report_pending,pr_watch_off,(SELECT count(*) FROM background b WHERE b.thread_id=threads.id AND b.lost=0)`
 
 func scanThread(sc interface{ Scan(...any) error }) (Thread, error) {
 	var t Thread
 	var c, u, settled, held, snoozed string
-	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.Pinned, &t.ContextTokens, &t.ContextWindow, &t.PRRepo, &t.PRNumber, &t.PRURL, &c, &u, &settled, &held, &snoozed, &t.Anchor, &t.ForkAt, &t.SnoozeResume, &t.PRWatch, &t.SnoozePrompt, &t.Parent, &t.WakeParent, &t.ReportParent, &t.ReportPending, &t.Background)
+	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.Pinned, &t.ContextTokens, &t.ContextWindow, &t.PRRepo, &t.PRNumber, &t.PRURL, &c, &u, &settled, &held, &snoozed, &t.Anchor, &t.ForkAt, &t.SnoozeResume, &t.PRWatch, &t.SnoozePrompt, &t.Parent, &t.WakeParent, &t.ReportParent, &t.ReportPending, &t.PRWatchOff, &t.Background)
 	t.CreatedAt, _ = time.Parse(timeFmt, c)
 	t.UpdatedAt, _ = time.Parse(timeFmt, u)
 	t.SettledAt = parseTime(settled)
@@ -1491,6 +1494,13 @@ func (s *Store) SettleIdleDays(ctx context.Context) int {
 // A merge or close still settles it through SettleMerged.
 func (s *Store) SettleKeepPR(ctx context.Context) bool {
 	return s.Setting(ctx, "settle_keep_pr", "0") == "1"
+}
+
+// WatchLinkedPRs is whether every thread with an open linked pull
+// request watches it without being asked (setting watch_linked_prs, on by
+// default).
+func (s *Store) WatchLinkedPRs(ctx context.Context) bool {
+	return s.Setting(ctx, "watch_linked_prs", "1") != "0"
 }
 
 // ResumeAfterRestart is whether a turn a restart cut off is resumed on
