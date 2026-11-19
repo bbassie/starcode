@@ -112,6 +112,9 @@ type Thread struct {
 	// to, which the next session start forks at; empty when there is none.
 	Anchor string
 	ForkAt string
+	// Background is how much of the thread's background work is still
+	// running (BackgroundTask, not lost); it can outlive the turn.
+	Background int
 }
 
 // Snoozed is whether the thread waits on the Snoozed shelf.
@@ -873,12 +876,12 @@ func scanProject(sc interface{ Scan(...any) error }) (Project, error) {
 	return p, err
 }
 
-const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,pinned,context_tokens,context_window,pr_repo,pr_number,pr_url,created_at,updated_at,settled_at,held_at,snoozed_until,anchor,fork_at,snooze_resume,pr_watch,snooze_prompt,parent_id,wake_parent,report_parent,report_pending`
+const threadCols = `id,project_id,title,agent,model,effort,permission_mode,resolved_model,external_session_id,status,status_detail,archived,pinned,context_tokens,context_window,pr_repo,pr_number,pr_url,created_at,updated_at,settled_at,held_at,snoozed_until,anchor,fork_at,snooze_resume,pr_watch,snooze_prompt,parent_id,wake_parent,report_parent,report_pending,(SELECT count(*) FROM background b WHERE b.thread_id=threads.id AND b.lost=0)`
 
 func scanThread(sc interface{ Scan(...any) error }) (Thread, error) {
 	var t Thread
 	var c, u, settled, held, snoozed string
-	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.Pinned, &t.ContextTokens, &t.ContextWindow, &t.PRRepo, &t.PRNumber, &t.PRURL, &c, &u, &settled, &held, &snoozed, &t.Anchor, &t.ForkAt, &t.SnoozeResume, &t.PRWatch, &t.SnoozePrompt, &t.Parent, &t.WakeParent, &t.ReportParent, &t.ReportPending)
+	err := sc.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Agent, &t.Model, &t.Effort, &t.PermissionMode, &t.ResolvedModel, &t.ExternalSessionID, &t.Status, &t.StatusDetail, &t.Archived, &t.Pinned, &t.ContextTokens, &t.ContextWindow, &t.PRRepo, &t.PRNumber, &t.PRURL, &c, &u, &settled, &held, &snoozed, &t.Anchor, &t.ForkAt, &t.SnoozeResume, &t.PRWatch, &t.SnoozePrompt, &t.Parent, &t.WakeParent, &t.ReportParent, &t.ReportPending, &t.Background)
 	t.CreatedAt, _ = time.Parse(timeFmt, c)
 	t.UpdatedAt, _ = time.Parse(timeFmt, u)
 	t.SettledAt = parseTime(settled)

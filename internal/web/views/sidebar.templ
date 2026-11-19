@@ -534,7 +534,7 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 					@ProjMark(p, "dense-only")
 				}
 				<span class="sel-box" aria-hidden="true">@Icon("circle", "ui-icon sel-off") @Icon("circle-check", "ui-icon sel-on")</span>
-				<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
+				@ThreadGlyph(t)
 				if t.Pinned {
 					<span class="pin-mark" title="Pinned">@Icon("pin", "ui-icon")</span>
 				}

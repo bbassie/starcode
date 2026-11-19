@@ -451,10 +451,14 @@ svg.i.b { fill: currentColor; stroke: none; }
 .ui-icon { width: 1em; height: 1em; vertical-align: -0.125em; flex: none; transform-box: border-box; transform-origin: 50% 50%; }
 button .ui-icon { display: block; margin: auto; }
 .spin-icon { animation: spin 0.8s linear infinite; }
+/* Background work after the turn: slower than a running turn's spinner,
+   so the two read apart at a glance. */
+.spin-slow { animation: spin 3s linear infinite; }
 .st-running { color: var(--accent); }
 .st-awaiting_approval { color: var(--warn); }
 .st-error { color: var(--err); }
 .st-idle { color: var(--fg-dim); }
+.st-background { color: var(--accent); }
 .st-done { color: var(--ok); }
 .st-failed, .st-declined { color: var(--err); }
 /* A stop is the reader's choice, not a failure: neutral, with the stop icon. */
@@ -2219,6 +2223,7 @@ button.pending, .btn.pending { cursor: progress; animation: pending-pulse 0.9s e
 
 /* ---- schedules ---- */
 .queue-item.scheduled + .queue-item.scheduled { margin-top: 0; }
+.queue-item.background .queue-position { color: var(--accent); }
 .queue-item.scheduled .queue-position { color: var(--accent); }
 .nowrap { white-space: nowrap; }
 .err-text { color: var(--err); }

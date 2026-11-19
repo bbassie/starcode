@@ -791,7 +791,11 @@ func (c *conn) renderPromptQueue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.sse.PatchElementTempl(views.PromptQueue(views.ThreadData{Thread: t, Queued: queued, Steering: steering, Scheduled: scheduled}))
+	bg, err := c.s.App.Store.Background(ctx, c.threadID)
+	if err != nil {
+		return err
+	}
+	return c.sse.PatchElementTempl(views.PromptQueue(views.ThreadData{Thread: t, Queued: queued, Steering: steering, Scheduled: scheduled, Background: bg}))
 }
 
 func (c *conn) renderMessageRail(ctx context.Context) error {
@@ -860,6 +864,15 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 			return c.sse.Redirect("/")
 		}
 	case domain.PromptQueued, domain.PromptDequeued, domain.PromptEdited, domain.PromptsReordered, domain.PromptSteered, domain.PromptSteerDropped:
+		if mine {
+			return c.renderPromptQueue(ctx)
+		}
+	case domain.ThreadBackgroundStarted, domain.ThreadBackgroundEnded, domain.ThreadBackgroundLost, domain.ThreadBackgroundReported:
+		// The row's glyph says when work still runs after the turn, and
+		// the thread lists it over the composer.
+		c.sideDirty = true
+		c.rowDirty[ev.ThreadID] = true
+		c.homeDirty = c.view == "home"
 		if mine {
 			return c.renderPromptQueue(ctx)
 		}

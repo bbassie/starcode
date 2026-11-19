@@ -633,6 +633,7 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 	if err != nil {
 		return views.ThreadData{}, err
 	}
-	return views.ThreadData{Thread: t, Project: p, Items: items, Parent: parent, Scheduled: scheduled, Notify: s.App.Store.NotifyLevel(ctx, id), Queued: queued, Steering: steering, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
+	bg, _ := s.App.Store.Background(ctx, id)
+	return views.ThreadData{Thread: t, Project: p, Items: items, Parent: parent, Scheduled: scheduled, Notify: s.App.Store.NotifyLevel(ctx, id), Queued: queued, Steering: steering, Background: bg, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
 		Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }

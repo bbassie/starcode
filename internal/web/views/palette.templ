@@ -106,7 +106,7 @@ templ PaletteResults(d SearchData) {
 			</div>
 			for _, t := range d.Threads {
 				<a class="opt" href={ templ.SafeURL("/threads/" + t.ID) } data-on:click="$palette = false">
-					<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
+					@ThreadGlyph(t)
 					<span class="opt-text">
 						<span class="opt-name"><span class="ellipsis">{ t.Title }</span>
 							if t.Archived {

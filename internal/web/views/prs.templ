@@ -462,7 +462,7 @@ templ PRPageDetail(d PRDetailData) {
 				<span class="spacer"></span>
 				for _, t := range d.Threads {
 					<a class="pr-thread" href={ templ.SafeURL("/threads/" + t.ID) } title={ "Thread linked to this pull request: " + t.Title }>
-						<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
+						@ThreadGlyph(t)
 						<span class="ellipsis">{ t.Title }</span>
 					</a>
 				}

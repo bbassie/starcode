@@ -1,6 +1,12 @@
 package views
 
-import lucide "github.com/kaugesaar/lucide-go"
+import (
+	"fmt"
+
+	lucide "github.com/kaugesaar/lucide-go"
+
+	"starcode/internal/store"
+)
 
 // Lucide renders trusted inline SVG. Keeping this component small makes icon
 // sizing and coloring consistent while controls retain their accessible labels.
@@ -37,6 +43,24 @@ templ StatusIcon(status string) {
 		default:
 			@Icon("circle", "ui-icon")
 	}
+}
+
+// ThreadGlyph is a thread's status mark in a list. A thread whose turn
+// is over but whose background work (a test run, a subagent) still runs
+// gets a slow dashed circle, so it does not look done.
+templ ThreadGlyph(t store.Thread) {
+	if t.Background > 0 && t.Status != "running" && t.Status != "awaiting_approval" {
+		<span class="glyph st-background" title={ backgroundTitle(t.Background) }>@Icon("circle-dashed", "ui-icon spin-slow")</span>
+	} else {
+		<span class={ "glyph", "st-" + t.Status }>@StatusIcon(t.Status)</span>
+	}
+}
+
+func backgroundTitle(n int) string {
+	if n == 1 {
+		return "1 task running in the background"
+	}
+	return fmt.Sprintf("%d tasks running in the background", n)
 }
 
 templ ItemIcon(status string) {

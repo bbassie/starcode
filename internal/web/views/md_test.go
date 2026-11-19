@@ -14,3 +14,20 @@ func TestMarkdownWrapsTables(t *testing.T) {
 		t.Fatalf("table body lost:\n%s", got)
 	}
 }
+
+// Links to other sites open in a new tab; links within starcode and
+// mail links stay as they are.
+func TestMarkdownExternalLinksOpenNewTab(t *testing.T) {
+	got := Markdown("[x](https://example.com) https://foo.com www.bar.com [t](/threads/abc) me@x.com")
+	for _, want := range []string{
+		`<a href="https://example.com" target="_blank" rel="noopener">`,
+		`<a href="https://foo.com" target="_blank" rel="noopener">`,
+		`<a href="http://www.bar.com" target="_blank" rel="noopener">`,
+		`<a href="/threads/abc">`,
+		`<a href="mailto:me@x.com">`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in\n%s", want, got)
+		}
+	}
+}

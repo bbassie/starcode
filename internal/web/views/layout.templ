@@ -490,7 +490,9 @@ templ Layout(title string, p Page, parts Parts) {
 			// pick an IME candidate never sends.
 			// autoGrow: the prompt box follows its text up to the CSS
 			// max-height; runs on input and, through data-effect, when the
-			// signal is cleared after a send.
+			// signal is cleared after a send. The textareas keep their style
+			// through a morph (data-preserve-attr), so a composer redraw
+			// cannot drop the box back to one line.
 			<script>
 				window.sendKey = (evt) => evt.key === 'Enter' && !evt.isComposing
 					&& (evt.ctrlKey || evt.metaKey || (!evt.shiftKey && !matchMedia('(pointer: coarse)').matches));
@@ -643,9 +645,35 @@ templ Layout(title string, p Page, parts Parts) {
 					ta.setSelectionRange(end, end);
 				};
 				window.autoGrow = (el) => queueMicrotask(() => {
+					// Text that only got longer needs no reset: scrollHeight
+					// already covers it. Dropping to auto on every keystroke
+					// made iOS lose the place being typed at for a moment,
+					// once the box was taller than its first line.
+					const len = el.value.length;
+					const longer = len >= (el._len || 0);
+					el._len = len;
+					if (longer && len > 0) {
+						if (el.scrollHeight > el.clientHeight) el.style.height = el.scrollHeight + 'px';
+						return;
+					}
+					// Shorter text (a deletion, the clear after a send) is
+					// measured from auto; the box's own scroll is put back.
+					const top = el.scrollTop;
 					el.style.height = 'auto';
 					el.style.height = el.scrollHeight + 'px';
+					el.scrollTop = top;
 				});
+				// A link to another site opens in a new tab, wherever it came
+				// from (markdown sets the target already, see views.Markdown;
+				// this catches tool output, previews and anything else). In
+				// the home screen app a link that stays in the tab replaces
+				// starcode with no way back.
+				document.addEventListener('click', (e) => {
+					const a = e.target.closest?.('a[href]');
+					if (!a || a.target || a.origin === location.origin || !/^https?:$/.test(a.protocol)) return;
+					a.target = '_blank';
+					a.rel = 'noopener';
+				}, true);
 				// optKey walks a list of .opt rows with the arrow keys and
 				// picks the first on Enter in a search box; the palette and
 				// the setting pickers share it. True when it handled the key.

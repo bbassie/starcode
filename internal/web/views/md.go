@@ -10,13 +10,16 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	east "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer"
 	ghtml "github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 )
 
 var md = goldmark.New(
 	goldmark.WithExtensions(extension.GFM),
+	goldmark.WithParserOptions(parser.WithASTTransformers(util.Prioritized(externalLinks{}, 100))),
 	goldmark.WithRendererOptions(
 		// GFM registers its table renderer at 500. goldmark registers from
 		// the highest number down, so the lowest number owns the kind.
@@ -38,6 +41,43 @@ func (tableWrapper) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
 		}
 		return ast.WalkContinue, nil
 	})
+}
+
+// externalLinks opens links to other sites in a new tab. In the app on a
+// phone's home screen a link that stays in the tab replaces starcode with
+// the other site, with no way back.
+type externalLinks struct{}
+
+func (externalLinks) Transform(doc *ast.Document, reader text.Reader, _ parser.Context) {
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var dest string
+		switch l := n.(type) {
+		case *ast.Link:
+			dest = string(l.Destination)
+		case *ast.AutoLink:
+			dest = string(l.URL(reader.Source()))
+			if l.AutoLinkType == ast.AutoLinkEmail {
+				return ast.WalkContinue, nil
+			}
+		default:
+			return ast.WalkContinue, nil
+		}
+		if external(dest) {
+			n.SetAttributeString("target", "_blank")
+			n.SetAttributeString("rel", "noopener")
+		}
+		return ast.WalkContinue, nil
+	})
+}
+
+// external is whether a link leaves starcode: an absolute http(s) URL
+// or one without a scheme that GFM made from "www.".
+func external(dest string) bool {
+	d := strings.ToLower(dest)
+	return strings.HasPrefix(d, "http://") || strings.HasPrefix(d, "https://") || strings.HasPrefix(d, "www.")
 }
 
 // Markdown renders assistant prose. Raw HTML in the source is dropped by

@@ -41,6 +41,9 @@ type ThreadData struct {
 	// Scheduled are the thread's schedules (send later, cron), shown with
 	// the queue.
 	Scheduled []store.Schedule
+	// Background is the thread's background work (a command the agent
+	// left running, a subagent), shown with the queue while it runs.
+	Background []store.BackgroundTask
 	// Notify is what the thread pushes to the reader's devices
 	// (store.NotifyAll, NotifyInput, NotifyOff).
 	Notify string
@@ -791,7 +794,22 @@ templ WorkSummary(items []store.Item, aps []store.Approval) {
 }
 
 templ PromptQueue(d ThreadData) {
-	<div id="prompt-queue" class={ "prompt-queue", templ.KV("empty", len(d.Queued) == 0 && len(d.Scheduled) == 0 && len(d.Steering) == 0) }>
+	<div id="prompt-queue" class={ "prompt-queue", templ.KV("empty", len(d.Queued) == 0 && len(d.Scheduled) == 0 && len(d.Steering) == 0 && len(running(d.Background)) == 0) }>
+		if bg := running(d.Background); len(bg) > 0 {
+			// Work the agent left running: it can outlast the turn, and the
+			// agent takes its result up in a turn of its own when it ends.
+			<div class="queue-head">
+				<span>@Icon("circle-dashed", "ui-icon spin-slow") <span>{ backgroundTitle(len(bg)) }</span></span>
+			</div>
+			<div class="queue-list">
+				for _, b := range bg {
+					<div class="queue-item background" title={ clip(b.Label, 600) }>
+						<span class="queue-position">@Icon(backgroundIcon(b.Kind), "ui-icon")</span>
+						<span class="ellipsis">{ backgroundLabel(b) }</span>
+					</div>
+				}
+			</div>
+		}
 		if len(d.Steering) > 0 {
 			// Handed to the running turn: the agent reads them after the
 			// step it is on, and they go into the transcript there.
@@ -1159,6 +1177,7 @@ templ Composer(d ThreadData) {
 				data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads/" + t.ID + "/send' + sendQuery(evt), " + withSignal("_attach") + "))" }
 				data-on:input__debounce.600ms={ draftPost(t.ID) }
 				data-effect="$prompt; autoGrow(el)"
+				data-preserve-attr="style"
 				autocomplete="off"
 				autocapitalize="sentences"
 				enterkeyhint="enter"
@@ -1199,6 +1218,44 @@ templ ComposerActions(d ThreadData) {
 // composerSignals are the status-driven signals of the composer, as the
 // extra part of its data-signals object and, in ComposerSignals, as the
 // map a status change patches.
+// running is the background work that has not ended or died with its
+// agent process.
+func running(tasks []store.BackgroundTask) []store.BackgroundTask {
+	var out []store.BackgroundTask
+	for _, t := range tasks {
+		if !t.Lost {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func backgroundIcon(kind string) string {
+	if kind == "subagent" {
+		return "bot"
+	}
+	return "terminal"
+}
+
+// backgroundLabel is one line for a background task: its description,
+// or its command without the leading "cd <dir> &&", which is mostly the
+// project directory and pushes the part that says what runs out of view.
+func backgroundLabel(t store.BackgroundTask) string {
+	l := strings.TrimSpace(firstLine(t.Label))
+	if strings.HasPrefix(l, "cd ") {
+		if i := strings.Index(l, " && "); i > 0 && !strings.ContainsAny(l[3:i], ";|&") {
+			l = strings.TrimSpace(l[i+4:])
+		}
+	}
+	if l == "" {
+		if t.Kind == "subagent" {
+			return "Subagent"
+		}
+		return "Command"
+	}
+	return l
+}
+
 func composerSignals(d ThreadData) string {
 	return fmt.Sprintf("locked: %t, placeholder: %q", busy(d.Thread), promptPlaceholder(d))
 }

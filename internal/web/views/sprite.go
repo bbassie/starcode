@@ -23,7 +23,7 @@ import (
 var spriteIcons = []string{
 	"archive", "archive-restore", "arrow-down", "arrow-left", "arrow-right", "arrow-up",
 	"bot", "brain", "chart-no-axes-combined", "check", "chevron-down", "chevron-right", "chevrons-up",
-	"circle", "circle-alert", "circle-arrow-up", "circle-check", "circle-dot", "circle-help", "circle-slash", "circle-x",
+	"circle", "circle-alert", "circle-dashed", "circle-arrow-up", "circle-check", "circle-dot", "circle-help", "circle-slash", "circle-x",
 	"clipboard-paste", "columns-2", "command", "copy", "ellipsis-vertical", "external-link", "eye", "eye-off",
 	"file", "folder", "folder-plus", "fold-vertical", "gauge",
 	"git-branch", "git-compare-arrows", "git-merge", "git-pull-request", "git-pull-request-closed", "git-pull-request-create", "git-pull-request-draft",

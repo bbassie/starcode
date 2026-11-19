@@ -115,7 +115,7 @@ func Home(d HomeData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "\" data-effect=\"$prompt; autoGrow(el)\" autocomplete=\"off\" autocapitalize=\"sentences\" enterkeyhint=\"enter\"></textarea>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "\" data-effect=\"$prompt; autoGrow(el)\" data-preserve-attr=\"style\" autocomplete=\"off\" autocapitalize=\"sentences\" enterkeyhint=\"enter\"></textarea>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -202,7 +202,7 @@ func HomeHero(projects []store.Project) templ.Component {
 		var templ_7745c5c3_Var7 string
 		templ_7745c5c3_Var7, templ_7745c5c3_Err = templruntime.SanitizeStyleAttributeValues(hiddenUnless(first != ""))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 81, Col: 96}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 82, Col: 96}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 		if templ_7745c5c3_Err != nil {
@@ -215,7 +215,7 @@ func HomeHero(projects []store.Project) templ.Component {
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(pickToggle("project"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 81, Col: 225}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 82, Col: 225}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 		if templ_7745c5c3_Err != nil {
@@ -228,7 +228,7 @@ func HomeHero(projects []store.Project) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(projectName(projects, first))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 81, Col: 294}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 82, Col: 294}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
@@ -241,7 +241,7 @@ func HomeHero(projects []store.Project) templ.Component {
 		var templ_7745c5c3_Var10 string
 		templ_7745c5c3_Var10, templ_7745c5c3_Err = templruntime.SanitizeStyleAttributeValues(hiddenUnless(first == ""))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 82, Col: 96}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 83, Col: 96}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
@@ -254,7 +254,7 @@ func HomeHero(projects []store.Project) templ.Component {
 		var templ_7745c5c3_Var11 string
 		templ_7745c5c3_Var11, templ_7745c5c3_Err = templruntime.SanitizeStyleAttributeValues(hiddenUnless(first != ""))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 85, Col: 130}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 86, Col: 130}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 		if templ_7745c5c3_Err != nil {
@@ -267,7 +267,7 @@ func HomeHero(projects []store.Project) templ.Component {
 		var templ_7745c5c3_Var12 string
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templruntime.SanitizeStyleAttributeValues(hiddenUnless(first == ""))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 86, Col: 137}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 87, Col: 137}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
@@ -280,7 +280,7 @@ func HomeHero(projects []store.Project) templ.Component {
 		var templ_7745c5c3_Var13 string
 		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.ResolveAttributeValue(pickToggle("project"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 86, Col: 177}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 87, Col: 177}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
 		if templ_7745c5c3_Err != nil {
@@ -323,7 +323,7 @@ func HomeHero(projects []store.Project) templ.Component {
 		var templ_7745c5c3_Var16 string
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.ResolveAttributeValue(pickSet("project", "", ""))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 94, Col: 250}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 95, Col: 250}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var16)
 		if templ_7745c5c3_Err != nil {
@@ -375,7 +375,7 @@ func HomeHero(projects []store.Project) templ.Component {
 			var templ_7745c5c3_Var19 string
 			templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 100, Col: 106}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 101, Col: 106}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var19)
 			if templ_7745c5c3_Err != nil {
@@ -388,7 +388,7 @@ func HomeHero(projects []store.Project) templ.Component {
 			var templ_7745c5c3_Var20 string
 			templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.ResolveAttributeValue(strings.ToLower(p.Name + " " + p.Path))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 100, Col: 156}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 101, Col: 156}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var20)
 			if templ_7745c5c3_Err != nil {
@@ -401,7 +401,7 @@ func HomeHero(projects []store.Project) templ.Component {
 			var templ_7745c5c3_Var21 string
 			templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue("$project == " + jsq(p.ID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 100, Col: 301}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 101, Col: 301}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 			if templ_7745c5c3_Err != nil {
@@ -414,7 +414,7 @@ func HomeHero(projects []store.Project) templ.Component {
 			var templ_7745c5c3_Var22 string
 			templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.ResolveAttributeValue(pickSet("project", p.ID, projectPicked(p)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 100, Col: 362}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 101, Col: 362}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var22)
 			if templ_7745c5c3_Err != nil {
@@ -427,7 +427,7 @@ func HomeHero(projects []store.Project) templ.Component {
 			var templ_7745c5c3_Var23 string
 			templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.Path)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 100, Col: 379}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 101, Col: 379}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 			if templ_7745c5c3_Err != nil {
@@ -448,7 +448,7 @@ func HomeHero(projects []store.Project) templ.Component {
 			var templ_7745c5c3_Var24 string
 			templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(p.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 102, Col: 83}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/views/home.templ`, Line: 103, Col: 83}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 			if templ_7745c5c3_Err != nil {

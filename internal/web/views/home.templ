@@ -39,6 +39,7 @@ templ Home(d HomeData) {
 								data-on:keydown={ "sendKey(evt) && (evt.preventDefault(), @post('/api/threads', " + withSignal("_attach") + "))" }
 								data-on:input__debounce.600ms={ draftPost("home") }
 								data-effect="$prompt; autoGrow(el)"
+								data-preserve-attr="style"
 								autocomplete="off"
 								autocapitalize="sentences"
 								enterkeyhint="enter"
