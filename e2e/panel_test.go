@@ -3,41 +3,13 @@
 package e2e
 
 import (
+	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
 )
-
-// TestEditorSaves opens a file from the tree, edits it and saves with
-// Ctrl+S, which writes the thread's checkout.
-func TestEditorSaves(t *testing.T) {
-	e := newEnv(t)
-	id := e.thread()
-	os.WriteFile(filepath.Join(e.dir, "notes.txt"), []byte("one\n"), 0o644)
-	p := e.page("/threads/"+id, false)
-	click(p.MustElementR(".panel-tab", "files"))
-	click(p.MustElementR("#file-explorer a", "notes.txt"))
-	ta := p.MustElement(".git-editor textarea.file-editor")
-	wait(p, `() => document.querySelector('.git-editor textarea').value === 'one\n'`)
-	ta.MustEval(`() => { this.focus(); this.setSelectionRange(this.value.length, this.value.length); }`)
-	ta.MustInput("two\n")
-	p.MustElementR(".editor-state", "unsaved")
-	p.KeyActions().Press(input.ControlLeft).Type('s').MustDo()
-	e.until("the file on disk", func() bool {
-		b, _ := os.ReadFile(filepath.Join(e.dir, "notes.txt"))
-		return string(b) == "one\ntwo\n"
-	})
-	wait(p, `() => !document.querySelector('form.git-editor.dirty')`)
-	// The file now shows in the changes list.
-	click(p.MustElementR(".panel-tab", "changes"))
-	p.MustElementR("#git-files a", "notes.txt")
-}
 
 // TestSidebarFilter types in the sidebar's filter box and checks rows
 // hide and come back.
@@ -85,20 +57,6 @@ func TestEarlierItems(t *testing.T) {
 	// along, and the redraw does not cut it again.
 	reconnect(p)
 	wait(p, `() => !document.getElementById('load-earlier') && document.querySelectorAll('.item.user').length === 9`)
-}
-
-// TestPanelSurvivesReconnect opens a diff in the panel, forces the page's
-// stream to reconnect, and checks the diff is still there: the stream
-// reads the page's gitPath on connect and draws the detail again.
-func TestPanelSurvivesReconnect(t *testing.T) {
-	e := newEnv(t)
-	id := e.thread()
-	os.WriteFile(filepath.Join(e.dir, "README.md"), []byte("# proj\nchanged\n"), 0o644)
-	p := e.page("/threads/"+id, false)
-	click(p.MustElementR("#git-files a", "README.md"))
-	p.MustElementR("#git-detail .diff span.add", "changed")
-	reconnect(p)
-	wait(p, `() => [...document.querySelectorAll('#git-detail .diff span.add')].some((s) => s.textContent.includes('changed'))`)
 }
 
 // TestFollowWaitsForTheFinger checks the transcript does not pull itself
@@ -197,28 +155,27 @@ func TestReopenSettles(t *testing.T) {
 	}
 }
 
-// TestPhonePanelHeader opens the changes panel on a phone with a long
-// branch name. The panel fills the screen, close stays inside it and the
-// branch sits on a row of its own below the tabs.
-func TestPhonePanelHeader(t *testing.T) {
+// TestPRChipsLinkToGitHub links a thread to a pull request and checks
+// both chips go to GitHub: the header's is a link in a new tab, and the
+// sidebar row's opens one without opening the thread the row links to.
+func TestPRChipsLinkToGitHub(t *testing.T) {
 	e := newEnv(t)
-	cmd := exec.Command("git", "checkout", "--quiet", "-b", "feature/a-branch-name-too-long-for-one-row")
-	cmd.Dir = e.dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git checkout: %v\n%s", err, out)
+	a, b := e.thread(), e.thread()
+	if err := e.app.LinkPR(context.Background(), a, "o/r", 12, "https://github.com/o/r/pull/12"); err != nil {
+		t.Fatal(err)
 	}
-	id := e.thread()
-	p := e.page("/threads/"+id, true)
-	click(p.MustElement(".gittoggle"))
-	p.MustElement("#git-head .git-branch")
-	wait(p, `() => {
-		const panel = document.getElementById('gitpanel').getBoundingClientRect();
-		if (Math.round(panel.left) !== 0 || Math.round(panel.width) !== innerWidth) return false;
-		const head = document.getElementById('git-head');
-		const close = head.querySelector('[aria-label="Close changes panel"]').getBoundingClientRect();
-		const tab = head.querySelector('.panel-tab').getBoundingClientRect();
-		const branch = head.querySelector('.git-branch').getBoundingClientRect();
-		return close.right <= innerWidth && Math.abs(close.top - tab.top) < tab.height
-			&& branch.top >= tab.bottom && branch.height < 30 && branch.right <= innerWidth;
-	}`)
+	p := e.page("/threads/"+b, false)
+	head := e.page("/threads/"+a, false).MustElement("#mainhead a.pr-chip-btn")
+	if href, target := *head.MustAttribute("href"), *head.MustAttribute("target"); href != "https://github.com/o/r/pull/12" || target != "_blank" {
+		t.Errorf("header chip: href %q, target %q", href, target)
+	}
+	p.MustEval(`() => { window._opened = []; window.open = (u, t) => { window._opened.push(u + ' ' + t); return null; }; }`)
+	click(p.MustElement("#row-" + a + " .pr-chip-link"))
+	wait(p, `() => window._opened.length === 1`)
+	if got := p.MustEval(`() => window._opened[0]`).Str(); got != "https://github.com/o/r/pull/12 _blank" {
+		t.Errorf("opened %q", got)
+	}
+	if path := p.MustEval(`() => location.pathname`).Str(); path != "/threads/"+b {
+		t.Errorf("the chip's click opened the thread too: %s", path)
+	}
 }

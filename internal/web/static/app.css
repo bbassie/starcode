@@ -18,7 +18,6 @@
   --border-w: 1px;
   --sidebar-w: 280px;
   --settingsnav-w: 208px;
-  --gitpanel-w: clamp(380px, 32vw, 620px);
   --content-w: 780px;
   --tap: 40px;
   --line-soft: color-mix(in srgb, var(--fg) 9%, transparent);
@@ -303,10 +302,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 
 /* ---- shell ---- */
 
-/* Clipped so the slid-out side panels do not widen the document; phones
+/* Clipped so the slid-out sidebar does not widen the document; phones
    would otherwise pan the whole page sideways into blank space. */
 .shell { display: flex; height: 100%; position: relative; overflow: hidden; }
-#sidebar, #gitpanel {
+#sidebar {
   flex: none;
   background: var(--bg-2);
   display: flex;
@@ -314,12 +313,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   min-height: 0;
 }
 #sidebar { width: var(--sidebar-w); border-right: var(--border-w) solid var(--border); }
-#gitpanel { position: relative; width: var(--gitpanel-w); border-left: var(--border-w) solid var(--border); overflow: auto; }
-/* The panel's drag edge, like the terminal's; only on a docked panel. */
-.panel-drag { display: none; position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; z-index: 5; touch-action: none; }
-.panel-drag:hover, .panel-drag:active, body.panel-dragging .panel-drag { background: var(--sel); }
-body.panel-dragging { cursor: col-resize; user-select: none; }
-@media (min-width: 1101px) { .panel-drag { display: block; } }
 #settingsnav {
   flex: none;
   width: var(--settingsnav-w);
@@ -336,7 +329,7 @@ body.panel-dragging { cursor: col-resize; user-select: none; }
 .settingsnav-list a:hover { color: var(--fg); background: var(--bg-3); }
 .settingsnav-list a.current { color: var(--fg); background: var(--sel); }
 /* .mid is a container so the thread header can drop its button labels
-   when the side panel is widened, the same way it does on a phone. */
+   when the column is narrow, the same way it does on a phone. */
 .mid { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container: mid / inline-size; }
 @container mid (max-width: 760px) {
   .hide-sm { display: none; }
@@ -1386,93 +1379,12 @@ body.scrolled-up .jump { display: inline-flex; }
 .usage-empty { padding: 32px 8px !important; text-align: center !important; }
 .usage-note { margin-top: 12px; font-size: 0.82em; }
 
-/* ---- git ---- */
+/* ---- diffs ---- */
 
-.side-head { display: flex; align-items: center; gap: var(--gap); padding: 10px var(--pad); border-bottom: var(--border-w) solid var(--border); font-weight: 600; flex: none; }
-.panel-tabs { display: flex; gap: 2px; }
-.panel-tab { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-dim); background: transparent; border: 0; border-radius: var(--radius-sm); padding: 4px 6px; cursor: pointer; }
-.panel-tab:hover { color: var(--fg); background: var(--bg-3); }
-.panel-tab.active { color: var(--fg); background: var(--sel); }
-/* A long branch name shortens instead of wrapping under its icon. */
-.git-branch { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
-.git-sum { flex: none; }
-#git-files, #file-explorer { flex: none; max-height: 42%; overflow: auto; border-bottom: var(--border-w) solid var(--border); }
-#git-detail { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-.files li a { display: flex; gap: 8px; align-items: center; padding: 6px var(--pad); min-height: 34px; }
-.files li a:hover { background: var(--bg-3); }
-.files li.current a { background: var(--sel); }
-.files .code { width: 2ch; flex: none; font-family: var(--font-mono); }
-.explorer-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 4px var(--pad); background: var(--bg-3); border-bottom: var(--border-w) solid var(--border); }
-.explorer-head .ellipsis { flex: 1; font-size: 0.85em; }
-.files.explorer .explorer-kind { display: inline-flex; color: var(--accent); }
-.files.explorer a > .ellipsis { flex: 1; }
-/* Tree: each level indents by --depth; folders are <details> whose
-   summary row looks like a file row. */
-.tree li a, .tree-dir > summary { padding-left: calc(var(--pad) + var(--depth, 0) * 14px); }
-.tree-dir > summary { list-style: none; display: flex; gap: 8px; align-items: center; padding-top: 6px; padding-bottom: 6px; padding-right: var(--pad); min-height: 34px; cursor: pointer; }
-.tree-dir > summary::-webkit-details-marker { display: none; }
-.tree-dir > summary:hover { background: var(--bg-3); }
-.tree-dir > summary > .ellipsis { flex: 1; }
-.tree-caret { color: var(--fg-dim); transition: transform 0.12s; margin-left: -4px; }
-.tree-dir[open] > summary .tree-caret { transform: rotate(90deg); }
-.tree-upload { visibility: hidden; margin: -4px 0; }
-.tree-dir > summary:hover .tree-upload { visibility: visible; }
-@media (hover: none) { .tree-upload { visibility: visible; } }
-.tree li a { padding-left: calc(var(--pad) + var(--depth, 0) * 14px + 12px); }
-.tree-loading { padding: 4px var(--pad) 4px calc(var(--pad) + var(--depth, 0) * 14px + 12px); }
-body.panel-wide { --gitpanel-w: min(62vw, 960px); }
-.pr-list { flex: 1; min-height: 0; overflow: auto; border-bottom: var(--border-w) solid var(--border); }
-.pr-open { display: flex; align-items: center; gap: 8px; padding: 8px var(--pad); border-bottom: var(--border-w) solid var(--border); background: var(--bg-3); }
-.pr-open .dim { display: inline-flex; align-items: center; gap: 4px; }
-.prs li a { display: flex; gap: 8px; align-items: center; padding: 7px var(--pad); min-height: 44px; }
-.prs li a:hover { background: var(--bg-3); }
-.prs li.current a { background: var(--sel); }
 .pr-mark { flex: none; display: inline-flex; }
-.pr-text { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.3; }
-.pr-badges { display: inline-flex; gap: 4px; flex: none; }
-.pr-badge { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; background: var(--bg-4); color: var(--fg-dim); font-size: 0.75em; }
-.pr-badge.text { display: inline-flex; align-items: center; gap: 3px; }
-.pr-badge.err { color: var(--err); background: color-mix(in srgb, var(--err) 16%, transparent); }
-.pr-badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
-.pr-badge.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
-.pr-detail { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
-.pr-detail-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 4px var(--pad); background: var(--bg-3); border-bottom: var(--border-w) solid var(--border); }
-.pr-detail-body { padding: 10px var(--pad) 20px; display: flex; flex-direction: column; gap: 10px; }
-.pr-title { font-size: 1.05em; margin: 0; line-height: 1.35; }
-.pr-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; }
-.pr-meta > span { display: inline-flex; align-items: center; gap: 4px; }
-.pr-facts { display: flex; flex-wrap: wrap; gap: 5px; }
-.pr-fact { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; border: var(--border-w) solid var(--border); background: var(--bg-3); font-size: 0.82em; color: var(--fg-dim); }
-.pr-fact.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
-.pr-fact.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, var(--border)); }
-.pr-fact.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
-.pr-attention { border: var(--border-w) solid color-mix(in srgb, var(--err) 55%, var(--border)); border-radius: var(--radius); background: var(--bg-2); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
-.pr-attention > header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-weight: 600; }
-.pr-attention > header > .err { display: inline-flex; align-items: center; gap: 5px; }
-.pr-card { border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-3); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; font-size: 0.92em; }
-.pr-card.resolved { opacity: 0.75; margin-top: 6px; }
-.pr-card-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.pr-card-head a.mono { flex: 1; color: var(--accent); }
-.pr-card-head a.mono:hover { text-decoration: underline; }
-.pr-card.pr-check { flex-direction: row; align-items: center; gap: 8px; }
-.pr-card.pr-check .ellipsis { flex: 1; }
-.pr-card.pr-check a:hover { text-decoration: underline; }
-.pr-comment { display: flex; flex-direction: column; gap: 2px; padding-left: 4px; border-left: 2px solid var(--border); }
-.pr-md { line-height: 1.5; overflow-wrap: anywhere; }
-.pr-md pre { font-size: 0.9em; }
-.pr-desc { padding: 6px 0 0; font-size: 0.92em; }
-.pr-actions { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 2px; }
-.pr-section > summary { cursor: pointer; padding: 6px 0; font-weight: 600; list-style: none; display: flex; gap: 6px; align-items: baseline; }
-.pr-section > summary::-webkit-details-marker { display: none; }
-.pr-section > summary::before { content: "▸"; color: var(--fg-dim); font-size: 0.8em; }
-.pr-section[open] > summary::before { content: "▾"; }
-.pr-rows li { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 4px; font-size: 0.92em; }
-.pr-rows li .ellipsis { flex: 1; }
-.pr-rows li a:hover { text-decoration: underline; }
-.diff-head { padding: 6px var(--pad); border-top: var(--border-w) solid var(--border); border-bottom: var(--border-w) solid var(--border); background: var(--bg-3); }
 /* Lines are block spans with a newline between them for copying; the
    pre's own white-space is normal so those newlines do not render as
-   empty lines. The spans wrap instead of scrolling out of the panel. */
+   empty lines. The spans wrap instead of scrolling out of the box. */
 .diff { padding: 4px 0; overflow: auto; font-size: 0.85em; flex: 1; white-space: normal; }
 /* A wrapped line hangs past its +/- mark, so the mark column stays clear. */
 .diff span { display: block; padding: 0 var(--pad) 0 calc(var(--pad) + 1ch); text-indent: -1ch; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1480,20 +1392,6 @@ body.panel-wide { --gitpanel-w: min(62vw, 960px); }
 .diff .del { background: var(--del-bg); color: var(--err); }
 .diff .hunk { color: var(--accent); }
 .diff .dim { color: var(--fg-dim); }
-.git-detail-actions { display: flex; align-items: center; gap: 6px; padding: 6px var(--pad); border-bottom: var(--border-w) solid var(--border); }
-.git-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-/* Editor layers: the gutter, the highlighted copy and the textarea share
-   one font and padding; the textarea scrolls and the others follow it. */
-.editor { position: relative; flex: 1; min-height: 240px; display: flex; overflow: hidden; background: var(--bg); font: 0.85em/1.5 var(--font-mono); tab-size: 4; }
-.editor-gutter { flex: none; width: 3.5ch; padding: var(--pad) 0; text-align: right; color: var(--fg-dim); user-select: none; background: var(--bg-2); border-right: var(--border-w) solid var(--border); overflow: hidden; padding-right: 6px; box-sizing: content-box; will-change: transform; }
-.editor-hl, .file-editor { position: absolute; top: 0; left: calc(3.5ch + 7px); right: 0; bottom: 0; margin: 0; padding: var(--pad); font: inherit; line-height: inherit; tab-size: inherit; white-space: pre; word-break: normal; overflow-wrap: normal; }
-.editor-hl { pointer-events: none; color: var(--fg); will-change: transform; overflow: visible; width: max-content; min-width: 100%; height: max-content; min-height: 100%; }
-.file-editor { resize: none; border: 0; outline: none; background: transparent; color: transparent; caret-color: var(--fg); overflow: auto; }
-/* The editor's own text is transparent over the highlighted copy; a
-   selection must not paint it, or every selected word shows twice. */
-.file-editor::selection { background: var(--select); color: transparent; }
-.git-editor-actions { display: flex; align-items: center; gap: 6px; padding: 8px var(--pad); border-top: var(--border-w) solid var(--border); }
-.git-editor.dirty .btn.primary { box-shadow: 0 0 0 2px var(--sel); }
 /* highlight.js classes in the theme's colours. */
 .hljs-comment, .hljs-quote { color: var(--fg-dim); font-style: italic; }
 .hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-meta { color: var(--accent); }
@@ -1659,23 +1557,11 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 }
 @media (max-width: 1100px) {
   #settingsnav { display: none; }
-  .wide-toggle { display: none; }
   .settings-menu { display: flex; }
-  #gitpanel { position: absolute; top: 0; bottom: 0; right: 0; width: min(92vw, 420px); z-index: 10; transform: translateX(100%); transition: transform 0.15s ease-out; box-shadow: var(--shadow); will-change: transform; }
-  #gitpanel.open { transform: none; }
   .usage-overview { grid-template-columns: 1fr; gap: 26px; }
   .usage-summary { display: grid; grid-template-columns: 1fr auto; column-gap: 24px; }
   .usage-summary > strong, .usage-summary > .dim { grid-column: 1; }
   .usage-agents { grid-column: 2; grid-row: 1 / span 3; min-width: 250px; margin-top: 0; }
-}
-@media (min-width: 1101px) {
-  #gitpanel.closed { display: none; }
-}
-@media (max-width: 600px) {
-  /* On a phone the panel takes the whole width: a sliver of thread
-     beside it only crowds the review buttons. Close is in the header and
-     a swipe right still pushes it out. */
-  #gitpanel { width: 100%; }
 }
 @media (max-width: 900px) {
   /* will-change keeps the drawer on its own layer, so a swipe moves it without repainting the shadow every frame. */
@@ -1700,15 +1586,6 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   .head-more .btn { min-height: var(--tap); }
   /* Touch targets: the 24px controls are a coin flip under a thumb. */
   .btn.tiny { min-height: 36px; min-width: 36px; }
-  .panel-tab { min-height: var(--tap); padding: 4px 8px; }
-  /* The tabs and the buttons share the first row, so close stays on
-     screen; the branch and its counts drop to a row of their own. The
-     zero-height ::after is the line break. */
-  #git-head { flex-wrap: wrap; row-gap: 0; padding-top: 6px; padding-bottom: 6px; }
-  #git-head::after { content: ""; order: 1; flex-basis: 100%; }
-  #git-head > .git-branch, #git-head > .git-sum { order: 2; padding: 2px 0 4px; }
-  #git-head > .git-branch { flex: 0 1 auto; }
-  .files li a, .tree-dir > summary { min-height: var(--tap); }
   .rule-x { width: 28px; height: 28px; }
   /* .btn.icon's 32px minimum outranks a plain class, so these name it. */
   .side-brand .btn.icon, .side-search .btn.icon, .side-foot .btn.icon, .btn.icon.palette-close, .composer .btn.icon.attach-btn { min-width: var(--tap); min-height: var(--tap); }
@@ -1723,8 +1600,6 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   .term-head { min-height: 40px; }
   .term-drag { top: -10px; height: 20px; }
   .pr-chip-btn .pr-chip { height: 28px; }
-  /* 16px again: the editor's textarea inherits the panel's smaller font. */
-  .editor { font-size: 16px; }
   /* The home indicator and, in landscape, the notch. */
   #termpanel { padding-bottom: env(safe-area-inset-bottom); }
   body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
@@ -1827,122 +1702,12 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .pr-chip-btn { border: 0; background: transparent; padding: 0; cursor: pointer; display: inline-flex; }
 .pr-chip-btn .pr-chip { height: 22px; font-size: 0.82em; }
 .pr-chip-btn:hover .pr-chip { filter: brightness(1.2); }
+/* A sidebar row's chip opens the PR, not the thread (views.PRChipLink). */
+.pr-chip-link { display: inline-flex; cursor: pointer; }
+.pr-chip-link:hover .pr-chip { filter: brightness(1.2); }
 .accent { color: var(--accent); }
 
-/* The pull requests page, like T3 Code's: a search box with Sort and
-   Filters, the Authored and Others groups under a rule, one two-line row
-   per PR with its size and age on the right. A PR opens beside the list
-   (over it on a phone). */
-.prs-page { display: flex; flex-direction: column; min-height: 0; }
-.prs-split { flex: 1; min-height: 0; display: flex; }
-.prs-listpane { flex: 1; min-width: 0; overflow: auto; }
-.prs-detailpane { display: none; min-width: 0; }
-.prs-split.open .prs-detailpane { display: flex; flex: 1.25; overflow: auto; border-left: var(--border-w) solid var(--border); }
-.prs-inner { max-width: 1100px; margin: 0 auto; padding: 14px 24px 40px; }
-.prs-split.open .prs-inner { padding: 12px 14px 32px; }
-.prs-toolbar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 8px; margin: -14px -4px 6px; padding: 14px 4px 8px; background: var(--bg); }
-.prs-search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-2); color: var(--fg-dim); cursor: text; }
-.prs-search:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
-.prs-search input { flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; outline: none; color: var(--fg); }
-.prs-pick { position: relative; flex: none; }
-.btn.prs-tool { height: 34px; min-height: 34px; padding: 0 11px; gap: 6px; border-color: var(--border); background: var(--bg-2); color: var(--fg); font-size: 0.92em; font-weight: 600; border-radius: var(--radius-sm); }
-.btn.icon.prs-tool { width: 34px; padding: 0; }
-.btn.prs-tool:hover, .btn.prs-tool.open { background: var(--bg-3); }
-.btn.prs-tool.on { background: var(--sel); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-.prs-menu { top: calc(100% + 6px); bottom: auto; left: auto; right: 0; min-width: 210px; width: max-content; }
-.prs-filter-menu { width: 290px; }
-.prs-menu .pick-list { gap: 0; }
-.prs-menu .opt { min-height: 30px; padding: 4px 8px; }
-.prs-menu .opt-ctx { max-width: 120px; }
-.prs-menu-rule { height: 1px; margin: 4px 2px; background: var(--line-soft); }
-.prs-menu-back { color: var(--fg-dim); }
-.prpage-list { display: flex; flex-direction: column; }
-.prs-group-head { display: flex; align-items: center; gap: 6px; margin: 12px 0 4px; color: var(--fg-dim); font-size: 0.86em; }
-.prs-group-head::after { content: ""; flex: 1; height: 1px; margin-left: 6px; background: var(--border); }
-.prs-group[hidden], .prb-row[hidden] { display: none; }
-.prs-rows { display: flex; flex-direction: column; }
-.prb-main { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--radius-sm); }
-.prb-main:hover { background: var(--bg-3); }
-.prb-row.current .prb-main { background: var(--sel); }
-.prb-main > .pr-mark { align-self: flex-start; margin-top: 3px; }
-.prb-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.prb-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.prb-num { flex: none; font-size: 0.82em; }
-.prb-title { flex: 0 1 auto; }
-.prb-check, .prb-flag, .prb-comments { flex: none; display: inline-flex; align-items: center; gap: 3px; }
-.prb-author { flex: none; }
-.pr-avatar { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--bg-4); object-fit: cover; font-size: 10px; }
-.prb-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 0.8em; }
-.pr-mark.ok { color: var(--ok); }
-.pr-mark.err { color: var(--err); }
-.pr-mark.merged { color: var(--merged); }
-.prs-none { padding: 24px 8px; text-align: center; }
-/* The list's stand-in while GitHub is read: bars the shape of a row,
-   pulsing gently. */
-.prs-skeleton .prb-main:hover { background: none; }
-.sk { display: block; height: 10px; border-radius: 5px; background: var(--bg-3); animation: sk-pulse 1.4s ease-in-out infinite; }
-.prb-text > .sk { height: 12px; margin: 2px 0; }
-.prb-text > .sk-sub { height: 9px; }
-.sk-dot { flex: none; width: 14px; height: 14px; border-radius: 50%; }
-.sk-side { width: 52px; height: 9px; }
-.sk-side.short { width: 26px; }
-@keyframes sk-pulse { 50% { opacity: 0.45; } }
-@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
-/* The detail beside the list: a bar with the repository and number,
-   then T3 Code's head and the Summary and Timeline tabs. */
-.prpage-detail { flex: 1; min-width: 0; overflow: visible; }
-.prd-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 4px 10px; background: var(--bg); border-bottom: var(--border-w) solid var(--border); }
-.prd-bar .pr-thread { max-width: 40%; }
-.prd-repo { display: inline-flex; align-items: center; gap: 5px; font-size: 0.88em; }
-.prd-repo:hover { color: var(--fg); }
-.prd-head { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; border-bottom: var(--border-w) solid var(--border); }
-.prd-head .pr-title { font-size: 1.2em; font-weight: 600; }
-.prd-author { color: var(--fg); font-weight: 600; }
-.prd-branches { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.prd-branches > span { display: inline-flex; align-items: center; gap: 4px; }
-.prd-base { color: var(--warn); }
-.prd-tabs { align-self: flex-start; }
-.pr-tab { display: flex; flex-direction: column; gap: 10px; }
-.pr-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-3); }
-.pr-pick .in { min-height: 30px; padding: 2px 8px; }
-.pr-card-actions { display: inline-flex; gap: 2px; margin: -4px 0 -4px auto; flex: none; }
-.pr-card-head .ellipsis { min-width: 0; }
-.pr-thread { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 8px 2px 6px; border-radius: 999px; border: var(--border-w) solid var(--border); background: var(--bg-3); font-size: 0.85em; color: var(--fg); }
-.pr-thread:hover { background: var(--bg-4); }
-.pr-thread .glyph { display: inline-flex; }
-.pr-thread .ellipsis { max-width: 32ch; }
-@media (max-width: 900px) {
-  /* On a phone the open PR takes the page and the list waits behind it. */
-  .prs-split.open .prs-listpane { display: none; }
-  .prs-split.open .prs-detailpane { border-left: 0; }
-  /* The menus are the phone's bottom sheets, as every pick-menu is. */
-  .prs-menu, .prs-filter-menu { top: auto; bottom: calc(8px + env(safe-area-inset-bottom)); left: 8px; right: 8px; width: auto; }
-  .prs-menu .opt { min-height: var(--tap); }
-  .prs-inner, .prs-split.open .prs-inner { padding: 10px 10px 32px; }
-  .prs-toolbar { margin: -10px -4px 4px; padding: 10px 4px 8px; }
-  .btn.prs-tool, .prs-search { height: var(--tap); min-height: var(--tap); }
-  .btn.icon.prs-tool { width: var(--tap); }
-  .prs-search input { font-size: 16px; }
-  .prb-main { padding: 9px 6px; }
-}
-@media (max-width: 480px) {
-  .hide-xs { display: none; }
-  .btn.prs-tool { padding: 0; width: var(--tap); }
-}
 .pr-unlink { margin-left: -4px; }
-
-/* ---- review card: act on a pull request from the detail ---- */
-.pr-review { gap: 8px; }
-.pr-review-text { width: 100%; box-sizing: border-box; resize: vertical; min-height: 56px; }
-.pr-review .pr-actions { align-items: center; }
-.pr-merge-row select.in { min-height: 32px; padding-top: 2px; padding-bottom: 2px; }
-.pr-auto { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
-.pr-auto input { margin: 0; }
-.pr-merge-note { display: inline-flex; align-items: center; gap: 4px; }
-@media (max-width: 900px) {
-  .pr-review .btn { min-height: var(--tap); }
-  .pr-merge-row select.in { min-height: var(--tap); }
-}
 
 /* The composer's slash menu (static/slash.js): a pick-menu the width of
    the composer, above the prompt, filled from /api/threads/{id}/commands. */
@@ -2105,13 +1870,6 @@ details.item.auto-prompt .bubble { opacity: 0.85; max-width: 100%; }
 .quote-btn { position: fixed; z-index: 30; box-shadow: var(--shadow); background: var(--menu); }
 .quote-btn[hidden] { display: none; }
 
-/* The panel's path row and rendered previews. */
-.diff-head { display: flex; align-items: center; gap: 6px; }
-.diff-head .ellipsis { flex: 1; min-width: 0; }
-.file-preview { flex: 1; min-height: 60vh; width: 100%; border: 0; background: #fff; }
-.file-preview.image { display: flex; align-items: flex-start; justify-content: center; padding: var(--pad); background: var(--bg-2); overflow: auto; }
-.file-preview.image img { max-width: 100%; height: auto; cursor: zoom-in; }
-
 /* The image viewer. */
 .lightbox { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: rgba(8, 9, 11, 0.92); --fg: #e8e8ea; --fg-dim: #a0a0a8; color: var(--fg); }
 .lightbox[hidden] { display: none; }
@@ -2126,8 +1884,6 @@ details.item.auto-prompt .bubble { opacity: 0.85; max-width: 100%; }
 /* Settings > Projects: the chips open downward on a settings page. */
 .project-chips .pick-menu { bottom: auto; top: calc(100% + 8px); left: auto; right: 0; }
 .project-chips .chips { justify-content: flex-end; }
-
-.pr-badge.accent { color: var(--accent); border-color: var(--accent); }
 
 /* The stash button sits in the composer's top right corner, so it takes
    no room from the chips; the prompt leaves space for it. */
@@ -2198,25 +1954,6 @@ button.pending, .btn.pending { cursor: progress; animation: pending-pulse 0.9s e
   body::before { content: ""; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); background: var(--bg); z-index: 50; pointer-events: none; }
 }
 
-/* Find in changes: the box over the changes list, its results, and the
-   matches marked in the diff. */
-.git-find { flex: none; border-bottom: var(--border-w) solid var(--border); }
-.git-find-box { display: flex; align-items: center; gap: 6px; padding: 6px var(--pad); color: var(--fg-dim); }
-.git-find-box .in { flex: 1; min-width: 0; }
-#git-find-results:empty { display: none; }
-#git-find-results { max-height: 40vh; overflow: auto; border-top: var(--border-w) solid var(--border); }
-.find-none { padding: 6px var(--pad); margin: 0; }
-.find-hits { list-style: none; margin: 0; padding: 2px 0 6px; font-size: 0.85em; }
-.find-hits .find-file { padding: 6px var(--pad) 2px; color: var(--fg-dim); }
-.find-hits a { display: flex; gap: 8px; align-items: baseline; padding: 2px var(--pad); cursor: pointer; min-width: 0; }
-.find-hits a:hover, .find-hits a:focus-visible { background: var(--bg-3); }
-.find-line { flex: none; min-width: 4ch; text-align: right; }
-.find-line.op-add { color: var(--ok); }
-.find-line.op-del { color: var(--err); }
-.find-text { flex: 1; min-width: 0; white-space: pre; }
-.find-hits mark, .diff mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inherit; border-radius: 2px; }
-.diff #diff-target { outline: 1px solid var(--warn); outline-offset: -1px; }
-@media (pointer: coarse) { .find-hits a { min-height: var(--tap); align-items: center; } }
 .rename .retitle.busy .ui-icon { animation: spin 1.2s linear infinite; }
 .limit-resets { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 0.85em; flex-wrap: wrap; }
 .pr-watch.on { color: var(--accent); }

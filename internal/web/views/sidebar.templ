@@ -268,13 +268,11 @@ templ Sidebar(d SidebarData) {
 				<button class="btn tiny danger" type="button" data-attr:disabled="!selCount($sel)" title="Delete them for good" data-on:click="confirm('Delete ' + selCount($sel) + ' threads? This cannot be undone.') && @post('/api/bulk/delete?ids=' + selIDs($sel))">@Icon("trash-2", "ui-icon") <span>delete</span></button>
 			</div>
 		</div>
-		// The footer is one row of icons: settings, the pull requests page,
-		// and Usage, Providers and Keys, so each is a click away from any
-		// page. The update badge sits on Providers, where updates are
+		// The footer is one row of icons: settings, Usage, Providers and
+		// Keys, so each is a click away from any page. The update badge sits on Providers, where updates are
 		// installed.
 		<div class="side-foot">
 			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "settings" || d.View == "appearance") } href="/settings" title="Settings: threads, this device, appearance" aria-label="Settings" data-on:click="$nav = false">@Icon("settings", "ui-icon")</a>
-			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "prs") } href="/prs" title="Pull requests assigned to you, waiting for your review, or opened by you" aria-label="Pull requests" data-on:click="$nav = false">@Icon("git-pull-request", "ui-icon")</a>
 			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "usage") } href="/settings/usage" title="Usage" aria-label="Usage" data-on:click="$nav = false">@Icon("chart-no-axes-combined", "ui-icon")</a>
 			<a class={ "btn icon ghost side-quick", templ.KV("current", d.View == "providers") } href="/settings/providers" title={ providersTitle(d.Updates, d.SignedOut) } aria-label="Providers" data-on:click="$nav = false">
 				@Icon("plug", "ui-icon")
@@ -540,7 +538,7 @@ templ ThreadRow(t store.Thread, p store.Project, current bool, showProject bool,
 				}
 				<span class="ellipsis">{ t.Title }</span>
 				if pr.Number > 0 {
-					@PRChip(pr, "")
+					@PRChipLink(pr)
 				}
 				// The mark ends the title line, as in T3, and opens the
 				// hover card (layout's hovertip script) with the tip below.
@@ -610,7 +608,7 @@ templ SettledRow(t store.Thread, p store.Project, current bool, pr store.PRState
 			@ProjMark(p, "")
 			<span class="ellipsis">{ t.Title }</span>
 			if pr.Number > 0 {
-				@PRChip(pr, "")
+				@PRChipLink(pr)
 			}
 			<span class="dim tiny-text row-age" data-ago={ t.UpdatedAt.UTC().Format(time.RFC3339) }>{ ago(t.UpdatedAt) }</span>
 		</a>
@@ -654,6 +652,25 @@ templ PRChip(pr store.PRState, label string) {
 			<span class="pr-chip-label">{ label }</span>
 		}
 	</span>
+}
+
+// PRChipLink is the chip in a sidebar row, which opens the PR on GitHub
+// in a new tab. The row is a link to the thread already and a link may
+// not hold another, so the chip is a span that opens the tab itself and
+// keeps the click from reaching the row.
+templ PRChipLink(pr store.PRState) {
+	<span class="pr-chip-link" role="link" data-href={ prURL(pr) } title={ prChipTitle(pr) + ". Open on GitHub" } data-on:click="evt.preventDefault(); evt.stopPropagation(); window.open(el.dataset.href, '_blank', 'noopener')">
+		@PRChip(pr, "")
+	</span>
+}
+
+// prURL is the PR's page on GitHub: the URL the poll or the link stored,
+// or one built from the repository and number before either has it.
+func prURL(pr store.PRState) string {
+	if pr.URL != "" {
+		return pr.URL
+	}
+	return "https://github.com/" + pr.Repo + "/pull/" + strconv.Itoa(pr.Number)
 }
 
 // prWord is the state of a pull request in one or two words.

@@ -5,8 +5,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/starfederation/datastar-go/datastar"
 )
 
 func TestSetSidebarModeCookies(t *testing.T) {
@@ -32,31 +30,6 @@ func TestSetSidebarModeCookies(t *testing.T) {
 	}
 	if got := cookies(`{"dense":true}`, ""); got["sidebar"] != "" || got["dense"] != "1" {
 		t.Errorf("dense only, no cookie yet: %v", got)
-	}
-}
-
-// A handler that peeks at the signals must still find its own in the
-// same POST body.
-func TestPeekSignalsLeavesTheBody(t *testing.T) {
-	body := `{"tid":"abc","_file":"package main\n","prBody":"hello"}`
-	r := httptest.NewRequest(http.MethodPost, "/api/git/p1/file", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	var first struct {
-		TID string `json:"tid"`
-	}
-	peekSignals(r, &first)
-	if first.TID != "abc" {
-		t.Fatalf("tid = %q", first.TID)
-	}
-	var second struct {
-		File string `json:"_file"`
-		Body string `json:"prBody"`
-	}
-	if err := datastar.ReadSignals(r, &second); err != nil {
-		t.Fatal(err)
-	}
-	if second.File != "package main\n" || second.Body != "hello" {
-		t.Fatalf("second read lost the signals: %+v", second)
 	}
 }
 

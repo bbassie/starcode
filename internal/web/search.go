@@ -43,16 +43,6 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := views.SearchData{Query: q, Threads: threads, Hits: hits, Projects: byID, Looks: s.agentLooks()}
-	// On a thread, file names of its project are searchable too; a hit
-	// opens the file in the side panel's editor.
-	if view == "thread" && q != "" {
-		if t, err := s.App.Store.Thread(ctx, threadID); err == nil {
-			if p, ok := byID[t.ProjectID]; ok {
-				d.Files = gitx.MatchFiles(s.projectFileList(ctx, p), q, 8)
-				d.FileProject = p
-			}
-		}
-	}
 	for _, c := range s.commands(ctx, view, threadID, store.Named(ps)) {
 		if q == "" || strings.Contains(strings.ToLower(c.Label), strings.ToLower(q)) {
 			d.Commands = append(d.Commands, c)
@@ -103,7 +93,6 @@ func (s *Server) commands(ctx context.Context, view, threadID string, ps []store
 		}
 		out = append(out,
 			views.Command{Label: "Toggle terminal", Icon: "terminal", Action: "$term = !$term", Key: views.Key("terminal")},
-			views.Command{Label: "Toggle changes panel", Icon: "git-compare-arrows", Action: "$git = !$git", Key: views.Key("changes")},
 			views.Command{Label: "Restart agent session (load new skills, plugins and MCP servers)", Icon: "rotate-cw", Action: "@post('/api/threads/" + t.ID + "/restart-session')"},
 		)
 		// The sort above put the thread's project first.
@@ -140,8 +129,8 @@ func projectQuery(id string) string {
 	return "?p=" + id
 }
 
-// projectFileList is gitx.ListFiles behind a short cache: the palette
-// asks on every keystroke.
+// projectFileList is gitx.ListFiles behind a short cache: the composer's
+// file completion asks on every keystroke.
 func (s *Server) projectFileList(ctx context.Context, p store.Project) []string {
 	s.files.mu.Lock()
 	if s.files.items == nil {
@@ -153,7 +142,7 @@ func (s *Server) projectFileList(ctx context.Context, p store.Project) []string 
 		return e.files
 	}
 	// Listing runs outside the lock so one slow tree does not hold up
-	// the palette for other projects.
+	// the completion for other projects.
 	e = fileListEntry{at: time.Now(), files: gitx.ListFiles(ctx, p.Path)}
 	s.files.mu.Lock()
 	s.files.items[p.Path] = e

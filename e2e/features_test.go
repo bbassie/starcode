@@ -4,42 +4,8 @@ package e2e
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
-
-	"github.com/go-rod/rod/lib/input"
 )
-
-// TestFindInChanges searches the changed files from the changes tab:
-// Ctrl+F lands in the box, the hits list under their file, and a hit
-// opens that file's diff at the line with the match marked.
-func TestFindInChanges(t *testing.T) {
-	e := newEnv(t)
-	id := e.thread()
-	os.WriteFile(filepath.Join(e.dir, "README.md"), []byte("# proj\n\nA needle here.\n"), 0o644)
-	os.WriteFile(filepath.Join(e.dir, "new.txt"), []byte("one\nNeedle two\n"), 0o644)
-	p := e.page("/threads/"+id, false)
-	wait(p, `() => document.getElementById('gitpanel').classList.contains('open')`)
-	p.MustElement("#git-files")
-	p.MustElement("textarea.prompt").MustFocus()
-	p.KeyActions().Press(input.ControlLeft).Type('f').MustDo()
-	wait(p, `() => document.activeElement && document.activeElement.id === 'git-find-in'`)
-	p.MustElement("#git-find-in").MustInput("needle")
-	p.MustElementR(".find-hits .find-file", "README.md")
-	p.MustElementR(".find-hits .find-file", "new.txt")
-	click(p.MustElementR(".find-hits a", "two"))
-	wait(p, `() => { const t = document.getElementById('diff-target'); return t && t.querySelector('mark') && t.textContent.includes('Needle two'); }`)
-
-	// With the panel closed, Ctrl+F is the browser's again.
-	click(p.MustElement("#gitpanel .side-head button[aria-label='Close changes panel']"))
-	wait(p, `() => !document.getElementById('gitpanel').classList.contains('open')`)
-	p.MustElement("textarea.prompt").MustFocus()
-	p.KeyActions().Press(input.ControlLeft).Type('f').MustDo()
-	if !p.MustEval(`() => document.activeElement.classList.contains('prompt')`).Bool() {
-		t.Error("Ctrl+F took the focus with the panel closed")
-	}
-}
 
 // TestRetitle has the agent write a title from the conversation through
 // the rename box's button (the fake agent answers without a model).

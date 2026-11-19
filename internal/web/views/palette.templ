@@ -2,21 +2,13 @@ package views
 
 import (
 	"fmt"
-	pathpkg "path"
 	"slices"
 	"starcode/internal/domain"
 	"starcode/internal/keys"
 	"starcode/internal/store"
-	"strconv"
 	"strings"
 	"unicode"
 )
-
-// openFile is the expression that shows path in the side panel's editor:
-// the panel opens on the files tab with the file loaded.
-func openFile(p store.Project, path string) string {
-	return "$git = true; $panelTab = 'files'; $gitPath = " + strconv.Quote(path) + "; $gitEdit = false; @query('/api/git/" + p.ID + "/file?path=" + urlQuery(path) + "')"
-}
 
 // Command is one action row in the palette. Action is a Datastar
 // expression; Href a plain link. Exactly one is set.
@@ -37,9 +29,6 @@ type SearchData struct {
 	Hits     []store.SearchHit
 	Projects map[string]store.Project
 	Looks    map[string]AgentLook
-	// Files are paths in FileProject that match; only on a thread page.
-	Files       []string
-	FileProject store.Project
 }
 
 // Palette is the Ctrl+K dialog. It lives in the layout; the results box
@@ -118,18 +107,6 @@ templ PaletteResults(d SearchData) {
 				</a>
 			}
 		}
-		if len(d.Files) > 0 {
-			<div class="palette-head">Files in { d.FileProject.Name }</div>
-			for _, f := range d.Files {
-				<button type="button" class="opt" data-on:click={ "$palette = false; " + openFile(d.FileProject, f) }>
-					@Icon("file", "ui-icon opt-icon")
-					<span class="opt-text">
-						<span class="opt-name"><span class="ellipsis">{ pathpkg.Base(f) }</span></span>
-						<span class="opt-desc">@Highlight(f, d.Query)</span>
-					</span>
-				</button>
-			}
-		}
 		if len(d.Hits) > 0 {
 			<div class="palette-head">Messages</div>
 			for _, h := range d.Hits {
@@ -146,7 +123,7 @@ templ PaletteResults(d SearchData) {
 				</a>
 			}
 		}
-		if len(d.Commands) == 0 && len(d.Threads) == 0 && len(d.Hits) == 0 && len(d.Files) == 0 {
+		if len(d.Commands) == 0 && len(d.Threads) == 0 && len(d.Hits) == 0 {
 			<p class="dim pad">Nothing matches "{ d.Query }".</p>
 		}
 	</div>
@@ -253,8 +230,7 @@ type Hotkey struct {
 	// Most do not: the shell has its own meaning for Ctrl+K and friends.
 	Term bool
 	// Skip is a selector: the key does nothing while the focus is inside
-	// a match and keeps its usual meaning there (Ctrl+Z in a text box,
-	// Ctrl+S in the file editor).
+	// a match and keeps its usual meaning there (Ctrl+Z in a text box).
 	Skip string
 	// When is a selector: the key only counts while an element matching
 	// it is on screen, and keeps the browser's meaning otherwise.
@@ -291,8 +267,6 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 		hk = append(hk,
 			Hotkey{Combo: Key("thread-new"), Label: "New thread in " + t.Project.Name, Action: "@post('/api/projects/" + t.Project.ID + "/threads')"},
 			Hotkey{Combo: Key("terminal"), Label: "Toggle terminal", Action: "$term = !$term", Term: true},
-			Hotkey{Combo: Key("changes"), Label: "Toggle changes panel", Action: "$git = !$git", Term: true},
-			Hotkey{Combo: Key("find-changes"), Label: "Find in changes", Action: "const f = document.getElementById('git-find-in'); f.focus(); f.select()", When: "#gitpanel.open #git-find-in"},
 			Hotkey{Combo: Key("prompt"), Label: "Focus the prompt", Action: "promptFocus()", Term: true},
 			// The header's button, which holds the thread's folder.
 			Hotkey{Combo: Key("vscode"), Label: "Open in VS Code", Action: "document.querySelector('#mainhead .vscode-open')?.click()"},
@@ -306,14 +280,13 @@ func Hotkeys(p Page, parts Parts) []Hotkey {
 		hk = append(hk, Hotkey{Combo: Key("thread-new"), Label: "New thread in " + p.Name, Action: "@post('/api/projects/" + p.ID + "/threads')"})
 	}
 	hk = append(hk,
-		Hotkey{Combo: Key("prs"), Label: "Pull requests", Action: "location.href = '/prs'"},
 		Hotkey{Combo: Key("settings"), Label: "Settings", Action: "location.href = '/settings'"},
 		// The newest undo toast's button; nothing when none is up.
 		Hotkey{Combo: Key("undo"), Label: "Undo the last settle, unpin or snooze", Action: "document.querySelector('#toast .toast-undo')?.click()", Skip: "input, textarea, select, [contenteditable]"},
 	)
 	if p.View == "thread" || p.View == "home" {
 		hk = append(hk,
-			Hotkey{Combo: Key("stash"), Label: "Stash the prompt, or bring one back", Action: "document.querySelector('form.composer .stash-btn')?.click()", Skip: ".editor, .git-editor"},
+			Hotkey{Combo: Key("stash"), Label: "Stash the prompt, or bring one back", Action: "document.querySelector('form.composer .stash-btn')?.click()"},
 			Hotkey{Combo: Key("effort-up"), Label: "More reasoning effort", Action: "effortStep(1)"},
 			Hotkey{Combo: Key("effort-down"), Label: "Less reasoning effort", Action: "effortStep(-1)"},
 		)

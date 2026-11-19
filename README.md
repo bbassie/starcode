@@ -1,6 +1,6 @@
 # starcode
 
-A web console for coding agents, in one Go binary. Point it at your project folders, start threads with Claude Code or Codex, watch them work, answer their permission prompts, and read the diff they leave behind. It runs on the machine where the code lives and the browser can be anywhere, a phone included.
+A web console for coding agents, in one Go binary. Point it at your project folders, start threads with Claude Code or Codex, watch them work, answer their permission prompts, and read the diffs of their edits. It runs on the machine where the code lives and the browser can be anywhere, a phone included.
 
 I built it because I wanted something like [T3 Code](https://github.com/pingdotgg/t3code) that I could run on a headless box and open from my phone, without a Node toolchain on the server. Go + [templ](https://templ.guide) + [Datastar](https://data-star.dev). No bundler, no npm; the only code generator is `templ generate`.
 
@@ -20,12 +20,12 @@ I built it because I wanted something like [T3 Code](https://github.com/pingdotg
 - Tool calls read as one line each, with an icon for the kind of call and the file, command or search in words. So do prompts starcode or another thread sent (a PR that changed, a child's reply, a message from another agent, a snooze that ended), which open to the whole message. Edits open as diffs, and a turn ends with a card of the files its edit calls changed and their line counts. While a turn runs, two or more steps in a row fold under a line that says what the agent is doing. Once it is done, everything before its last reply folds under one "Worked for" line, so the prompt, the reply and the files stay in view. A picture a call gave the agent (Claude reading a screenshot, an MCP tool's screenshot, an image Codex looked at or made) shows on the call; starcode keeps a copy, so it is still there after the file is gone.
 - Approvals wait as cards under the transcript, with "allow for session" rules and shortcuts for the oldest waiting one. Once answered, the card goes and the call says what you decided; a question's answers stay in the transcript.
 - Claude threads have Claude Code's auto mode, where a classifier allows safe actions and blocks risky ones instead of asking. Codex threads have auto-review, where a reviewing agent decides on each request to leave the sandbox. A running subagent has a stop button that ends it alone; the turn goes on with what it had.
-- A side panel with the git changes, a file tree and an editor (HTML, PDF and images open rendered), and a terminal under the transcript that survives reloads. Ctrl+F there searches every changed file's diff.
-- Pull requests: threads link to the PR they open, the header shows its state, and one page lists your pull requests and everyone else's that involve you or sit in your projects' repositories, open and done, with search, filters and orders like T3 Code's; a row opens the PR beside the list. A thread can watch its PR: when a check fails or they all pass, someone else comments, or the branch conflicts, the agent gets a prompt saying so.
+- A terminal under the transcript that survives reloads.
+- Pull requests: threads link to the PR they open, and the header and the sidebar row show its state as a badge that opens the PR on GitHub. A thread whose PR merges settles itself, unless Settings > Threads turns that off. A thread can also watch its PR: when a check fails or they all pass, someone else comments, or the branch conflicts, the agent gets a prompt saying so.
 - Agents get starcode as tools (MCP server `starcode`). An agent can rename its thread, link and watch its PR, snooze it with a prompt for later ("check CI in 20 minutes"), schedule prompts, settle threads that are done (say, the ones whose PR merged), find threads by what was said in them, and ask for your attention. It can also start threads of its own, which show under its thread in the sidebar. A child gets the parent's permission mode at most. When it finishes, it notifies you itself, and its reply goes to the parent along with the next prompt the parent gets, so the parent doesn't run a turn just to repeat it. An agent that needs the result to carry on asks for `report: now` and gets a prompt as soon as the child is done; children that finish within a few seconds of each other arrive in one prompt. Turn the tools off under Settings > Threads.
 - Usage and plan limits per CLI install, read from the CLIs' own transcripts. A Claude plan with banked resets shows them, with a button that spends one.
 - A big conversation left idle for over an hour compacts before the next prompt goes out, unless you turn that off on the chip above the composer. The rename box can have the agent's small model write a title from the conversation.
-- Works on a phone: swipes for the panels and a QR code to sign a phone in. Notifications come over Web Push, so they reach a phone with starcode closed: when a turn ends, when an approval or a question waits, and when the agent calls `notify`. A thread that is on screen in a page you are looking at sends none, and each thread's menu chooses between always, only when it needs you, and never.
+- Works on a phone: a swipe brings in the thread list, and a QR code to sign a phone in. Notifications come over Web Push, so they reach a phone with starcode closed: when a turn ends, when an approval or a question waits, and when the agent calls `notify`. A thread that is on screen in a page you are looking at sends none, and each thread's menu chooses between always, only when it needs you, and never.
 
 ## Run
 
@@ -105,14 +105,14 @@ internal/agent/codex        Codex app-server JSON-RPC adapter
 internal/agent/fake         scripted agent for UI development
 internal/providers          CLI instances: providers.json, adapter construction
 internal/app                commands (write side) and the session pump
-internal/gitx               git status, diff and GitHub via exec
+internal/gitx               git and GitHub (gh) via exec
 internal/term               pty shells for the terminal panel
 internal/keys               shortcut actions, defaults and overrides
 internal/tlsx               the built-in certificate authority
 internal/usage              cost and token scanning of the CLIs' transcripts
 internal/web                router, auth, SSE read side, command endpoints
 internal/web/views          templ components
-internal/web/static         app.css and the vendored JS (datastar, xterm, highlight.js)
+internal/web/static         app.css and the vendored JS (datastar, xterm)
 e2e                         browser tests with Rod (build tag e2e)
 ```
 

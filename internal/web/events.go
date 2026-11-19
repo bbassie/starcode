@@ -13,7 +13,6 @@ import (
 
 	"starcode/internal/bus"
 	"starcode/internal/domain"
-	"starcode/internal/gitx"
 	"starcode/internal/store"
 	"starcode/internal/web/views"
 )
@@ -35,19 +34,15 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	dense := s.denseMode(r)
 	ctx := r.Context()
 
-	// The page sends its signals with the request; the side panel's open
-	// detail is the one worth keeping across a reconnect, and whether the
-	// reader had loaded the whole transcript. They are read before the
+	// The page sends its signals with the request; whether the reader had
+	// loaded the whole transcript is worth keeping across a reconnect. They are read before the
 	// response starts: a QUERY carries them in its body, and once the
 	// SSE headers are out the server no longer lets the handler read it,
 	// so every reconnect came in with none.
 	var sig struct {
-		GitPath  string `json:"gitPath"`
-		GitEdit  bool   `json:"gitEdit"`
-		PanelTab string `json:"panelTab"`
-		Full     bool   `json:"full"`
-		MainV    string `json:"mainv"`
-		SideV    string `json:"sidev"`
+		Full  bool   `json:"full"`
+		MainV string `json:"mainv"`
+		SideV string `json:"sidev"`
 		// PID names the page for presence (push.go), and Vis is whether
 		// it was in view when the stream opened.
 		PID string `json:"pid"`
@@ -73,7 +68,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := &conn{s: s, sse: sse, view: view, threadID: threadID, theme: theme, appearance: appearance, sidebar: sidebar, dense: dense, rowDirty: map[string]bool{}, projSel: projSel, usageDays: usageDays, usageMetric: usageMetric, provSel: provSel, provTab: provTab, dirty: map[string]bool{}, tails: map[string]*tail{}}
-	c.gitPath, c.gitEdit, c.panelTab, c.full = sig.GitPath, sig.GitEdit, sig.PanelTab, sig.Full
+	c.full = sig.Full
 	c.mainV, c.sideV = sig.MainV, sig.SideV
 	c.pairURL = s.pairURL(r)
 
@@ -89,16 +84,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if err := sse.MarshalAndPatchSignals(map[string]any{"_hb": time.Now().UnixMilli()}); err != nil {
 		return
 	}
-	// The pull requests page painted from the cache (a skeleton when it
-	// was empty); with the cache old, read GitHub now and swap the list.
-	if view == "prs" {
-		if _, fresh, err := s.prsPageCached(ctx); err == nil && !fresh {
-			if err := c.renderPRs(ctx); err != nil {
-				return
-			}
-		}
-	}
-
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
 	flush := time.NewTicker(60 * time.Millisecond)
@@ -124,15 +109,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			switch m := msg.(type) {
 			case bus.Resync:
 				s.Log.Info("sse fell behind the bus, redrawing", "view", view, "thread", threadID)
-				err = c.resync(ctx)
+				err = c.renderAll(ctx)
 			case domain.Event:
 				err = c.handle(ctx, m)
-			case domain.GitChanged:
-				// Only the thread page has a git panel, and only its own
-				// project's tree matters; an empty id means any project.
-				if c.view == "thread" && (m.ProjectID == "" || m.ProjectID == c.projectID) {
-					c.gitDirty = true
-				}
 			case domain.ProvidersChanged:
 				c.sideDirty, c.sideFull = true, true
 				if view == "providers" {
@@ -160,8 +139,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				c.homeDirty = view == "home"
 				if view == "thread" {
 					err = c.renderHead(ctx, false)
-				} else if view == "prs" {
-					err = c.renderPRs(ctx)
 				}
 			}
 			if err != nil {
@@ -203,22 +180,12 @@ type conn struct {
 	// header last showed it; thoughtAt when the header last did.
 	thought   bool
 	thoughtAt time.Time
-	gitDirty  bool
 	sideDirty bool
 	homeDirty bool
 	ctxDirty  bool
-	projectID string
-	lastGit   time.Time
-	// gitPath, gitEdit and panelTab are the side panel's open detail and
-	// tab as the page reported them on connect.
-	gitPath  string
-	gitEdit  bool
-	panelTab string
 	// lastSide is the sidebar as last sent, to skip a redraw that would
-	// send the same thing; lastGit the same for the panel's header and
-	// file list.
-	lastSide    string
-	lastGitHTML string
+	// send the same thing.
+	lastSide string
 	// mainV and sideV are hashes of the page and sidebar markup as the
 	// page last got them whole, sent back as signals when the stream
 	// reconnects: a phone coming back from the background with nothing
@@ -263,21 +230,9 @@ func (c *conn) mark(items ...store.Item) {
 }
 
 // renderAll redraws the whole page from the store: on connect, which is a
-// no-op morph over what the page handler already served, or puts back the
-// detail the page had open when the stream reconnects.
+// no-op morph over what the page handler already served, and after the
+// bus dropped messages for this page.
 func (c *conn) renderAll(ctx context.Context) error {
-	return c.render(ctx, true)
-}
-
-// resync redraws after the bus dropped messages for this page. The side
-// panel's detail (an open diff or file) is left alone: the connection has
-// no fresh copy of what the reader opened since, and a dropped GitChanged
-// only affects the header and the file lists, which renderGit redraws.
-func (c *conn) resync(ctx context.Context) error {
-	return c.render(ctx, false)
-}
-
-func (c *conn) render(ctx context.Context, withDetail bool) error {
 	pt, err := c.s.parts(ctx, c.page())
 	if err == store.ErrNotFound {
 		return c.sse.Redirect("/")
@@ -288,7 +243,6 @@ func (c *conn) render(ctx context.Context, withDetail bool) error {
 	c.sideDirty, c.homeDirty = false, false
 	if pt.Thread != nil {
 		c.s.App.MarkSeen(ctx, c.threadID)
-		c.projectID = pt.Thread.Project.ID
 		c.hasItems = len(pt.Thread.Items) > 0
 		c.tails = map[string]*tail{}
 		c.shown = map[string]int64{}
@@ -304,8 +258,6 @@ func (c *conn) render(ctx context.Context, withDetail bool) error {
 			c.work, c.workOne = last[0].ID, len(last) == 1
 		}
 		c.turn = views.PageTurn(pt.Thread.Items, c.full)
-		c.gitDirty = false
-		c.lastGit = time.Now()
 	}
 	side, err := renderString(ctx, pt.Sidebar)
 	if err != nil {
@@ -336,10 +288,7 @@ func (c *conn) render(ctx context.Context, withDetail bool) error {
 			return err
 		}
 	}
-	if withDetail {
-		return c.sse.PatchElementTempl(pt.Git)
-	}
-	return c.renderGit(ctx)
+	return nil
 }
 
 func renderString(ctx context.Context, c templ.Component) (string, error) {
@@ -354,7 +303,7 @@ func hashHTML(s string) string {
 }
 
 func (c *conn) page() views.Page {
-	return views.Page{View: c.view, ThreadID: c.threadID, Theme: c.theme, Appearance: c.appearance, UsageDays: c.usageDays, UsageMetric: c.usageMetric, ProviderSel: c.provSel, ProviderTab: c.provTab, ProjectSel: c.projSel, GitPath: c.gitPath, GitEdit: c.gitEdit, PanelTab: c.panelTab, Full: c.full, PairURL: c.pairURL, Sidebar: c.sidebar, Dense: c.dense}
+	return views.Page{View: c.view, ThreadID: c.threadID, Theme: c.theme, Appearance: c.appearance, UsageDays: c.usageDays, UsageMetric: c.usageMetric, ProviderSel: c.provSel, ProviderTab: c.provTab, ProjectSel: c.projSel, Full: c.full, PairURL: c.pairURL, Sidebar: c.sidebar, Dense: c.dense}
 }
 
 // renderHome redraws the projects overview. The composer in it keeps what
@@ -367,20 +316,6 @@ func (c *conn) renderHome(ctx context.Context) error {
 		return err
 	}
 	return c.sse.PatchElementTempl(views.Home(c.s.homeData(ctx, side)))
-}
-
-func (c *conn) renderPRs(ctx context.Context) error {
-	d, err := c.s.prsPageData(ctx, false)
-	if err != nil {
-		return err
-	}
-	if err := c.sse.PatchElementTempl(views.PRsList(d)); err != nil {
-		return err
-	}
-	if err := c.sse.PatchElementTempl(views.PRFilterMenu(d)); err != nil {
-		return err
-	}
-	return c.sse.MarshalAndPatchSignals(map[string]any{"prv": time.Now().UnixMilli()})
 }
 
 func (c *conn) renderProviders(ctx context.Context) error {
@@ -482,36 +417,6 @@ func (c *conn) renderContextMeter(ctx context.Context) error {
 		return nil
 	}
 	return c.sse.PatchElementTempl(views.ContextMeter(d))
-}
-
-func (c *conn) renderGit(ctx context.Context) error {
-	c.gitDirty = false
-	c.lastGit = time.Now()
-	if c.projectID == "" {
-		return nil
-	}
-	p, err := c.s.App.Store.Project(ctx, c.projectID)
-	if err != nil {
-		return nil
-	}
-	d := views.GitData{Project: p, Status: gitx.Read(ctx, p.Path), ThreadID: c.threadID}
-	head, err := renderString(ctx, views.GitHeader(d))
-	if err != nil {
-		return err
-	}
-	files, err := renderString(ctx, views.GitFiles(d))
-	if err != nil {
-		return err
-	}
-	// Every tool call marks the tree dirty; most leave it as it was.
-	if head+files == c.lastGitHTML {
-		return nil
-	}
-	c.lastGitHTML = head + files
-	if err := c.sse.PatchElements(head); err != nil {
-		return err
-	}
-	return c.sse.PatchElements(files)
 }
 
 // tail is what one running item has streamed since the page last got a
@@ -682,10 +587,6 @@ func (c *conn) flushDirty(ctx context.Context) error {
 			return err
 		}
 	}
-	// Git status shells out, so rate-limit it.
-	if c.gitDirty && time.Since(c.lastGit) > 750*time.Millisecond {
-		return c.renderGit(ctx)
-	}
 	return nil
 }
 
@@ -827,7 +728,7 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		if mine {
 			// Rows left the transcript: the page is drawn again, which is
 			// rare enough to cost a full morph.
-			return c.resync(ctx)
+			return c.renderAll(ctx)
 		}
 	case domain.ThreadRenamed, domain.ThreadStatusChanged, domain.ThreadSettingsChanged, domain.ThreadBranched, domain.AgentSessionBound, domain.ThreadArchived, domain.ThreadUnarchived, domain.ThreadSnoozed, domain.ThreadWoken, domain.ThreadPinned, domain.ThreadUnpinned, domain.ThreadPRLinked, domain.ThreadPRUnlinked, domain.ThreadPRWatchSet, domain.ThreadPRWatchStopped:
 		c.sideDirty = true
@@ -835,13 +736,6 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 		// The project cards on the home page show the same glyphs and
 		// titles as the sidebar; a burst of changes costs one redraw.
 		c.homeDirty = c.view == "home"
-		if c.view == "prs" {
-			// The page lists the threads linked to each PR.
-			switch p.(type) {
-			case domain.ThreadPRLinked, domain.ThreadPRUnlinked, domain.ThreadRenamed:
-				return c.renderPRs(ctx)
-			}
-		}
 		if mine {
 			if _, ok := p.(domain.ThreadStatusChanged); ok && c.work != "" {
 				// Idle again: the open work block gets its final header.
@@ -1035,8 +929,6 @@ func (c *conn) handle(ctx context.Context, ev domain.Event) error {
 			c.ctxDirty = true
 		}
 	case domain.TurnCompleted:
-		// The git panel is redrawn by the GitChanged that pump publishes
-		// right after this event, gated to the thread's project.
 		if c.view == "usage" {
 			return c.renderAll(ctx)
 		}

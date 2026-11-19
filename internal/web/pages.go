@@ -11,7 +11,6 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 	"github.com/starfederation/datastar-go/datastar"
 
-	"starcode/internal/gitx"
 	"starcode/internal/store"
 	"starcode/internal/web/views"
 )
@@ -29,7 +28,6 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 	}
 	pt.Sidebar = views.Sidebar(side)
 	pt.Projects = store.Named(side.Projects)
-	pt.Git = views.GitPanel(views.GitData{})
 	pt.Update = views.UpdateBanner(s.bannerData(ctx))
 	switch p.View {
 	case "thread":
@@ -40,25 +38,6 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 		d.Full, d.NewSince = p.Full, p.NewSince
 		pt.Thread = &d
 		pt.Main = views.Thread(d)
-		if d.Project.ID != "" {
-			pp := d.Project
-			g := views.GitData{Project: pp, Status: gitx.Read(ctx, pp.Path), ThreadID: d.Thread.ID}
-			// A stream that reconnects says which detail the page had
-			// open; the editor's text is still in the page's signals.
-			if p.GitPath != "" && insideProject(p.GitPath) {
-				g.Selected, g.Editing = p.GitPath, p.GitEdit
-				g.Diff = gitx.Diff(ctx, pp.Path, p.GitPath)
-			}
-			if p.PanelTab == "files" {
-				g.TreeOpen = true
-				if _, entries, err := listProjectDir(pp.Path, ""); err == nil {
-					for _, e := range entries {
-						g.Tree = append(g.Tree, views.ProjectFile{Name: e.Name, Path: e.Path, IsDir: e.IsDir})
-					}
-				}
-			}
-			pt.Git = views.GitPanel(g)
-		}
 	case "schedules":
 		pt.Main = views.SchedulesPage(s.schedulesData(ctx, side))
 	case "appearance":
@@ -73,14 +52,6 @@ func (s *Server) parts(ctx context.Context, p views.Page) (views.Parts, error) {
 		pt.Main = views.ProvidersPage(s.providersData(ctx, p.ProviderSel, p.ProviderTab, false))
 	case "keys":
 		pt.Main = views.KeysPage(s.keysData())
-	case "prs":
-		// From the cache only: GitHub takes seconds, and the stream reads
-		// it once the page is up (see events.go).
-		d, _, err := s.prsPageCached(ctx)
-		if err != nil {
-			return pt, err
-		}
-		pt.Main = views.PRsPage(d)
 	case "usage":
 		d, err := s.usageData(ctx, p.UsageDays, p.UsageMetric)
 		if err != nil {

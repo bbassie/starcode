@@ -5,7 +5,6 @@ package e2e
 import (
 	"context"
 	"maps"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,32 +190,6 @@ func TestQuoteAndBigPaste(t *testing.T) {
 	wait(p, `() => document.querySelectorAll('.attach-thumbs .attach-item').length === 1`)
 	if v := value(p, "form.composer .prompt"); v != "" {
 		t.Errorf("the big paste went into the composer too (%d characters)", len(v))
-	}
-}
-
-func TestFilePreview(t *testing.T) {
-	e := newEnv(t)
-	id := e.thread()
-	os.WriteFile(filepath.Join(e.dir, "page.html"), []byte(`<h1>Hello preview</h1><script>document.title = "ran"</script>`), 0o644)
-	p := e.page("/threads/"+id, false)
-	click(p.MustElementR(".panel-tab", "files"))
-	click(p.MustElementR("#file-explorer a", "page.html"))
-	frame := p.MustElement("iframe.file-preview")
-	if sb := frame.MustAttribute("sandbox"); sb == nil || *sb != "" {
-		t.Errorf("the page preview is not sandboxed: %v", sb)
-	}
-	src := *frame.MustAttribute("src")
-	res, err := http.Get(e.url + src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if !strings.HasPrefix(res.Header.Get("Content-Security-Policy"), "sandbox") {
-		t.Errorf("the page is served without the sandbox policy")
-	}
-	h1 := frame.MustFrame().MustElement("h1").MustText()
-	if h1 != "Hello preview" {
-		t.Errorf("preview heading = %q", h1)
 	}
 }
 

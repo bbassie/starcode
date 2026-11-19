@@ -1,10 +1,8 @@
 package web
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,8 +18,6 @@ import (
 	"starcode/internal/agent"
 	"starcode/internal/app"
 	"starcode/internal/domain"
-	"starcode/internal/gitx"
-	"starcode/internal/store"
 	"starcode/internal/web/views"
 )
 
@@ -44,7 +40,6 @@ type signals struct {
 	// thread" hotkey on the settings page, say), which is different from
 	// the agent's default mode picked on purpose.
 	Mode   *string      `json:"mode"`
-	File   string       `json:"_file"`
 	Title  string       `json:"title"`
 	Attach []UploadFile `json:"_attach"`
 }
@@ -109,88 +104,6 @@ func (s *Server) removeProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.ok(w, r)
-}
-
-// projectFor is the project a panel request is about.
-func (s *Server) projectFor(r *http.Request) (store.Project, error) {
-	return s.App.Store.Project(r.Context(), r.PathValue("id"))
-}
-
-// peekSignals reads the request's signals and leaves the body as it was.
-// A POST carries them in its body, which can be read once; a handler
-// that peeks first still has its own signals to read (the file text,
-// the uploads, a PR comment), and without this it found none.
-func peekSignals(r *http.Request, v any) {
-	if r.Method == http.MethodGet || r.Body == nil {
-		datastar.ReadSignals(r, v)
-		return
-	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	datastar.ReadSignals(r, v)
-	r.Body = io.NopCloser(bytes.NewReader(body))
-}
-
-func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
-	p, err := s.projectFor(r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	sse := datastar.NewSSE(w, r)
-	s.patchDir(sse, p, r.URL.Query().Get("path"))
-}
-
-// patchDir renders one directory of the file tree: the whole explorer
-// for the root, the children list of a folder node otherwise.
-func (s *Server) patchDir(sse *datastar.ServerSentEventGenerator, p store.Project, path string) error {
-	dir, entries, err := listProjectDir(p.Path, path)
-	if err != nil {
-		return sse.PatchElementTempl(views.Toast(err.Error()))
-	}
-	files := make([]views.ProjectFile, len(entries))
-	for i, entry := range entries {
-		files[i] = views.ProjectFile{Name: entry.Name, Path: entry.Path, IsDir: entry.IsDir}
-	}
-	d := views.ExplorerData{Project: p, Dir: dir, Files: files}
-	if dir == "" {
-		return sse.PatchElementTempl(views.FileExplorer(d))
-	}
-	return sse.PatchElementTempl(views.TreeChildren(d))
-}
-
-// uploadFiles saves browser-picked files (base64 in the "_upload" signal, put
-// there by data-bind on the file input) into the explorer's current
-// directory. The signal is cleared in every outcome, so a morphed explorer
-// re-running the effect cannot post the same files again.
-func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<20) // decoded cap is checked in saveUploads
-	p, err := s.projectFor(r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	var sig struct {
-		Upload []UploadFile `json:"_upload"`
-	}
-	datastar.ReadSignals(r, &sig)
-	if len(sig.Upload) == 0 {
-		s.ok(w, r)
-		return
-	}
-	saveErr := saveUploads(p.Path, r.URL.Query().Get("path"), sig.Upload)
-	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"_upload": []any{}})
-	if saveErr != nil {
-		s.Log.Warn("upload failed", "project", p.ID, "err", saveErr)
-		sse.PatchElementTempl(views.Toast(saveErr.Error()))
-		return
-	}
-	s.App.Bus.Publish(domain.GitChanged{ProjectID: p.ID})
-	s.patchDir(sse, p, r.URL.Query().Get("path"))
 }
 
 // newThreadForProject is the new-thread buttons and hotkey. The page's
@@ -672,121 +585,6 @@ func (s *Server) setTheme(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: name, Value: v, Path: "/", Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 60 * 60 * 24 * 365})
 	}
 	s.ok(w, r)
-}
-
-func (s *Server) gitRefresh(w http.ResponseWriter, r *http.Request) {
-	p, err := s.projectFor(r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	sse := datastar.NewSSE(w, r)
-	d := views.GitData{Project: p, Status: gitx.Read(r.Context(), p.Path)}
-	sse.PatchElementTempl(views.GitHeader(d))
-	sse.PatchElementTempl(views.GitFiles(d))
-}
-
-func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
-	p, err := s.projectFor(r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	path := r.URL.Query().Get("path")
-	if !insideProject(path) {
-		http.Error(w, "bad path", http.StatusBadRequest)
-		return
-	}
-	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "_file": ""})
-	q := r.URL.Query()
-	line, _ := strconv.Atoi(q.Get("line"))
-	sse.PatchElementTempl(views.GitDetail(views.GitData{
-		Project:  p,
-		Selected: path,
-		Diff:     gitx.Diff(r.Context(), p.Path, path),
-		Find:     q.Get("find"),
-		FindLine: line,
-		FindOp:   q.Get("op"),
-	}))
-}
-
-// maxFindHits caps the lines a find in the changes lists.
-const maxFindHits = 200
-
-// gitFind searches the diff of every changed file for ?q and lists the
-// matching lines under the box.
-func (s *Server) gitFind(w http.ResponseWriter, r *http.Request) {
-	p, err := s.projectFor(r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	q := r.URL.Query().Get("q")
-	hits, more := gitx.FindInDiff(r.Context(), p.Path, q, maxFindHits)
-	datastar.NewSSE(w, r).PatchElementTempl(views.GitFindResults(p.ID, q, hits, more))
-}
-
-func (s *Server) gitFile(w http.ResponseWriter, r *http.Request) {
-	p, err := s.projectFor(r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	path := r.URL.Query().Get("path")
-	// Pages, PDFs and pictures open rendered; ?source=1 asks for a page's
-	// markup in the editor instead.
-	if kind := previewKind(path); kind != "" && !(kind == "html" && r.URL.Query().Get("source") == "1") {
-		if _, _, err := projectFile(p.Path, path); err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		var sig struct {
-			TID string `json:"tid"`
-		}
-		peekSignals(r, &sig)
-		sse := datastar.NewSSE(w, r)
-		sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "_file": ""})
-		sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Preview: rawURL(p.ID, path, sig.TID), PreviewKind: kind}))
-		return
-	}
-	content, err := readProjectFile(p.Path, path)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": true, "_file": content})
-	sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Diff: gitx.Diff(r.Context(), p.Path, path), Editing: true}))
-}
-
-func (s *Server) saveGitFile(w http.ResponseWriter, r *http.Request) {
-	p, err := s.projectFor(r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	path := r.URL.Query().Get("path")
-	if err := writeProjectFile(p.Path, path, s.readSignals(r).File); err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	s.App.Bus.Publish(domain.GitChanged{ProjectID: p.ID})
-	sse := datastar.NewSSE(w, r)
-	sse.MarshalAndPatchSignals(map[string]any{"gitPath": path, "gitEdit": false, "_file": ""})
-	sse.PatchElementTempl(views.GitDetail(views.GitData{Project: p, Selected: path, Diff: gitx.Diff(r.Context(), p.Path, path)}))
-}
-
-// insideProject rejects paths that could name a file outside the project:
-// absolute ones and ones that climb out with "..". git confines tracked
-// paths on its own, but the untracked fallback in gitx.Diff runs git diff
-// --no-index, which would happily print any file on the machine.
-func insideProject(path string) bool {
-	clean := filepath.Clean(filepath.FromSlash(path))
-	if path == "" || clean == "." || filepath.IsAbs(clean) {
-		return false
-	}
-	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
 }
 
 // sentPrompts is the last text sent from each composer (a thread id, or

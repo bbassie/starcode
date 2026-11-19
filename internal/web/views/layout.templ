@@ -13,7 +13,7 @@ import (
 
 // Page identifies what the SSE stream should render.
 type Page struct {
-	View        string // "home" | "thread" | "prs" | "settings" | "appearance" | "usage" | "providers" | "keys"
+	View        string // "home" | "thread" | "settings" | "appearance" | "usage" | "providers" | "keys"
 	ThreadID    string
 	Theme       string
 	// Appearance is the theme's half: "system", "dark" or "light".
@@ -27,14 +27,6 @@ type Page struct {
 	// Draft is the saved composer text for this page (thread or home),
 	// the initial value of the prompt signal.
 	Draft string
-	// GitPath and GitEdit are the side panel's open diff or file, read
-	// from the page's signals when its stream (re)connects, so the redraw
-	// on connect puts the detail back instead of clearing it.
-	GitPath string
-	GitEdit bool
-	// PanelTab is the side panel's tab the same way; with the tree open
-	// the redraw carries the root listing instead of an empty tree.
-	PanelTab string
 	// NewSince is when the reader last had the thread on screen, set on
 	// a page load when more came in after that; zero otherwise.
 	NewSince time.Time
@@ -91,8 +83,6 @@ func (p Page) streamURL() string {
 		url = "/events?view=appearance"
 	case "schedules":
 		url = "/events?view=schedules"
-	case "prs":
-		url = "/events?view=prs"
 	case "keys":
 		url = "/events?view=keys"
 	case "projects":
@@ -110,7 +100,6 @@ func (p Page) streamURL() string {
 type Parts struct {
 	Sidebar templ.Component
 	Main    templ.Component
-	Git     templ.Component
 	Update  templ.Component
 	// Thread is the data behind Main on the thread view.
 	Thread *ThreadData
@@ -165,14 +154,12 @@ templ Layout(title string, p Page, parts Parts) {
 				<script defer src={ asset("/static/term.js") }></script>
 				<script defer src={ asset("/static/quote.js") }></script>
 				<script defer src={ asset("/static/lightbox.js") }></script>
-				<script defer src={ asset("/static/highlight.js") }></script>
 				<script defer src={ asset("/static/diagrams.js") } data-mermaid={ asset("/static/mermaid.js") }></script>
 			}
 		</head>
 		<body
-			data-signals={ fmt.Sprintf(`{nav: false, git: %t && innerWidth > 1100, term: false, theme: %q, appearance: %q, prompt: %s, path: '', q: '', addproj: false, panelTab: 'changes', gitPath: '', gitEdit: false, _file: '', _upload: [], _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, wide: localStorage.getItem('panel-wide') === '1', updir: '', gfind: '', pr: 0, prsel: 0, prproject: '', prq: '', prkey: '', prstate: 'open', prinv: '', prauthor: '', prlabel: '', prdraft: '', prreview: '', prchecks: '', prfproj: '', prsort: 'ready', prfmenu: '', prv: 0, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, qedit: '', qbody: '', sel: '', selecting: false, tid: %q, pid: pageID(), vis: !document.hidden, _hb: 0}`, p.View == "thread", p.Theme, p.Appearance, draftJSON(p.Draft), p.ThreadID) }
+			data-signals={ fmt.Sprintf(`{nav: false, term: false, theme: %q, appearance: %q, prompt: %s, path: '', q: '', addproj: false, _attach: [], pick: '', pickq: '', rename: false, title: '', palette: false, pq: '', help: false, navhide: false, more: false, stat: false, full: false, mainv: '', sidev: '', settledAll: false, qedit: '', qbody: '', sel: '', selecting: false, tid: %q, pid: pageID(), vis: !document.hidden, _hb: 0}`, p.Theme, p.Appearance, draftJSON(p.Draft), p.ThreadID) }
 			data-class:nav-collapsed="$navhide"
-			data-class:panel-wide="$wide"
 			data-init={ streamOpen(p) }
 			data-on:stream__window={ streamOpen(p) }
 			data-effect="$_hb; streamAlive()"
@@ -196,7 +183,7 @@ templ Layout(title string, p Page, parts Parts) {
 				if section := settingsSection(p.View); section != "" {
 					@SettingsSidebar(section)
 				}
-				<div class="backdrop" data-show="$nav || $git" data-preserve-attr="style" style="display: none" data-on:click="$nav = false; $git = false"></div>
+				<div class="backdrop" data-show="$nav" data-preserve-attr="style" style="display: none" data-on:click="$nav = false"></div>
 				<div class="mid">
 					if parts.Update != nil {
 						@parts.Update
@@ -214,11 +201,6 @@ templ Layout(title string, p Page, parts Parts) {
 						@TermPanel(p.ThreadID)
 					}
 				</div>
-				if parts.Git != nil {
-					@parts.Git
-				} else {
-					<aside id="gitpanel" class={ templ.KV("closed", p.View != "thread") } data-class:open="$git" data-class:closed="!$git" data-preserve-attr="style"></aside>
-				}
 			</div>
 			<div id="toast"></div>
 			// Shown while the page stream is down; see the keepalive script.
@@ -700,7 +682,7 @@ templ Layout(title string, p Page, parts Parts) {
 			// clicks the one whose combo matches, "mod" being Ctrl or, on a
 			// Mac, Cmd. Inside the terminal only the keys marked data-term
 			// apply; the shell owns the rest. Escape closes the palette or
-			// help, then an open side panel or setting menu. A printable key
+			// help, then the open sidebar or setting menu. A printable key
 			// pressed with nothing focused goes to the composer. Keys on a
 			// focused control (Space on a button, arrows in a select) are
 			// left alone. A menu whose own keydown handler saw the Escape
@@ -762,7 +744,7 @@ templ Layout(title string, p Page, parts Parts) {
 						if (inTerm) return;
 						if (e.key === 'Escape') {
 							if (document.querySelector('#palette:not([style*="none"]), #help:not([style*="none"])')) document.querySelector('#palette:not([style*="none"]), #help:not([style*="none"])').click();
-							else if (document.querySelector('#sidebar.open, #gitpanel.open')) document.querySelector('.backdrop')?.click();
+							else if (document.querySelector('#sidebar.open')) document.querySelector('.backdrop')?.click();
 							else if (document.querySelector('.chip.open') && !(t && t.closest('.pick'))) document.body.click();
 							return;
 						}
@@ -893,14 +875,7 @@ templ Layout(title string, p Page, parts Parts) {
 						if (!host && vscodeLocal()) return 'vscode://file' + path;
 						return 'vscode://vscode-remote/ssh-remote+' + encodeURIComponent(host || vscodeDefaultHost()).replaceAll('%40', '@') + path;
 					};
-					// The browser runs beforeunload for a link it hands to another
-					// app, though the page stays; linkOut tells the editor's
-					// unsaved-changes guard to let this one through.
-					window.vscodeOpen = (dir) => {
-						window.linkOut = true;
-						setTimeout(() => { window.linkOut = false; }, 1000);
-						location.assign(vscodeURL(dir));
-					};
+					window.vscodeOpen = (dir) => location.assign(vscodeURL(dir));
 				})();
 			</script>
 			// Notifications. Once allowed (Settings > This device) a thread
@@ -1085,12 +1060,10 @@ templ Layout(title string, p Page, parts Parts) {
 					apply();
 				})();
 			</script>
-			// Phone swipes: the thread list and the changes panel follow the
-			// finger. With nothing open, a swipe right pulls the thread list in
-			// and a swipe left pulls the changes panel in; with one open, the
-			// swipe the other way pushes it out. Letting go past a third of the
-			// panel, or with a flick, finishes the move; anything less springs
-			// back. A swipe that starts in the terminal, or on something that
+			// Phone swipes: the thread list follows the finger. A swipe right
+			// pulls it in and, with it open, a swipe left pushes it out.
+			// Letting go past a third of the panel, or with a flick, finishes
+			// the move; anything less springs back. A swipe that starts in the terminal, or on something that
 			// still has room to scroll that way (a wide code block, the chips
 			// row), is left to that element. A finger that rested before it
 			// moved is selecting text, not swiping, and so is one that moves
@@ -1105,7 +1078,6 @@ templ Layout(title string, p Page, parts Parts) {
 			<script>
 				(() => {
 					const narrow = matchMedia('(max-width: 900px)');
-					const mid = matchMedia('(max-width: 1100px)');
 					const edge = 48;
 					const lock = 10;
 					// A swipe moves within this many ms of touching down; a long
@@ -1126,13 +1098,9 @@ templ Layout(title string, p Page, parts Parts) {
 					// pick names the panel a move of dx would drag, or nothing.
 					const pick = (dx) => {
 						const side = document.getElementById('sidebar');
-						const git = document.getElementById('gitpanel');
 						const navOpen = narrow.matches && side?.classList.contains('open');
-						const gitOpen = mid.matches && git?.classList.contains('open');
 						if (navOpen) return dx < 0 ? { panel: side, sign: -1, open: true, toggle: '.backdrop' } : null;
-						if (gitOpen) return dx > 0 ? { panel: git, sign: 1, open: true, toggle: '.backdrop' } : null;
 						if (dx > 0 && narrow.matches && side && document.querySelector('.navtoggle')) return { panel: side, sign: -1, open: false, toggle: '.navtoggle' };
-						if (dx < 0 && mid.matches && git && document.querySelector('.gittoggle')) return { panel: git, sign: 1, open: false, toggle: '.gittoggle' };
 						return null;
 					};
 					// The backdrop's display is owned by data-show, which puts back
@@ -1158,7 +1126,7 @@ templ Layout(title string, p Page, parts Parts) {
 						if (e.touches.length !== 1) return;
 						// A drag still live at a fresh touch lost its end; drop it.
 						if (drag) release(true);
-						if (!narrow.matches && !mid.matches) return;
+						if (!narrow.matches) return;
 						if (document.querySelector('#palette:not([style*="none"]), #help:not([style*="none"])')) return;
 						const t = e.touches[0];
 						if (t.clientX < edge || t.clientX > innerWidth - edge) return;
@@ -1187,9 +1155,7 @@ templ Layout(title string, p Page, parts Parts) {
 						d.from = d.open ? 0 : d.sign * d.w;
 						d.x = t.clientX;
 						d.at = Date.now();
-						// The backdrop only shows on a phone; a tablet's changes
-						// drawer has none to fade.
-						d.backdrop = narrow.matches ? document.querySelector('.backdrop') : null;
+						d.backdrop = document.querySelector('.backdrop');
 						d.dim = d.open ? 1 : 0;
 						if (d.backdrop) {
 							d.backdrop.style.transition = 'none';
@@ -1255,58 +1221,6 @@ templ Layout(title string, p Page, parts Parts) {
 			// picks the first match on Enter in the search box, and answers
 			// true for Escape so the caller can close the menu.
 			<script>
-				// The pull requests page (views.PRsList). Every row carries
-				// what the filters and orders need as data attributes; the
-				// search box takes words, #number, and label:, author:,
-				// repo: and is: terms. A redraw of the list bumps prv, and one
-				// of the page mainv, so it runs again over the new rows.
-				window.prsFiltered = (...v) => v.slice(0, 7).some((x) => x) || v[7] !== 'open';
-				window.prsApply = (list, q, state, inv, author, label, draft, review, checks, proj, order) => {
-					const terms = (q || '').toLowerCase().split(/\s+/).filter(Boolean);
-					const term = (d, t) => {
-						const i = t.indexOf(':');
-						const k = i > 0 ? t.slice(0, i) : '', v = i > 0 ? t.slice(i + 1) : '';
-						if (k === 'label') return d.labels.includes(v);
-						if (k === 'author') return d.author.toLowerCase().includes(v);
-						if (k === 'repo') return d.repo.includes(v);
-						if (k === 'is') return v === d.state || v === d.draft;
-						return d.k.includes(t);
-					};
-					const match = (d) => (state === 'all' || d.state === state) && (!inv || d.inv === inv) && (!author || d.author === author)
-						&& (!label || d.labels.includes(',' + label.toLowerCase() + ',')) && (!draft || d.draft === draft)
-						&& (!review || d.review === review) && (!checks || d.checks === checks) && (!proj || d.proj === proj)
-						&& terms.every((t) => term(d, t));
-					const keys = {
-						ready: (d) => [+d.ready, -d.updated],
-						blocked: (d) => [d.blocked === 'true' ? 0 : 1, +d.ready, -d.updated],
-						updated: (d) => [-d.updated],
-						newest: (d) => [-d.created],
-						oldest: (d) => [+d.created],
-						largest: (d) => [-d.size],
-						smallest: (d) => [+d.size],
-					};
-					const key = keys[order] || keys.ready;
-					const cmp = (a, b) => {
-						const x = key(a.dataset), y = key(b.dataset);
-						for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i];
-						return 0;
-					};
-					let shown = 0;
-					for (const g of list.querySelectorAll('.prs-group')) {
-						const ul = g.querySelector('ul');
-						let n = 0;
-						for (const r of [...ul.children].sort(cmp)) {
-							r.hidden = !match(r.dataset);
-							if (!r.hidden) n++;
-							ul.appendChild(r);
-						}
-						g.querySelector('.prs-count').textContent = n;
-						g.hidden = n === 0;
-						shown += n;
-					}
-					const none = list.querySelector('.prs-none');
-					if (none) none.hidden = shown > 0;
-				};
 				window.pickLabel = (el, value) => {
 					const menu = el.closest('.pick')?.querySelector('.pick-menu');
 					const opt = menu && [...menu.querySelectorAll('.opt[data-value]')].find((o) => o.dataset.value === String(value ?? ''));
@@ -1481,187 +1395,6 @@ templ Layout(title string, p Page, parts Parts) {
 					});
 				})();
 			</script>
-			if p.View == "thread" {
-				// Side panel width: the panel's left edge drags it wider or
-				// narrower, the width is kept in localStorage and set as the
-				// --gitpanel-w variable on the body, which beats the unfold
-				// button's class; that button clears the dragged width.
-				<script>
-					(() => {
-						const key = 'panel-w';
-						const apply = (w) => document.body.style.setProperty('--gitpanel-w', w + 'px');
-						window.panelWidthReset = () => { localStorage.removeItem(key); document.body.style.removeProperty('--gitpanel-w'); };
-						const saved = Number(localStorage.getItem(key));
-						if (saved > 0) apply(saved);
-						document.addEventListener('pointerdown', (e) => {
-							const drag = e.target instanceof Element && e.target.closest('.panel-drag');
-							if (!drag) return;
-							e.preventDefault();
-							const panel = document.getElementById('gitpanel');
-							const startX = e.clientX;
-							const startW = panel.getBoundingClientRect().width;
-							let w = startW;
-							document.body.classList.add('panel-dragging');
-							drag.setPointerCapture(e.pointerId);
-							const move = (ev) => {
-								w = Math.round(Math.min(Math.max(startW + (startX - ev.clientX), 280), innerWidth * 0.8));
-								apply(w);
-							};
-							const up = () => {
-								drag.removeEventListener('pointermove', move);
-								drag.removeEventListener('pointerup', up);
-								drag.removeEventListener('pointercancel', up);
-								document.body.classList.remove('panel-dragging');
-								localStorage.setItem(key, String(w));
-							};
-							drag.addEventListener('pointermove', move);
-							drag.addEventListener('pointerup', up);
-							drag.addEventListener('pointercancel', up);
-						});
-						document.addEventListener('dblclick', (e) => {
-							if (e.target instanceof Element && e.target.closest('.panel-drag')) panelWidthReset();
-						});
-					})();
-				</script>
-				// File tree (views.FileExplorer): the open folders are kept in
-				// sessionStorage per thread, so a morphed or reloaded tree
-				// opens them again; their placeholders then load the children.
-				<script>
-					(() => {
-						const key = 'tree:' + location.pathname;
-						let open = new Set();
-						try { open = new Set(JSON.parse(sessionStorage.getItem(key) || '[]')); } catch {}
-						const save = () => sessionStorage.setItem(key, JSON.stringify([...open]));
-						document.addEventListener('toggle', (e) => {
-							const d = e.target;
-							if (!(d instanceof HTMLDetailsElement) || !d.classList.contains('tree-dir')) return;
-							if (d.open) open.add(d.dataset.path); else open.delete(d.dataset.path);
-							save();
-						}, true);
-						window.treeRestore = (el) => { if (open.has(el.dataset.path)) el.open = true; };
-					})();
-				</script>
-				// File editor (views.GitDetail): line numbers, a highlighted
-				// copy of the text behind the transparent textarea, Tab and
-				// Enter that keep the indentation, Ctrl+S to save, and an
-				// unsaved marker with a warning before the page is left. The
-				// form is server rendered and morphed, so each editor is set
-				// up when it appears and the state lives on the element.
-				<script>
-					(() => {
-						const seen = new WeakSet();
-						const lang = (ed) => ed.dataset.lang && window.hljs && hljs.getLanguage(ed.dataset.lang) ? ed.dataset.lang : '';
-						const paint = (ed, ta) => {
-							const code = ed.querySelector('.editor-hl code');
-							const text = ta.value;
-							const l = lang(ed);
-							// A trailing newline needs a visible last line so the
-							// layers stay the same height.
-							const shown = text.endsWith('\n') ? text + ' ' : text;
-							if (l && text.length < 200000) {
-								code.innerHTML = hljs.highlight(shown, { language: l, ignoreIllegals: true }).value;
-							} else {
-								code.textContent = shown;
-							}
-							const lines = text.split('\n').length;
-							const g = ed.querySelector('.editor-gutter');
-							if (Number(g.dataset.lines) !== lines) {
-								g.dataset.lines = lines;
-								g.textContent = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
-							}
-						};
-						const sync = (ed, ta) => {
-							ed.querySelector('.editor-hl').style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
-							ed.querySelector('.editor-gutter').style.transform = `translateY(${-ta.scrollTop}px)`;
-						};
-						const indentUnit = (text) => /^\t/m.test(text) ? '\t' : (text.match(/^ +/m)?.[0].length % 4 === 0 ? '    ' : '  ');
-						const edit = (ta, start, end, insert) => {
-							ta.setRangeText(insert, start, end, 'end');
-							ta.dispatchEvent(new Event('input', { bubbles: true }));
-						};
-						const keys = (ta) => (e) => {
-							const v = ta.value;
-							const s = ta.selectionStart;
-							const en = ta.selectionEnd;
-							if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-								e.preventDefault();
-								ta.closest('form').requestSubmit();
-								return;
-							}
-							if (e.key === 'Tab') {
-								e.preventDefault();
-								const unit = indentUnit(v);
-								const lineStart = v.lastIndexOf('\n', s - 1) + 1;
-								if (s !== en && v.slice(s, en).includes('\n')) {
-									// Several lines: indent or outdent each.
-									const lineEnd = v.indexOf('\n', en - 1) < 0 ? v.length : Math.max(en, v.indexOf('\n', en - 1));
-									const block = v.slice(lineStart, lineEnd);
-									const out = block.split('\n').map((l) => e.shiftKey ? l.replace(new RegExp('^(' + unit + '|\t| {1,' + unit.length + '})'), '') : (l ? unit + l : l)).join('\n');
-									ta.setRangeText(out, lineStart, lineEnd, 'select');
-									ta.dispatchEvent(new Event('input', { bubbles: true }));
-								} else if (e.shiftKey) {
-									const m = v.slice(lineStart).match(new RegExp('^(' + unit + '|\t| {1,' + unit.length + '})'));
-									if (m) edit(ta, lineStart, lineStart + m[0].length, '');
-								} else {
-									edit(ta, s, en, unit);
-								}
-								return;
-							}
-							if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.isComposing) {
-								e.preventDefault();
-								const lineStart = v.lastIndexOf('\n', s - 1) + 1;
-								const indent = v.slice(lineStart, s).match(/^[ \t]*/)[0];
-								edit(ta, s, en, '\n' + indent);
-							}
-						};
-						const setup = (ed) => {
-							if (seen.has(ed)) return;
-							seen.add(ed);
-							const ta = ed.querySelector('textarea');
-							const state = ed.closest('form').querySelector('.editor-state');
-							let initial = null;
-							let path = ed.dataset.path;
-							const refresh = () => {
-								// The first paint after Datastar has bound the text is
-								// the baseline for the unsaved marker. A morph reuses
-								// this element for the next file, and cancel empties
-								// the buffer; both start a new baseline.
-								if (ed.dataset.path !== path || ta.value === '') { path = ed.dataset.path; initial = null; }
-								if (initial === null && ta.value !== '') initial = ta.value;
-								paint(ed, ta);
-								sync(ed, ta);
-								const dirty = initial !== null && ta.value !== initial;
-								ed.closest('form').classList.toggle('dirty', dirty);
-								state.textContent = dirty ? 'unsaved changes' : '';
-							};
-							ta.addEventListener('input', refresh);
-							ta.addEventListener('scroll', () => sync(ed, ta));
-							ta.addEventListener('keydown', keys(ta));
-							ed.closest('form').addEventListener('submit', () => { initial = ta.value; setTimeout(refresh); });
-							// Datastar sets the value without an input event; watch for it.
-							// A morph of the panel (the stream reconnecting, the same
-							// file opened again) brings the server's empty layers back
-							// under a textarea that kept its text, so an empty layer
-							// under text is repainted as well.
-							let last = ta.value;
-							const tick = () => {
-								if (!ed.isConnected) return;
-								const bare = ta.value !== '' && !ed.querySelector('.editor-hl code').firstChild;
-								if (ta.value !== last || bare) { last = ta.value; refresh(); }
-								requestAnimationFrame(tick);
-							};
-							requestAnimationFrame(tick);
-							refresh();
-						};
-						const scan = () => document.querySelectorAll('.editor').forEach(setup);
-						onDOM(scan);
-						scan();
-						window.addEventListener('beforeunload', (e) => {
-							if (!window.linkOut && document.querySelector('form.git-editor.dirty')) e.preventDefault();
-						});
-					})();
-				</script>
-			}
 			if p.View == "keys" {
 				// Recorder for Settings > Keys: change arms a row, the next key
 				// press (not a bare modifier) becomes the combo, which goes to

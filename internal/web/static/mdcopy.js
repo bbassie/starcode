@@ -203,7 +203,7 @@
 	};
 
 	document.addEventListener('copy', (e) => {
-		// A form field, the terminal and the file editor copy their own text.
+		// A form field and the terminal copy their own text.
 		if (e.target instanceof Element && e.target.closest('input, textarea, [contenteditable], .xterm')) return;
 		const sel = window.getSelection();
 		if (!sel || sel.isCollapsed || !e.clipboardData) return;

@@ -556,7 +556,7 @@ func (a *App) RemoveProject(ctx context.Context, id string) error {
 // CreateScratchThread opens a thread that has no project: it gets a new
 // folder of its own under ScratchDir, named for the day and the prompt,
 // as a project marked scratch so the lists leave it out. Everything that
-// works on a project's folder (the agent, the terminal, the panel) then
+// works on a project's folder (the agent, the terminal) then
 // works on that one.
 func (a *App) CreateScratchThread(ctx context.Context, agentName, model, prompt string) (string, error) {
 	if a.ScratchDir == "" {
@@ -1538,7 +1538,6 @@ func (a *App) pump(l *live) {
 			delete(l.subTools, itemID(tc.ID))
 			l.mu.Unlock()
 			append_(evs...)
-			a.Bus.Publish(domain.GitChanged{ProjectID: l.projectID})
 			// The agent opening a pull request links the thread to it.
 			if it, err := a.Store.Item(ctx, itemID(tc.ID)); err == nil {
 				if repo, n, url, ok := createdPR(it); ok {
@@ -1709,7 +1708,6 @@ func (a *App) pump(l *live) {
 			if (len(queued) == 0 && !owed) || limited {
 				a.childDone(tid)
 			}
-			a.Bus.Publish(domain.GitChanged{ProjectID: l.projectID})
 		case agent.KindNotice:
 			append_(domain.ItemStarted{ID: newID(), Kind: domain.KindSystem, Body: e.Notice.Text})
 		case agent.KindBackground:

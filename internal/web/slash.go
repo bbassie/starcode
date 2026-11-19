@@ -283,7 +283,7 @@ func (c *slashCache) get(key string, build func() []views.SlashItem) []views.Sla
 }
 
 // prPick answers the composer's "#" menu: the open pull requests of the
-// thread's repository (the panel's list, cached a minute), as rows the
+// thread's repository (cached a minute, see prList), as rows the
 // page filters by number and title while the reader types. A pick puts a
 // link to the PR in the prompt (static/slash.js).
 func (s *Server) prPick(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +298,7 @@ func (s *Server) prPick(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	e := s.prList(r, p)
+	e := s.prList(ctx, p)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	views.PRPickMenu(e.list).Render(ctx, w)

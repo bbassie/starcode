@@ -5,10 +5,10 @@ import (
 	"strings"
 )
 
-// Shell highlighting for the command tool rows. It runs here rather than
-// in highlight.js because the rows are morphed while a turn streams: a
-// page-side pass would be undone by every morph and flicker. The spans use
-// highlight.js class names so the themes colour them like the editor.
+// Shell highlighting for the command tool rows. It runs on the server
+// because the rows are morphed while a turn streams: a page-side pass
+// would be undone by every morph and flicker. The spans use highlight.js
+// class names, which app.css colours from the theme.
 //
 // It is a tokenizer, not a parser: the word that starts a command (after
 // a pipe, &&, ;, a newline or a keyword) is the command, words starting

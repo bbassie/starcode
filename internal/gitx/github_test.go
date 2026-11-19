@@ -33,20 +33,9 @@ func TestDecodePRs(t *testing.T) {
 		t.Errorf("checks = %q, %q", prs[1].Checks, prs[2].Checks)
 	}
 
-	l := PRList{RepoURL: "https://github.com/o/r", DefaultBranch: "main", Branch: "fix", PRs: prs}
-	if cur, ok := l.Current(); !ok || cur.Number != 11 {
-		t.Errorf("current = %+v, %v", cur, ok)
-	}
-	if got := l.CompareURL(); got != "https://github.com/o/r/compare/fix?expand=1" {
-		t.Errorf("compare = %q", got)
-	}
-	l.Branch = "main"
-	if got := l.CompareURL(); got != "" {
-		t.Errorf("compare on default branch = %q", got)
-	}
 }
 
-func TestDecodePRDetailAndFixPrompt(t *testing.T) {
+func TestDecodePRDetail(t *testing.T) {
 	raw := []byte(`{"data":{"viewer": {"login": "me"}, "repository":{"pullRequest":{
 	  "number": 7, "title": "Add panes", "url": "https://github.com/o/r/pull/7", "headRefName": "panes", "headRefOid": "abc123", "baseRefName": "main",
 	  "comments": {"nodes": [{"id": "IC1", "author": {"login": "bot"}, "body": "Coverage down.", "url": "ic1", "createdAt": "2026-09-05T00:30:00Z"}]},
@@ -84,8 +73,8 @@ func TestDecodePRDetailAndFixPrompt(t *testing.T) {
 	if len(d.Reviews) != 2 || d.Reviews[0].Author != "rev" || d.Reviews[0].State != "CHANGES_REQUESTED" || d.Reviews[1].State != "APPROVED" {
 		t.Errorf("reviews = %+v", d.Reviews)
 	}
-	if got := d.Unresolved(); len(got) != 1 || got[0].Path != "term.js" || got[0].Line != 40 || len(got[0].Comments) != 2 {
-		t.Errorf("unresolved = %+v", got)
+	if got := d.Threads[0]; got.Resolved || got.Path != "term.js" || got.Line != 40 || len(got.Comments) != 2 {
+		t.Errorf("open thread = %+v", got)
 	}
 	if d.Threads[1].Line != 12 || !d.Threads[1].Resolved {
 		t.Errorf("resolved thread = %+v", d.Threads[1])
@@ -104,15 +93,6 @@ func TestDecodePRDetailAndFixPrompt(t *testing.T) {
 	}
 	if got := strings.Join(who, " "); got != "bb::COMMENTED bot:: rev::CHANGES_REQUESTED rev:term.js: rev:term.go: bb:term.js: rev::COMMENTED other::APPROVED" {
 		t.Errorf("remarks = %s", got)
-	}
-	prompt := d.FixPrompt()
-	for _, want := range []string{"pull request #7", "`panes`", "@rev:\n    Please cap the panes.", "1. term.js:40", "@rev: No upper bound here.", "- test (https://ci/1)", "merge conflicts with `main`"} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("prompt lacks %q:\n%s", want, prompt)
-		}
-	}
-	if strings.Contains(prompt, "deploy") || strings.Contains(prompt, "nit") {
-		t.Errorf("prompt includes passing or resolved items:\n%s", prompt)
 	}
 }
 
@@ -146,40 +126,6 @@ func TestRepoFromRemote(t *testing.T) {
 	}
 }
 
-func TestDecodePRBoard(t *testing.T) {
-	raw := []byte(`{"data":{"viewer":{"login":"bb"},
-	 "authoredOpen":{"nodes":[{"number":4,"title":"B","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":true,"reviewDecision":null,"headRefName":"b","baseRefName":"main","updatedAt":"2026-09-02T10:00:00Z","createdAt":"2026-08-30T10:00:00Z","additions":12,"deletions":3,"author":{"login":"bb","avatarUrl":"https://a/bb"},"labels":{"nodes":[{"name":"bug"}]},"repository":{"nameWithOwner":"o/r"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]},
-	 "authoredDone":{"nodes":[{}]},
-	 "involvedOpen":{"nodes":[{"number":3,"title":"A","url":"https://github.com/o/r/pull/3","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","headRefName":"a","baseRefName":"main","updatedAt":"2026-09-01T10:00:00Z","totalCommentsCount":7,"author":{"login":"cc"},"repository":{"nameWithOwner":"o/r"},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"bb"}}]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}]},
-	 "reposOpen":{"nodes":[
-	   {"number":3,"title":"A","state":"OPEN","author":{"login":"cc"},"repository":{"nameWithOwner":"o/r"}},
-	   {"number":8,"title":"C","state":"MERGED","author":{"login":"dd"},"repository":{"nameWithOwner":"o/r"},"assignees":{"nodes":[{"login":"bb"}]}},
-	   {"number":9,"title":"D","state":"CLOSED","author":{"login":"ee"},"repository":{"nameWithOwner":"o/r"}}]}}}`)
-	got, err := decodePRBoard(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Login != "bb" || len(got.PRs) != 4 {
-		t.Fatalf("got %+v", got)
-	}
-	b, a, c, d := got.PRs[0], got.PRs[1], got.PRs[2], got.PRs[3]
-	if b.Number != 4 || b.Involve != "authored" || !b.Mine() || !b.Draft || b.Additions != 12 || b.Deletions != 3 || b.Avatar != "https://a/bb" || len(b.Labels) != 1 || b.CreatedAt.IsZero() {
-		t.Errorf("authored row = %+v", b)
-	}
-	if a.Number != 3 || a.Involve != "review" || a.Review != "rereview_requested" || a.Checks != "failure" || a.Comments != 7 {
-		t.Errorf("review row = %+v", a)
-	}
-	if c.Number != 8 || c.Involve != "assigned" || c.State != "merged" {
-		t.Errorf("assigned row = %+v", c)
-	}
-	if d.Number != 9 || d.Involve != "repo" || d.State != "closed" {
-		t.Errorf("repo row = %+v", d)
-	}
-	if _, err := decodePRBoard([]byte(`{"data":{"viewer":{"login":""}},"errors":[{"message":"bad credentials"}]}`)); err == nil || err.Error() != "bad credentials" {
-		t.Errorf("error not surfaced: %v", err)
-	}
-}
-
 func TestPRNodeState(t *testing.T) {
 	var n prNode
 	if err := json.Unmarshal([]byte(`{"number":9,"title":"T","url":"u","state":"MERGED","isDraft":false,"reviewDecision":"APPROVED","headRefName":"h","repository":{"nameWithOwner":"o/r"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}`), &n); err != nil {
@@ -188,17 +134,6 @@ func TestPRNodeState(t *testing.T) {
 	st := n.state()
 	if st.State != "merged" || st.Review != "approved" || st.Checks != "success" || st.Repo != "o/r" || st.Number != 9 || st.Head != "h" {
 		t.Errorf("state = %+v", st)
-	}
-}
-
-func TestFixPromptWithoutWork(t *testing.T) {
-	d := PRDetail{PR: PR{Number: 5, Title: "Quiet", URL: "u", Head: "h", Base: "main"}, Mergeable: "MERGEABLE"}
-	if d.NeedsWork() {
-		t.Fatal("nothing blocks this PR")
-	}
-	p := d.FixPrompt()
-	if !strings.HasPrefix(p, "Work on pull request #5") || strings.Contains(p, "Work through each point") {
-		t.Errorf("prompt for a clean PR:\n%s", p)
 	}
 }
 
@@ -234,20 +169,14 @@ func TestDetailReReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Review != "rereview_requested" || len(d.ChangesRequested()) != 0 || len(d.AwaitingReReview()) != 1 || d.NeedsWork() {
-		t.Fatalf("detail = %+v, changes %d, awaiting %d", d.PR, len(d.ChangesRequested()), len(d.AwaitingReReview()))
-	}
-	if p := d.FixPrompt(); !strings.HasPrefix(p, "Work on pull request #990") {
-		t.Errorf("a PR waiting on its reviewer got the fix prompt:\n%s", p)
+	if d.Review != "rereview_requested" {
+		t.Fatalf("detail = %+v", d.PR)
 	}
 	// One blocking reviewer re-requested, another not: still changes requested.
 	raw = []byte(strings.Replace(string(raw), `"reviews":{"nodes":[`, `"reviews":{"nodes":[{"author":{"login":"other"},"state":"CHANGES_REQUESTED","body":"no","url":"r2","submittedAt":"2026-09-06T02:00:00Z"},`, 1))
 	d, _ = decodePRDetail(raw)
-	if d.Review != "changes_requested" || len(d.ChangesRequested()) != 1 || !d.NeedsWork() {
-		t.Errorf("mixed reviewers: review %q, changes %d", d.Review, len(d.ChangesRequested()))
-	}
-	if p := d.FixPrompt(); !strings.Contains(p, "@cool asked for changes earlier") || !strings.Contains(p, "@other:") {
-		t.Errorf("prompt:\n%s", p)
+	if d.Review != "changes_requested" {
+		t.Errorf("mixed reviewers: review %q", d.Review)
 	}
 }
 
@@ -259,74 +188,7 @@ func TestReposFromRemoteList(t *testing.T) {
 	}
 }
 
-func TestFocusPrompt(t *testing.T) {
-	d := PRDetail{PR: PR{Number: 9, Title: "T", URL: "u", Head: "h", Base: "main"},
-		Reviews: []Review{{Author: "cool", State: "CHANGES_REQUESTED", Body: "sync all of them", URL: "https://github.com/o/r/pull/9#pullrequestreview-1"}},
-		Threads: []ReviewThread{{Path: "a.go", Line: 3, Comments: []ReviewComment{{Author: "cool", Body: "rename this", URL: "https://github.com/o/r/pull/9#discussion_r1"}, {Author: "bb", Body: "why?", URL: "https://github.com/o/r/pull/9#discussion_r2"}}}},
-		Checks:  []Check{{Name: "ci", Status: "failure"}},
-	}
-	p := d.FocusPrompt("https://github.com/o/r/pull/9#pullrequestreview-1")
-	if !strings.Contains(p, "@cool changes requested") || !strings.Contains(p, "sync all of them") || strings.Contains(p, "rename this") || strings.Contains(p, "Failing checks") {
-		t.Errorf("review prompt:\n%s", p)
-	}
-	p = d.FocusPrompt("https://github.com/o/r/pull/9#discussion_r1")
-	if !strings.Contains(p, "Comment thread on a.go:3") || !strings.Contains(p, "@cool: rename this") || !strings.Contains(p, "@bb: why?") || strings.Contains(p, "sync all") {
-		t.Errorf("thread prompt:\n%s", p)
-	}
-	if p = d.FocusPrompt("nope"); p != d.FixPrompt() {
-		t.Error("unknown focus should give the whole prompt")
-	}
-}
-
-func TestPRActionArgs(t *testing.T) {
-	tests := []struct {
-		name   string
-		action string
-		body   string
-		method string
-		auto   bool
-		want   string // the gh arguments joined by spaces, or "" for an error
-	}{
-		{name: "approve", action: "approve", want: "pr review -R o/r 7 --approve"},
-		{name: "approve with a word", action: "approve", body: " LGTM ", want: "pr review -R o/r 7 --approve -b LGTM"},
-		{name: "request changes", action: "request-changes", body: "cap the panes", want: "pr review -R o/r 7 --request-changes -b cap the panes"},
-		{name: "request changes needs a body", action: "request-changes", body: "  "},
-		{name: "comment", action: "comment", body: "thanks", want: "pr comment -R o/r 7 -b thanks"},
-		{name: "comment needs a body", action: "comment"},
-		{name: "merge defaults to squash", action: "merge", want: "pr merge -R o/r 7 --squash"},
-		{name: "rebase when checks pass", action: "merge", method: "rebase", auto: true, want: "pr merge -R o/r 7 --rebase --auto"},
-		{name: "merge commit", action: "merge", method: "merge", want: "pr merge -R o/r 7 --merge"},
-		{name: "no other merge method", action: "merge", method: "delete-branch"},
-		{name: "update branch", action: "update-branch", want: "pr update-branch -R o/r 7"},
-		{name: "ready", action: "ready", want: "pr ready -R o/r 7"},
-		{name: "close", action: "close", want: "pr close -R o/r 7"},
-		{name: "unknown", action: "force-push"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			args, err := prActionArgs(tc.action, "o/r", 7, tc.body, tc.method, tc.auto)
-			if tc.want == "" {
-				if err == nil {
-					t.Fatalf("args = %q, want an error", args)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := strings.Join(args, " "); got != tc.want {
-				t.Errorf("args = %q, want %q", got, tc.want)
-			}
-			for _, a := range args {
-				if strings.Contains(a, "delete-branch") || strings.Contains(a, "force") {
-					t.Errorf("args %q touch branches", args)
-				}
-			}
-		})
-	}
-}
-
-func TestPRDetailStateAndMergeNote(t *testing.T) {
+func TestPRDetailState(t *testing.T) {
 	raw := []byte(`{"data":{"repository":{"pullRequest":{"number": 3, "title": "t", "state": "MERGED", "mergeStateStatus": "BLOCKED", "author": {"login": "bb"}}}}}`)
 	d, err := decodePRDetail(raw)
 	if err != nil {
@@ -334,14 +196,6 @@ func TestPRDetailStateAndMergeNote(t *testing.T) {
 	}
 	if d.State != "merged" || d.Open() {
 		t.Errorf("state = %q, open %v", d.State, d.Open())
-	}
-	if got := d.MergeStateNote(); got != "blocked by branch rules or reviews" {
-		t.Errorf("note = %q", got)
-	}
-	for st, want := range map[string]string{"CLEAN": "", "BEHIND": "behind the base branch", "DIRTY": "has conflicts", "UNSTABLE": "checks failing", "UNKNOWN": ""} {
-		if got := (PRDetail{MergeState: st}).MergeStateNote(); got != want {
-			t.Errorf("note for %s = %q, want %q", st, got, want)
-		}
 	}
 	if !(PRDetail{}).Open() || !(PRDetail{State: "open"}).Open() || (PRDetail{State: "closed"}).Open() {
 		t.Error("Open() wrong for one of the states")

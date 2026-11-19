@@ -89,7 +89,6 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 		usageCacheDir = filepath.Dir(attachDir)
 	}
 	s := &Server{App: a, Log: log, Token: token, Term: term.NewManager(log), AttachDir: attachDir, Usage: usagex.New(usageCacheDir), Providers: prov, mux: http.NewServeMux()}
-	s.prs.refresh = make(chan struct{}, 1)
 	if usageCacheDir != "" {
 		s.cache.path = filepath.Join(usageCacheDir, "capabilities.json")
 		s.cache.load()
@@ -123,10 +122,6 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	})
 
 	s.mux.HandleFunc("GET /{$}", s.home)
-	s.mux.HandleFunc("GET /prs", s.prsPage)
-	s.read("/api/prs", s.refreshPRs)
-	s.read("/api/prs/{owner}/{name}/{n}", s.pullRequestPageDetail)
-	s.mux.HandleFunc("POST /api/prs/{owner}/{name}/{n}/thread", s.pullRequestPageThread)
 	s.mux.HandleFunc("GET /settings", s.settings)
 	s.mux.HandleFunc("GET /settings/appearance", s.appearance)
 	s.mux.HandleFunc("GET /settings/schedules", s.schedulesPage)
@@ -158,13 +153,6 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 
 	s.mux.HandleFunc("POST /api/projects", s.addProject)
 	s.mux.HandleFunc("GET /api/project-paths", s.projectPaths)
-	s.read("/api/projects/{id}/files", s.projectFiles)
-	s.read("/api/projects/{id}/prs", s.pullRequests)
-	s.read("/api/projects/{id}/prs/{n}", s.pullRequest)
-	s.mux.HandleFunc("POST /api/projects/{id}/prs/{n}/draft", s.pullRequestDraft)
-	s.mux.HandleFunc("POST /api/projects/{id}/prs/{n}/thread", s.pullRequestThread)
-	s.mux.HandleFunc("POST /api/projects/{id}/upload", s.uploadFiles)
-	s.mux.HandleFunc("GET /api/projects/{id}/raw", s.projectRaw)
 	s.mux.HandleFunc("GET /api/attachments/{id}/{name}", s.attachmentFile)
 	s.mux.HandleFunc("POST /api/projects/{id}/remove", s.removeProject)
 	s.mux.HandleFunc("POST /api/projects/{id}/threads", s.newThreadForProject)
@@ -189,14 +177,12 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/sidebar", s.setSidebarMode)
 	s.mux.HandleFunc("POST /api/pull-main", s.pullMain)
 	s.mux.HandleFunc("POST /api/settle", s.setSettle)
-	s.prActionRoutes()
 	s.bulkRoutes()
 	s.slashRoutes()
 	s.threadCmdRoutes()
 	s.pushRoutes()
 	s.scheduleRoutes()
 	s.mux.HandleFunc("POST /api/threads/{id}/rename", s.renameThread)
-	s.mux.HandleFunc("POST /api/threads/{id}/pr/link", s.linkPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/unlink", s.unlinkPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/watch", s.watchPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/unwatch", s.unwatchPR)
@@ -206,11 +192,6 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/threads/{id}/approvals/{aid}/{decision}", s.approve)
 	s.mux.HandleFunc("POST /api/threads/{id}/approvals/{aid}/answer", s.answer)
 	s.mux.HandleFunc("POST /api/theme", s.setTheme)
-	s.read("/api/git/{id}/refresh", s.gitRefresh)
-	s.read("/api/git/{id}/diff", s.gitDiff)
-	s.read("/api/git/{id}/find", s.gitFind)
-	s.read("/api/git/{id}/file", s.gitFile)
-	s.mux.HandleFunc("POST /api/git/{id}/file", s.saveGitFile)
 	s.mux.HandleFunc("GET /api/term/{id}/stream", s.termStream)
 	s.mux.HandleFunc("POST /api/term/{id}/input", s.termInput)
 	s.mux.HandleFunc("POST /api/term/{id}/resize", s.termResize)
@@ -608,9 +589,9 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 		return views.ThreadData{}, err
 	}
 	caps, capsErrs := s.capabilities(ctx)
-	branch, repo := "", ""
+	branch := ""
 	if p.Path != "" {
-		branch = gitx.Read(ctx, p.Path).Branch
+		branch = gitx.Branch(ctx, p.Path)
 	}
 	var pr store.PRState
 	if ref, ok := t.Linked(); ok {
@@ -619,11 +600,6 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 			return views.ThreadData{}, err
 		}
 		pr = states[ref]
-		// The panel can show the PR when its repository is one of the
-		// project's remotes (a fork's clone has the upstream too).
-		if slices.Contains(s.projectRemotes(ctx, p), ref.Repo) {
-			repo = ref.Repo
-		}
 	}
 	var parent store.Thread
 	if t.Parent != "" {
@@ -634,6 +610,6 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 		return views.ThreadData{}, err
 	}
 	bg, _ := s.App.Store.Background(ctx, id)
-	return views.ThreadData{Thread: t, Project: p, Items: items, Parent: parent, Scheduled: scheduled, Notify: s.App.Store.NotifyLevel(ctx, id), Queued: queued, Steering: steering, Background: bg, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Repo: repo, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
+	return views.ThreadData{Thread: t, Project: p, Items: items, Parent: parent, Scheduled: scheduled, Notify: s.App.Store.NotifyLevel(ctx, id), Queued: queued, Steering: steering, Background: bg, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
 		Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }

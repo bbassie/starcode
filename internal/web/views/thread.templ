@@ -25,11 +25,8 @@ type ThreadData struct {
 	Settings  SettingsData
 	Branch    string
 	// PR is the polled state of the linked pull request; Number is 0
-	// when the thread has none. Repo is the PR's repository when it is
-	// one of the project's remotes, so the panel can show the PR; empty
-	// otherwise.
-	PR   store.PRState
-	Repo string
+	// when the thread has none.
+	PR store.PRState
 	// Limits is the thread's instance's plan windows, for the context
 	// card; empty until the first read.
 	Limits []agent.LimitWindow
@@ -586,18 +583,9 @@ templ MainHead(d ThreadData) {
 			<a class="btn tiny primary" href={ templ.SafeURL("/settings/providers?sel=" + d.Thread.Agent) } title={ d.Thread.StatusDetail }>@Icon("log-in", "ui-icon") sign in</a>
 		}
 		if pr := prOf(d.Thread, map[store.PR]store.PRState{d.PR.PR: d.PR}); pr.Number > 0 {
-			// The chip opens the panel on the PR when it is in the project's
-			// repository; a PR elsewhere opens on GitHub. The unlink button
-			// sits next to it since the panel cannot show every PR.
-			if pr.Repo == d.Repo {
-				<button type="button" class="pr-chip-btn" data-on:click={ "$git = true; $panelTab = 'prs'; @query('/api/projects/" + d.Project.ID + "/prs/" + strconv.Itoa(pr.Number) + "?thread=" + d.Thread.ID + "')" } title={ prChipTitle(pr) + ". Open it in the panel" }>
-					@PRChip(pr, prWord(pr))
-				</button>
-			} else {
-				<a class="pr-chip-btn" href={ templ.SafeURL(pr.URL) } target="_blank" rel="noopener" title={ prChipTitle(pr) + " in " + pr.Repo + ". Open on GitHub" }>
-					@PRChip(pr, prWord(pr))
-				</a>
-			}
+			<a class="pr-chip-btn" href={ templ.SafeURL(prURL(pr)) } target="_blank" rel="noopener" title={ prChipTitle(pr) + " in " + pr.Repo + ". Open on GitHub" }>
+				@PRChip(pr, prWord(pr))
+			</a>
 			<button class="btn icon ghost tiny dim pr-unlink" data-on:click={ "confirm('Unlink pull request #" + strconv.Itoa(pr.Number) + " from this thread?') && @post('/api/threads/" + d.Thread.ID + "/pr/unlink')" } title="Unlink the pull request from this thread" aria-label="Unlink the pull request">@Icon("unlink", "ui-icon")</button>
 			// The watch wakes the agent when the PR changes (app.PRWatch).
 			if d.Thread.PRWatch != "" {
@@ -621,9 +609,8 @@ templ MainHead(d ThreadData) {
 		// panel is open is lit.
 		<button class="btn icon ghost vscode-open" type="button" data-on:click={ VSCodeOpen(dir) } title={ "Open " + dir + " in VS Code" } aria-label="Open in VS Code">@Icon("brand-vscode", "ui-icon")</button>
 		<button class="btn icon ghost termtoggle" data-on:click="$term = !$term" data-class:on="$term" title="Toggle terminal" aria-label="Toggle terminal">@Icon("terminal", "ui-icon")</button>
-		<button class="btn icon ghost gittoggle" data-on:click="$git = !$git" data-class:on="$git" title="Toggle changes panel" aria-label="Toggle changes panel">@Icon("git-compare-arrows", "ui-icon")</button>
 		// Pin, branch, hand off, settle and delete live behind this
-		// button on every screen; terminal and changes stay in the row.
+		// button on every screen; the terminal stays in the row.
 		<button class="btn icon ghost more-toggle" type="button" data-on:click="$more = !$more" title="More" aria-label="More actions">@Icon("ellipsis-vertical", "ui-icon")</button>
 		<div class="head-more" data-class:open="$more" data-on:click__outside="$more && !evt.target.closest('.more-toggle') && ($more = false)" data-on:click="evt.target.closest('.snooze-at') || ($more = false)">
 			if d.Thread.Snoozed() {

@@ -521,4 +521,19 @@ func atThreadLink(t store.Thread) string {
 	return "[thread: " + title + "](/threads/" + t.ID + ")"
 }
 
+// prClass colours the PR mark: the accent for open, dim for a draft.
+func prClass(pr gitx.PR) string {
+	if pr.Draft {
+		return "dim"
+	}
+	return "st-running"
+}
+
+func prIcon(pr gitx.PR) string {
+	if pr.Draft {
+		return "git-pull-request-draft"
+	}
+	return "git-pull-request"
+}
+
 var _ = templruntime.GeneratedTemplate

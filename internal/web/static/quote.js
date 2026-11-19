@@ -15,7 +15,7 @@
 
 	const source = (node) => {
 		const el = node && (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
-		return el && el.closest('.item.assistant, .item.thinking, .item.tool, .item.result, .pr-detail-body');
+		return el && el.closest('.item.assistant, .item.thinking, .item.tool, .item.result');
 	};
 	let quote = '';
 	const place = () => {

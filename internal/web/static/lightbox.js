@@ -59,7 +59,7 @@
 	document.addEventListener('DOMContentLoaded', () => document.body.append(box));
 	document.addEventListener('click', (e) => {
 		const t = e.target instanceof Element ? e.target : null;
-		const pic = t && t.closest('img.attach-thumb, .item.assistant.md img, .pr-detail-body img, .tool-images img');
+		const pic = t && t.closest('img.attach-thumb, .item.assistant.md img, .tool-images img');
 		if (!pic || e.ctrlKey || e.metaKey || e.shiftKey) return;
 		e.preventDefault();
 		const link = pic.closest('a');

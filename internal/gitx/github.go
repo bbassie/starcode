@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -59,34 +58,14 @@ func reviewWord(decision string, blocking, requested []string) string {
 	return "rereview_requested"
 }
 
-// PRList is what the pull requests tab shows: the repository's open PRs
-// with the one for the current branch first, or why none could be read.
+// PRList is the repository's open PRs with the one for the current
+// branch first, or why none could be read. The composer's "#" menu
+// lists them.
 type PRList struct {
-	Repo          string // "owner/name"
-	RepoURL       string
-	DefaultBranch string
-	Branch        string // the working tree's branch
-	PRs           []PR
-	Err           string
-}
-
-// Current is the PR whose head is the working tree's branch, if any.
-func (l PRList) Current() (PR, bool) {
-	for _, p := range l.PRs {
-		if p.Head == l.Branch && l.Branch != "" {
-			return p, true
-		}
-	}
-	return PR{}, false
-}
-
-// CompareURL is GitHub's page for opening a PR from the current branch;
-// empty on the default branch or when the repository is unknown.
-func (l PRList) CompareURL() string {
-	if l.RepoURL == "" || l.Branch == "" || l.Branch == l.DefaultBranch || l.Branch == "HEAD" {
-		return ""
-	}
-	return l.RepoURL + "/compare/" + l.Branch + "?expand=1"
+	Repo   string // "owner/name"
+	Branch string // the working tree's branch
+	PRs    []PR
+	Err    string
 }
 
 // gh runs the GitHub CLI in dir. Its stderr is the error message when it
@@ -126,24 +105,20 @@ func firstLine(s string) string {
 // PullRequests lists the open PRs of the repository dir belongs to. It
 // needs gh on PATH and signed in; anything else lands in Err.
 func PullRequests(ctx context.Context, dir string) PRList {
-	l := PRList{Branch: Read(ctx, dir).Branch}
-	repo, err := gh(ctx, dir, "repo", "view", "--json", "nameWithOwner,url,defaultBranchRef")
+	l := PRList{Branch: Branch(ctx, dir)}
+	repo, err := gh(ctx, dir, "repo", "view", "--json", "nameWithOwner")
 	if err != nil {
 		l.Err = err.Error()
 		return l
 	}
 	var rv struct {
-		NameWithOwner    string `json:"nameWithOwner"`
-		URL              string `json:"url"`
-		DefaultBranchRef struct {
-			Name string `json:"name"`
-		} `json:"defaultBranchRef"`
+		NameWithOwner string `json:"nameWithOwner"`
 	}
 	if err := json.Unmarshal(repo, &rv); err != nil {
 		l.Err = "gh repo view: " + err.Error()
 		return l
 	}
-	l.Repo, l.RepoURL, l.DefaultBranch = rv.NameWithOwner, rv.URL, rv.DefaultBranchRef.Name
+	l.Repo = rv.NameWithOwner
 	raw, err := gh(ctx, dir, "pr", "list", "--limit", "40", "--json", "number,title,url,headRefName,baseRefName,author,isDraft,reviewDecision,statusCheckRollup,updatedAt,latestReviews,reviewRequests")
 	if err != nil {
 		l.Err = err.Error()
@@ -247,8 +222,8 @@ func worseCheck(a, b string) string {
 	return a
 }
 
-// PRDetail is what the pull requests tab shows for one PR: the review
-// state broken out so requested changes can be read and acted on.
+// PRDetail is one PR read in full, with the review state broken out, for
+// the watch that wakes an agent when it changes (app.PRWatch).
 type PRDetail struct {
 	PR
 	State        string // "open" | "merged" | "closed"
@@ -312,60 +287,6 @@ type Check struct {
 	Name   string
 	Status string // "success" | "failure" | "pending" | "skipped"
 	URL    string
-}
-
-// Unresolved returns the review threads still open.
-func (d PRDetail) Unresolved() []ReviewThread {
-	var out []ReviewThread
-	for _, t := range d.Threads {
-		if !t.Resolved {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-// Failing returns the checks that failed.
-func (d PRDetail) Failing() []Check {
-	var out []Check
-	for _, c := range d.Checks {
-		if c.Status == "failure" {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// NeedsWork is whether anything stands in the way of merging that an
-// agent could act on: requested changes, open comments, failing checks or
-// conflicts.
-func (d PRDetail) NeedsWork() bool {
-	return len(d.ChangesRequested()) > 0 || len(d.Unresolved()) > 0 || len(d.Failing()) > 0 || d.Mergeable == "CONFLICTING"
-}
-
-// ChangesRequested lists the reviewers whose latest review asks for
-// changes and who have not been asked to review again: the ones whose
-// feedback still waits on the author.
-func (d PRDetail) ChangesRequested() []Review {
-	var out []Review
-	for _, r := range d.Reviews {
-		if r.State == "CHANGES_REQUESTED" && !slices.Contains(d.Requested, r.Author) {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-// AwaitingReReview lists the reviewers who asked for changes and have
-// since been asked to review again.
-func (d PRDetail) AwaitingReReview() []Review {
-	var out []Review
-	for _, r := range d.Reviews {
-		if r.State == "CHANGES_REQUESTED" && slices.Contains(d.Requested, r.Author) {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 const prDetailQuery = `query($owner: String!, $name: String!, $number: Int!) {
@@ -635,260 +556,9 @@ func decodePRDetail(raw []byte) (PRDetail, error) {
 	return d, nil
 }
 
-// FixPrompt writes the prompt for a thread that should get the PR ready:
-// the requested changes, the open review threads and the failing checks,
-// in a form an agent can work through.
-func (d PRDetail) FixPrompt() string {
-	var b strings.Builder
-	if !d.NeedsWork() {
-		// Nothing to address: the prompt only sets the scene and leaves
-		// the ask to the reader, who is about to edit it anyway.
-		fmt.Fprintf(&b, "Work on pull request #%d \"%s\" (%s).\n", d.Number, d.Title, d.URL)
-		fmt.Fprintf(&b, "The PR branch is `%s`, merging into `%s`. Make sure that branch is checked out before changing anything.\n", d.Head, d.Base)
-		return b.String()
-	}
-	fmt.Fprintf(&b, "Address the review feedback on pull request #%d \"%s\" (%s).\n", d.Number, d.Title, d.URL)
-	fmt.Fprintf(&b, "The PR branch is `%s`, merging into `%s`. Make sure that branch is checked out before changing anything.\n", d.Head, d.Base)
-	if waiting := d.AwaitingReReview(); len(waiting) > 0 {
-		names := make([]string, len(waiting))
-		for i, r := range waiting {
-			names[i] = "@" + r.Author
-		}
-		fmt.Fprintf(&b, "%s asked for changes earlier and has been asked to review again; leave that feedback alone unless a point below repeats it.\n", strings.Join(names, ", "))
-	}
-	if crs := d.ChangesRequested(); len(crs) > 0 {
-		b.WriteString("\n## Reviews requesting changes\n")
-		for _, r := range crs {
-			fmt.Fprintf(&b, "\n@%s:\n", r.Author)
-			if body := strings.TrimSpace(r.Body); body != "" {
-				b.WriteString(indent(body) + "\n")
-			} else {
-				b.WriteString("    (see the comments below)\n")
-			}
-		}
-	}
-	if ts := d.Unresolved(); len(ts) > 0 {
-		b.WriteString("\n## Unresolved review comments\n")
-		for i, t := range ts {
-			where := t.Path
-			if t.Line > 0 {
-				where = fmt.Sprintf("%s:%d", t.Path, t.Line)
-			}
-			if t.Outdated {
-				where += " (on an older revision)"
-			}
-			fmt.Fprintf(&b, "\n%d. %s\n", i+1, where)
-			for _, c := range t.Comments {
-				fmt.Fprintf(&b, "   @%s: %s\n", c.Author, strings.TrimSpace(strings.ReplaceAll(c.Body, "\n", "\n   ")))
-			}
-		}
-	}
-	if fs := d.Failing(); len(fs) > 0 {
-		b.WriteString("\n## Failing checks\n")
-		for _, c := range fs {
-			if c.URL != "" {
-				fmt.Fprintf(&b, "- %s (%s)\n", c.Name, c.URL)
-			} else {
-				fmt.Fprintf(&b, "- %s\n", c.Name)
-			}
-		}
-	}
-	if d.Mergeable == "CONFLICTING" {
-		fmt.Fprintf(&b, "\nThe branch has merge conflicts with `%s`; resolve them too.\n", d.Base)
-	}
-	b.WriteString("\nWork through each point, run the relevant tests, and commit the fixes on the PR branch. Reply with a short summary of what changed per point, and say so if you disagree with a comment instead of applying it.\n")
-	return b.String()
-}
-
-// FocusPrompt is the prompt for one point of the PR, named by the URL of
-// a review or of a comment in a review thread: the same header as
-// FixPrompt, then only that review or that thread. An unknown URL gives
-// the whole FixPrompt.
-func (d PRDetail) FocusPrompt(url string) string {
-	var b strings.Builder
-	head := func() {
-		fmt.Fprintf(&b, "Address one review comment on pull request #%d \"%s\" (%s).\n", d.Number, d.Title, d.URL)
-		fmt.Fprintf(&b, "The PR branch is `%s`, merging into `%s`. Make sure that branch is checked out before changing anything.\n", d.Head, d.Base)
-	}
-	for _, r := range d.Reviews {
-		if r.URL != url || url == "" {
-			continue
-		}
-		head()
-		fmt.Fprintf(&b, "\n@%s %s (%s):\n", r.Author, strings.ToLower(strings.ReplaceAll(r.State, "_", " ")), r.URL)
-		if body := strings.TrimSpace(r.Body); body != "" {
-			b.WriteString(indent(body) + "\n")
-		}
-		b.WriteString("\nDo what the review asks, run the relevant tests, and commit on the PR branch. Reply with a short summary, and say so if you disagree with the review instead of applying it.\n")
-		return b.String()
-	}
-	for _, t := range d.Threads {
-		hit := false
-		for _, c := range t.Comments {
-			if c.URL == url && url != "" {
-				hit = true
-			}
-		}
-		if !hit {
-			continue
-		}
-		head()
-		where := t.Path
-		if t.Line > 0 {
-			where = fmt.Sprintf("%s:%d", t.Path, t.Line)
-		}
-		if t.Outdated {
-			where += " (on an older revision)"
-		}
-		fmt.Fprintf(&b, "\nComment thread on %s:\n", where)
-		for _, c := range t.Comments {
-			fmt.Fprintf(&b, "   @%s: %s\n", c.Author, strings.TrimSpace(strings.ReplaceAll(c.Body, "\n", "\n   ")))
-		}
-		if t.Resolved {
-			b.WriteString("\n(The thread is marked resolved on GitHub.)\n")
-		}
-		b.WriteString("\nDo what the comment asks, run the relevant tests, and commit on the PR branch. Reply with a short summary, and say so if you disagree with the comment instead of applying it.\n")
-		return b.String()
-	}
-	return d.FixPrompt()
-}
-
-func indent(s string) string {
-	return "    " + strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n    ")
-}
-
 // Open is whether the PR can still be reviewed and merged.
 func (d PRDetail) Open() bool {
 	return d.State == "" || d.State == "open"
-}
-
-// MergeStateNote says in a few words why GitHub will not merge the PR
-// as it stands; empty when it would (CLEAN) or when gh has no word for
-// it yet.
-func (d PRDetail) MergeStateNote() string {
-	switch d.MergeState {
-	case "BLOCKED":
-		return "blocked by branch rules or reviews"
-	case "BEHIND":
-		return "behind the base branch"
-	case "DIRTY":
-		return "has conflicts"
-	case "UNSTABLE":
-		return "checks failing"
-	case "DRAFT":
-		return "still a draft"
-	}
-	return ""
-}
-
-// ---- acting on a pull request ----
-
-// The actions the console can take on a pull request through gh: a
-// review verdict, a comment, a merge, or a change of its state. The
-// names are the ones the routes use.
-const (
-	ActionApprove        = "approve"
-	ActionRequestChanges = "request-changes"
-	ActionComment        = "comment"
-	ActionMerge          = "merge"
-	ActionUpdateBranch   = "update-branch"
-	ActionReady          = "ready"
-	ActionClose          = "close"
-)
-
-// prActionArgs is gh's command line for action on repo#number. body is
-// the review or comment text; method ("squash", "merge", "rebase") and
-// auto only matter for a merge. It refuses what gh would refuse (a
-// request for changes without a word of why) before a process starts.
-func prActionArgs(action, repo string, number int, body, method string, auto bool) ([]string, error) {
-	n := strconv.Itoa(number)
-	body = strings.TrimSpace(body)
-	switch action {
-	case ActionApprove:
-		args := []string{"pr", "review", "-R", repo, n, "--approve"}
-		if body != "" {
-			args = append(args, "-b", body)
-		}
-		return args, nil
-	case ActionRequestChanges:
-		if body == "" {
-			return nil, errors.New("say what should change")
-		}
-		return []string{"pr", "review", "-R", repo, n, "--request-changes", "-b", body}, nil
-	case ActionComment:
-		if body == "" {
-			return nil, errors.New("the comment is empty")
-		}
-		return []string{"pr", "comment", "-R", repo, n, "-b", body}, nil
-	case ActionMerge:
-		if method == "" {
-			method = "squash"
-		}
-		if method != "squash" && method != "merge" && method != "rebase" {
-			return nil, fmt.Errorf("unknown merge method %q", method)
-		}
-		args := []string{"pr", "merge", "-R", repo, n, "--" + method}
-		if auto {
-			args = append(args, "--auto")
-		}
-		return args, nil
-	case ActionUpdateBranch:
-		return []string{"pr", "update-branch", "-R", repo, n}, nil
-	case ActionReady:
-		return []string{"pr", "ready", "-R", repo, n}, nil
-	case ActionClose:
-		return []string{"pr", "close", "-R", repo, n}, nil
-	}
-	return nil, fmt.Errorf("unknown pull request action %q", action)
-}
-
-// DoPRAction runs action on repo#number with gh in dir. The error is
-// gh's own first line of stderr, which names the reason (not signed in,
-// no permission, branch protection).
-func DoPRAction(ctx context.Context, dir, repo string, number int, action, body, method string, auto bool) error {
-	args, err := prActionArgs(action, repo, number, body, method, auto)
-	if err != nil {
-		return err
-	}
-	_, err = gh(ctx, dir, args...)
-	return err
-}
-
-// Approve submits an approving review, with body as its text when set.
-func Approve(ctx context.Context, dir, repo string, number int, body string) error {
-	return DoPRAction(ctx, dir, repo, number, ActionApprove, body, "", false)
-}
-
-// RequestChanges submits a review asking for changes; body must say what.
-func RequestChanges(ctx context.Context, dir, repo string, number int, body string) error {
-	return DoPRAction(ctx, dir, repo, number, ActionRequestChanges, body, "", false)
-}
-
-// Comment adds body to the PR's conversation.
-func Comment(ctx context.Context, dir, repo string, number int, body string) error {
-	return DoPRAction(ctx, dir, repo, number, ActionComment, body, "", false)
-}
-
-// Merge merges the PR with method ("squash" by default, "merge" or
-// "rebase"); with auto set GitHub merges once the checks pass instead.
-// The head branch is left alone.
-func Merge(ctx context.Context, dir, repo string, number int, method string, auto bool) error {
-	return DoPRAction(ctx, dir, repo, number, ActionMerge, "", method, auto)
-}
-
-// UpdateBranch merges the base branch into the PR's branch on GitHub.
-func UpdateBranch(ctx context.Context, dir, repo string, number int) error {
-	return DoPRAction(ctx, dir, repo, number, ActionUpdateBranch, "", "", false)
-}
-
-// ReadyForReview takes the PR out of draft.
-func ReadyForReview(ctx context.Context, dir, repo string, number int) error {
-	return DoPRAction(ctx, dir, repo, number, ActionReady, "", "", false)
-}
-
-// Close closes the PR without merging; the branch stays.
-func Close(ctx context.Context, dir, repo string, number int) error {
-	return DoPRAction(ctx, dir, repo, number, ActionClose, "", "", false)
 }
 
 // pullURL matches a pull request page on GitHub, wherever it appears in
@@ -1010,39 +680,17 @@ type PRRef struct {
 	Number int
 }
 
-const prStateFields = `number title url state isDraft reviewDecision headRefName baseRefName updatedAt totalCommentsCount author { login } repository { nameWithOwner } latestOpinionatedReviews(first: 20) { nodes { author { login } state } } reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`
+const prStateFields = `number title url state isDraft reviewDecision headRefName repository { nameWithOwner } latestOpinionatedReviews(first: 20) { nodes { author { login } state } } reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`
 
 // prNode is the GraphQL shape prStateFields selects.
 type prNode struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	URL       string `json:"url"`
-	State     string `json:"state"` // OPEN, CLOSED, MERGED
-	Draft     bool   `json:"isDraft"`
-	Review    string `json:"reviewDecision"`
-	Head      string `json:"headRefName"`
-	Base      string `json:"baseRefName"`
-	UpdatedAt string `json:"updatedAt"`
-	Comments  int    `json:"totalCommentsCount"`
-	Author    struct {
-		Login  string `json:"login"`
-		Avatar string `json:"avatarUrl"`
-	} `json:"author"`
-	// The pull requests page reads these too (boardFields); the other
-	// readers leave them empty.
-	Additions int    `json:"additions"`
-	Deletions int    `json:"deletions"`
-	CreatedAt string `json:"createdAt"`
-	Labels    struct {
-		Nodes []struct {
-			Name string `json:"name"`
-		} `json:"nodes"`
-	} `json:"labels"`
-	Assignees struct {
-		Nodes []struct {
-			Login string `json:"login"`
-		} `json:"nodes"`
-	} `json:"assignees"`
+	Number     int    `json:"number"`
+	Title      string `json:"title"`
+	URL        string `json:"url"`
+	State      string `json:"state"` // OPEN, CLOSED, MERGED
+	Draft      bool   `json:"isDraft"`
+	Review     string `json:"reviewDecision"`
+	Head       string `json:"headRefName"`
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
@@ -1095,196 +743,4 @@ func (n prNode) state() PRState {
 		st.Checks = map[string]string{"SUCCESS": "success", "PENDING": "pending", "EXPECTED": "pending", "FAILURE": "failure", "ERROR": "failure"}[n.Commits.Nodes[0].Commit.Rollup.State]
 	}
 	return st
-}
-
-// pr turns the node into the list row shape.
-func (n prNode) pr() PR {
-	st := n.state()
-	p := PR{Number: n.Number, Title: n.Title, URL: n.URL, Head: n.Head, Base: n.Base, Author: n.Author.Login, Draft: n.Draft, Review: st.Review, Checks: st.Checks, Comments: n.Comments}
-	p.Blocking, p.Requested = n.reviewers()
-	p.UpdatedAt, _ = time.Parse(time.RFC3339, n.UpdatedAt)
-	return p
-}
-
-// MyPR is a pull request from a search across every repository the
-// signed-in user can see: the list row plus the repository and state.
-type MyPR struct {
-	PR
-	Repo  string // "owner/name"
-	State string // "open" | "merged" | "closed"
-}
-
-// BoardPR is a row of the pull requests page: the PR, who wrote it and
-// with which avatar, its size, labels and age, and how the signed-in
-// user is involved.
-type BoardPR struct {
-	MyPR
-	Avatar    string
-	Additions int
-	Deletions int
-	CreatedAt time.Time
-	Labels    []string
-	// Involve is "authored" (theirs), "review" (a review asked of them),
-	// "assigned", "involved" (commented or mentioned), or "repo" (only
-	// in the repository of one of their projects).
-	Involve string
-}
-
-// Mine is whether the signed-in user wrote the pull request.
-func (p BoardPR) Mine() bool { return p.Involve == "authored" }
-
-// PRBoard is the pull requests page: the signed-in user's pull requests
-// and those of others that concern them or sit in the repositories of
-// their projects, open and done. Login is who "them" is.
-type PRBoard struct {
-	Login string
-	PRs   []BoardPR
-}
-
-// boardFields are what the page shows of each pull request.
-const boardFields = prStateFields + ` additions deletions createdAt author { login avatarUrl(size: 40) } labels(first: 10) { nodes { name } } assignees(first: 10) { nodes { login } }`
-
-// FetchPRBoard reads the page: six searches, open and done (merged or
-// closed) for each of the user's own, others' that involve them, and
-// others' in repos. Done ones are fewer, so a long history does not push
-// an open one out. Each search is its own GraphQL call and they run side
-// by side: as one call they took about ten seconds, which is where
-// GitHub's gateway gives up with a 502. A call that fails is tried once
-// more. dir only matters for which GitHub host gh talks to.
-func FetchPRBoard(ctx context.Context, dir string, repos []string) (PRBoard, error) {
-	type search struct {
-		name, query string
-		n           int
-	}
-	searches := []search{
-		{"authoredOpen", "is:pr is:open author:@me", 50},
-		{"authoredDone", "is:pr is:closed author:@me", 30},
-		{"involvedOpen", "is:pr is:open involves:@me -author:@me", 50},
-		{"involvedDone", "is:pr is:closed involves:@me -author:@me", 30},
-	}
-	if len(repos) > 0 {
-		in := "repo:" + strings.Join(repos, " repo:")
-		searches = append(searches, search{"reposOpen", "is:pr is:open -author:@me " + in, 50}, search{"reposDone", "is:pr is:closed -author:@me " + in, 30})
-	}
-	raws := make([][]byte, len(searches))
-	errs := make([]error, len(searches))
-	var wg sync.WaitGroup
-	for i, s := range searches {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			q := fmt.Sprintf("query { viewer { login } %s: search(query: %q, type: ISSUE, first: %d) { nodes { ... on PullRequest { %s } } } }", s.name, s.query+" sort:updated-desc", s.n, boardFields)
-			for try := 0; try < 2; try++ {
-				raws[i], errs[i] = gh(ctx, dir, "api", "graphql", "-f", "query="+q)
-				if errs[i] == nil || ctx.Err() != nil {
-					return
-				}
-			}
-		}()
-	}
-	wg.Wait()
-	// One answer for decodePRBoard: the searches' data side by side.
-	data := map[string]json.RawMessage{}
-	var gqlErrs []json.RawMessage
-	for i, raw := range raws {
-		if errs[i] != nil {
-			return PRBoard{}, errs[i]
-		}
-		var resp struct {
-			Data   map[string]json.RawMessage `json:"data"`
-			Errors []json.RawMessage          `json:"errors"`
-		}
-		if err := json.Unmarshal(raw, &resp); err != nil {
-			return PRBoard{}, err
-		}
-		for k, v := range resp.Data {
-			data[k] = v
-		}
-		gqlErrs = append(gqlErrs, resp.Errors...)
-	}
-	merged, err := json.Marshal(map[string]any{"data": data, "errors": gqlErrs})
-	if err != nil {
-		return PRBoard{}, err
-	}
-	return decodePRBoard(merged)
-}
-
-func decodePRBoard(raw []byte) (PRBoard, error) {
-	var resp struct {
-		Data   map[string]json.RawMessage `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return PRBoard{}, err
-	}
-	var viewer struct {
-		Login string `json:"login"`
-	}
-	json.Unmarshal(resp.Data["viewer"], &viewer)
-	if len(resp.Errors) > 0 && viewer.Login == "" {
-		return PRBoard{}, errors.New(resp.Errors[0].Message)
-	}
-	b := PRBoard{Login: viewer.Login}
-	seen := map[string]bool{}
-	// The searches in the order that names the involvement best: a PR
-	// found by "involves" and by a repository is the user's business.
-	for _, name := range []string{"authoredOpen", "authoredDone", "involvedOpen", "involvedDone", "reposOpen", "reposDone"} {
-		var nodes searchNodes
-		if r, ok := resp.Data[name]; ok {
-			json.Unmarshal(r, &nodes)
-		}
-		for _, n := range nodes.Nodes {
-			key := fmt.Sprintf("%s#%d", n.Repository.NameWithOwner, n.Number)
-			if n.Number == 0 || seen[key] {
-				continue
-			}
-			seen[key] = true
-			p := BoardPR{MyPR: MyPR{PR: n.pr(), Repo: n.Repository.NameWithOwner, State: strings.ToLower(n.State)}, Avatar: n.Author.Avatar, Additions: n.Additions, Deletions: n.Deletions}
-			p.CreatedAt, _ = time.Parse(time.RFC3339, n.CreatedAt)
-			for _, l := range n.Labels.Nodes {
-				p.Labels = append(p.Labels, l.Name)
-			}
-			p.Involve = involvement(n, viewer.Login, strings.HasPrefix(name, "repos"))
-			b.PRs = append(b.PRs, p)
-		}
-	}
-	return b, nil
-}
-
-// involvement names how login is involved in the pull request n; repo
-// is whether only the repositories search found it.
-func involvement(n prNode, login string, repo bool) string {
-	_, requested := n.reviewers()
-	switch {
-	case n.Author.Login == login:
-		return "authored"
-	case slices.Contains(requested, login):
-		return "review"
-	}
-	for _, a := range n.Assignees.Nodes {
-		if a.Login == login {
-			return "assigned"
-		}
-	}
-	if repo {
-		return "repo"
-	}
-	return "involved"
-}
-
-type searchNodes struct {
-	Nodes []prNode `json:"nodes"`
-}
-
-func (s searchNodes) prs() []MyPR {
-	var out []MyPR
-	for _, n := range s.Nodes {
-		if n.Number == 0 {
-			continue
-		}
-		out = append(out, MyPR{PR: n.pr(), Repo: n.Repository.NameWithOwner, State: strings.ToLower(n.State)})
-	}
-	return out
 }

@@ -34,11 +34,8 @@ var Actions = []Action{
 	{ID: "thread-prev", Label: "Previous thread", Desc: "Open the thread above the current one", Default: "alt+up", Where: "everywhere"},
 	{ID: "thread-next", Label: "Next thread", Desc: "Open the thread below the current one", Default: "alt+down", Where: "everywhere"},
 	{ID: "thread-new", Label: "New thread", Desc: "Start a thread in the current project", Default: "mod+shift+o", Where: "everywhere"},
-	{ID: "prs", Label: "Pull requests", Desc: "Open your pull requests", Default: "alt+p", Where: "everywhere"},
 	{ID: "settings", Label: "Settings", Desc: "Open the settings", Default: "mod+,", Where: "everywhere"},
 	{ID: "terminal", Label: "Toggle terminal", Desc: "Open or close the shell panel", Default: "mod+`", Where: "threads, also inside the terminal"},
-	{ID: "changes", Label: "Toggle changes panel", Desc: "Open or close the side panel", Default: "mod+shift+g", Where: "threads, also inside the terminal"},
-	{ID: "find-changes", Label: "Find in changes", Desc: "Search every changed file's diff; elsewhere the browser's own find", Default: "mod+f", Where: "threads with the changes panel open"},
 	{ID: "prompt", Label: "Focus the prompt", Desc: "Put the cursor in the composer", Default: "mod+shift+f", Where: "threads, also inside the terminal"},
 	{ID: "vscode", Label: "Open in VS Code", Desc: "Open the thread's folder in VS Code", Default: "mod+o", Where: "threads"},
 	{ID: "approve", Label: "Allow", Desc: "Answer the oldest waiting approval with allow", Default: "alt+y", Where: "threads with an approval waiting"},
@@ -47,7 +44,7 @@ var Actions = []Action{
 	{ID: "undo", Label: "Undo", Desc: "Take back the last settle, unpin or snooze while its notice shows", Default: "mod+z", Where: "everywhere, outside text boxes"},
 	{ID: "effort-up", Label: "More reasoning effort", Desc: "Step the composer's effort up one level, wrapping at the top", Where: "pages with a composer"},
 	{ID: "effort-down", Label: "Less reasoning effort", Desc: "Step the composer's effort down one level, wrapping at the bottom", Where: "pages with a composer"},
-	{ID: "stash", Label: "Stash the prompt", Desc: "Put the composer's text aside, or bring a stashed prompt back when it is empty", Default: "mod+s", Where: "pages with a composer, outside the file editor"},
+	{ID: "stash", Label: "Stash the prompt", Desc: "Put the composer's text aside, or bring a stashed prompt back when it is empty", Default: "mod+s", Where: "pages with a composer"},
 }
 
 // Binding is an action with the combo in force.

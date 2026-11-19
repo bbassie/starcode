@@ -465,7 +465,9 @@ type TurnCompleted struct {
 	Error      string  `json:"error,omitempty"`
 }
 
-// GitChanged is not persisted; it is only published on the bus.
+// GitChanged was published on the bus for the changes panel, which is
+// gone; nothing sends it now. The type stays so Decode and the store
+// still accept one in an event log written by an older build.
 type GitChanged struct {
 	ProjectID string `json:"project_id"`
 }
