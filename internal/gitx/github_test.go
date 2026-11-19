@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDecodePRs(t *testing.T) {
@@ -199,5 +200,35 @@ func TestPRDetailState(t *testing.T) {
 	}
 	if !(PRDetail{}).Open() || !(PRDetail{State: "open"}).Open() || (PRDetail{State: "closed"}).Open() {
 		t.Error("Open() wrong for one of the states")
+	}
+}
+
+// A batch where GitHub could not read one alias still yields the others,
+// and the failed one gets GitHub's message.
+func TestDecodeDetailsPartial(t *testing.T) {
+	raw := []byte(`{"data":{"viewer":{"login":"me"},
+	  "pr0":{"pullRequest":{"number":7,"title":"t","state":"OPEN","updatedAt":"2026-09-06T05:00:00Z","author":{"login":"me"},
+	    "comments":{"nodes":[{"id":"c","author":{"login":"rev"},"body":"hi","url":"u","createdAt":"2026-09-07T01:00:00Z"}]},
+	    "commits":{"nodes":[{"commit":{"committedDate":"2026-09-05T00:00:00Z","statusCheckRollup":{"contexts":{"nodes":[
+	      {"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","completedAt":"2026-09-08T00:00:00Z"}]}}}}]}}},
+	  "pr1":null,
+	  "pr2":{"pullRequest":null}},
+	 "errors":[{"type":"NOT_FOUND","path":["pr1"],"message":"Could not resolve to a Repository with the name 'o/gone'."}]}`)
+	rs := []PRRead{{PRRef: PRRef{"o/r", 7}}, {PRRef: PRRef{"o/gone", 1}}, {PRRef: PRRef{"o/r", 999}}}
+	if err := decodeDetails(raw, rs); err != nil {
+		t.Fatal(err)
+	}
+	d := rs[0].Detail
+	if rs[0].Err != nil || d.Number != 7 || d.Viewer != "me" || len(d.Remarks) != 1 || !d.Open() {
+		t.Fatalf("pr0 = %+v, %v", d, rs[0].Err)
+	}
+	if want := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC); !d.Activity.Equal(want) {
+		t.Errorf("activity = %v, want the check finishing", d.Activity)
+	}
+	if rs[1].Err == nil || !strings.Contains(rs[1].Err.Error(), "o/gone") {
+		t.Errorf("pr1 err = %v", rs[1].Err)
+	}
+	if rs[2].Err == nil {
+		t.Error("pr2 read without a pull request")
 	}
 }

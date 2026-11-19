@@ -4,11 +4,16 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/go-rod/rod/lib/proto"
+
+	"starcode/internal/domain"
+	"starcode/internal/store"
 )
 
 // TestSidebarFilter types in the sidebar's filter box and checks rows
@@ -177,5 +182,33 @@ func TestPRChipsLinkToGitHub(t *testing.T) {
 	}
 	if path := p.MustEval(`() => location.pathname`).Str(); path != "/threads/"+b {
 		t.Errorf("the chip's click opened the thread too: %s", path)
+	}
+}
+
+// TestPRWatchCountdown shows a watched PR's next read in the header and
+// checks the page's clock counts it down.
+func TestPRWatchCountdown(t *testing.T) {
+	e := newEnv(t)
+	a := e.thread()
+	ctx := context.Background()
+	now := time.Now()
+	old := now.Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if _, err := e.app.Store.Append(ctx, a, domain.ThreadPRLinked{Repo: "o/r", Number: 12, URL: "https://github.com/o/r/pull/12"},
+		domain.ThreadPRWatchSet{State: json.RawMessage(`{"started":"` + old + `","through":"` + old + `","active":"` + old + `"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	e.app.Store.SavePRStates(ctx, []store.PRState{{PR: store.PR{Repo: "o/r", Number: 12}, State: "open", CheckedAt: now}})
+	p := e.page("/threads/"+a, false)
+	btn := p.MustElement("#mainhead #pr-check")
+	if got := btn.MustText(); got != "30m" {
+		t.Errorf("next read %q, want 30m", got)
+	}
+	p.MustEval(`() => document.querySelector('#pr-check [data-until]').dataset.until = new Date(Date.now() + 5000).toISOString()`)
+	wait(p, `() => /^[1-5]s$/.test(document.querySelector('#pr-check [data-until]').textContent)`)
+	if os.Getenv("E2E_SHOTS") != "" {
+		p.MustElement("#mainhead").MustScreenshot(os.Getenv("E2E_SHOTS") + "/pr-check.png")
+		ph := e.page("/threads/"+a, true)
+		ph.MustElement("#pr-check")
+		ph.MustScreenshot(os.Getenv("E2E_SHOTS") + "/pr-check-phone.png")
 	}
 }

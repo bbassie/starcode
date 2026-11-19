@@ -814,7 +814,8 @@ templ Layout(title string, p Page, parts Parts) {
 				})();
 			</script>
 			// Clock: relative ages in thread rows ([data-ago], same rules as
-			// views.ago) and the busy row's elapsed time tick without a
+			// views.ago), the time to the next PR read ([data-until]) and
+			// the busy row's elapsed time tick without a
 			// server round trip; the busy word changes every few seconds.
 			<script>
 				(() => {
@@ -825,6 +826,14 @@ templ Layout(title string, p Page, parts Parts) {
 						if (s < 86400) return Math.floor(s / 3600) + 'h';
 						if (s < 14 * 86400) return Math.floor(s / 86400) + 'd';
 						return Math.floor(s / 7 / 86400) + 'w';
+					};
+					// Same rules as views.untilText: "45s", "4m", "1h", "now".
+					const until = (t) => {
+						const s = (t - Date.now()) / 1000;
+						if (!(s >= 1)) return 'now';
+						if (s < 60) return Math.floor(s) + 's';
+						if (s < 3600) return Math.round(s / 60) + 'm';
+						return Math.round(s / 3600) + 'h';
 					};
 					// Same shape as views.elapsedText: "12s", "1m 05s", "1h 02m 05s".
 					const elapsed = (t) => {
@@ -860,6 +869,7 @@ templ Layout(title string, p Page, parts Parts) {
 						tick++;
 						for (const el of document.querySelectorAll('[data-since]')) el.textContent = elapsed(Date.parse(el.dataset.since));
 						if (tick % 30 === 0) for (const el of document.querySelectorAll('[data-ago]')) el.textContent = ago(Date.parse(el.dataset.ago));
+						for (const el of document.querySelectorAll('[data-until]')) el.textContent = until(Date.parse(el.dataset.until));
 						if (tick % 4 === 0) for (const el of document.querySelectorAll('[data-busy-word]')) el.textContent = words[Math.floor(Math.random() * words.length)] + '…';
 					}, 1000);
 				})();

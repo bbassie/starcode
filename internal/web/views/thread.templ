@@ -27,6 +27,9 @@ type ThreadData struct {
 	// PR is the polled state of the linked pull request; Number is 0
 	// when the thread has none.
 	PR store.PRState
+	// PRNext is when the watch reads the pull request next; zero when
+	// the thread does not watch it.
+	PRNext time.Time
 	// Limits is the thread's instance's plan windows, for the context
 	// card; empty until the first read.
 	Limits []agent.LimitWindow
@@ -590,6 +593,7 @@ templ MainHead(d ThreadData) {
 			// The watch wakes the agent when the PR changes (app.PRWatch).
 			if d.Thread.PRWatch != "" {
 				<button class="btn ghost tiny pr-watch on" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/pr/unwatch')" } title={ "Watching #" + strconv.Itoa(pr.Number) + ": " + prWatchWhat + " Click to stop; it stays off for this thread." } aria-label="Stop watching the pull request">@Icon("eye", "ui-icon") <span class="hide-sm">watching</span></button>
+				@PRCheck(d.Thread.ID, d.PRNext)
 			} else if pr.State == "" || pr.State == "open" {
 				<button class="btn ghost tiny dim pr-watch" data-indicator:_watching data-attr:disabled="$_watching" data-on:click={ "@post('/api/threads/" + d.Thread.ID + "/pr/watch')" } title={ "Watch #" + strconv.Itoa(pr.Number) + ": " + prWatchWhat } aria-label="Watch the pull request">@Icon("eye", "ui-icon") <span class="hide-sm">watch</span></button>
 			}
@@ -667,6 +671,28 @@ templ MainHead(d ThreadData) {
 
 // prWatchWhat says what a watch on a pull request does.
 const prWatchWhat = "starcode reads it on GitHub and wakes the agent when a check fails or they all pass, the branch starts to conflict, a review requests changes, or a comment @mentions the agent's account. Other comments reach the agent with its next prompt. It stops when the PR merges or closes."
+
+// PRCheck is the time to the watch's next read of the pull request,
+// ticking down in the page ([data-until]), and reads it now when
+// clicked. A read redraws it (domain.PRWatchRead).
+templ PRCheck(threadID string, next time.Time) {
+	<button id="pr-check" class="btn ghost tiny dim pr-check" type="button" data-indicator:_prchecking data-attr:disabled="$_prchecking" data-on:click={ "@post('/api/threads/" + threadID + "/pr/check')" } title="Next read of the pull request on GitHub. starcode reads it every minute while it is busy and less often as it goes quiet, down to every half hour after a week. Click to read it now." aria-label="Read the pull request now">@Icon("refresh-cw", "ui-icon") <span class="hide-sm" data-until={ next.UTC().Format(time.RFC3339) }>{ untilText(next) }</span></button>
+}
+
+// untilText is the time to t as the page's clock writes it: "45s",
+// "4m", "1h", or "now".
+func untilText(t time.Time) string {
+	s := time.Until(t)
+	switch {
+	case s < time.Second:
+		return "now"
+	case s < time.Minute:
+		return fmt.Sprintf("%ds", int(s.Seconds()))
+	case s < time.Hour:
+		return fmt.Sprintf("%dm", int(s.Minutes()+0.5))
+	}
+	return fmt.Sprintf("%dh", int(s.Hours()+0.5))
+}
 
 // snoozeTitle is the tooltip on the header's snooze pill.
 func snoozeTitle(t store.Thread) string {

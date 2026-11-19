@@ -3,9 +3,11 @@ package web
 import (
 	"context"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
+	"starcode/internal/app"
 	"starcode/internal/domain"
 	"starcode/internal/gitx"
 	"starcode/internal/store"
@@ -21,6 +23,8 @@ type prCache struct {
 	items map[string]prEntry
 	repos map[string][]string // project path to its remotes, "owner/name"
 	one   chan store.PR
+	// slowAt is the last full poll that took the slow PRs along.
+	slowAt time.Time
 }
 
 type prEntry struct {
@@ -78,7 +82,13 @@ func (s *Server) watchPRs(ctx context.Context) {
 				return
 			case pr := <-one:
 				time.Sleep(4 * time.Second)
-				s.pollPRs(ctx, []store.PR{pr})
+				// A watched PR is the watch's to read; reading it now also
+				// lets the watch see a push the turn just made.
+				if id := s.watcherOf(ctx, pr); id != "" {
+					s.App.CheckPRNow(ctx, id)
+				} else {
+					s.pollPRs(ctx, []store.PR{pr})
+				}
 			}
 		}
 	}()
@@ -123,27 +133,81 @@ func (s *Server) watchPRs(ctx context.Context) {
 	}
 }
 
-// pollPRs reads the state of refs (or of every linked PR when refs is
-// nil) and saves it; a change is announced on the bus so sidebars redraw.
+// watcherOf is a thread that watches pr, or "".
+func (s *Server) watcherOf(ctx context.Context, pr store.PR) string {
+	ts, err := s.App.Store.Threads(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, t := range ts {
+		if l, ok := t.Linked(); ok && l == pr && app.Watching(t) {
+			return t.ID
+		}
+	}
+	return ""
+}
+
+// prSlowEvery is how often the poll reads the PRs nobody is likely to
+// look at: closed ones (they can be reopened) and those of settled
+// threads only.
+const prSlowEvery = time.Hour
+
+// pollRefs picks the linked PRs a full poll reads: not the watched ones
+// nor merged ones, and closed ones and those of settled threads only
+// when slow.
+func pollRefs(ts []store.Thread, before map[store.PR]store.PRState, slow bool) []store.PR {
+	watched, live := map[store.PR]bool{}, map[store.PR]bool{}
+	var all, refs []store.PR
+	for _, t := range ts {
+		pr, ok := t.Linked()
+		if !ok {
+			continue
+		}
+		if !slices.Contains(all, pr) {
+			all = append(all, pr)
+		}
+		watched[pr] = watched[pr] || app.Watching(t)
+		live[pr] = live[pr] || !t.Archived
+	}
+	for _, pr := range all {
+		st, known := before[pr]
+		switch {
+		case watched[pr], known && st.State == "merged":
+		case known && st.State == "closed", !live[pr]:
+			if slow {
+				refs = append(refs, pr)
+			}
+		default:
+			refs = append(refs, pr)
+		}
+	}
+	return refs
+}
+
+// pollPRs reads the state of refs (or of the linked PRs that need it
+// when refs is nil) and saves it; a change is announced on the bus so
+// sidebars redraw. The full poll leaves out PRs a thread watches (the
+// watch keeps their badge) and merged ones, which cannot change; closed
+// PRs and those of settled threads only go in every prSlowEvery.
 func (s *Server) pollPRs(ctx context.Context, refs []store.PR) {
+	before, err := s.App.Store.PRStates(ctx)
+	if err != nil {
+		return
+	}
 	if refs == nil {
 		ts, err := s.App.Store.Threads(ctx)
 		if err != nil {
 			return
 		}
-		seen := map[store.PR]bool{}
-		for _, t := range ts {
-			if pr, ok := t.Linked(); ok && !seen[pr] {
-				seen[pr] = true
-				refs = append(refs, pr)
-			}
+		s.prs.mu.Lock()
+		slow := time.Since(s.prs.slowAt) >= prSlowEvery
+		if slow {
+			s.prs.slowAt = time.Now()
 		}
+		s.prs.mu.Unlock()
+		refs = pollRefs(ts, before, slow)
 	}
 	if len(refs) == 0 {
-		return
-	}
-	before, err := s.App.Store.PRStates(ctx)
-	if err != nil {
 		return
 	}
 	var states []store.PRState
@@ -254,6 +318,15 @@ func (s *Server) unlinkPR(w http.ResponseWriter, r *http.Request) {
 // watchPR starts the watch on the thread's linked pull request.
 func (s *Server) watchPR(w http.ResponseWriter, r *http.Request) {
 	if err := s.App.StartPRWatch(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.ok(w, r)
+}
+
+// checkPR reads the watched pull request now, out of the watch's pace.
+func (s *Server) checkPR(w http.ResponseWriter, r *http.Request) {
+	if err := s.App.CheckPRNow(r.Context(), r.PathValue("id")); err != nil {
 		s.fail(w, r, err)
 		return
 	}

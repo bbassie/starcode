@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -95,6 +96,40 @@ func gh(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// ghGraphQL runs a GraphQL query through gh. An answer with data comes
+// back even when gh exits with an error: GitHub answers a batch where one
+// alias failed (a deleted repository) with the rest of the data and an
+// error naming that alias, and gh fails the whole call over it.
+func ghGraphQL(ctx context.Context, dir, query string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql", "-f", "query="+query)
+	cmd.Dir = dir
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	if err == nil {
+		return out.Bytes(), nil
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return nil, errors.New("the GitHub CLI (gh) is not installed")
+	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("%w: gh api graphql", ctx.Err())
+	}
+	var partial struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(out.Bytes(), &partial) == nil && len(partial.Data) > 0 && string(partial.Data) != "null" {
+		return out.Bytes(), nil
+	}
+	if msg := strings.TrimSpace(errb.String()); msg != "" {
+		return nil, errors.New(firstLine(msg))
+	}
+	return nil, err
+}
+
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]
@@ -102,23 +137,32 @@ func firstLine(s string) string {
 	return s
 }
 
+// repoNames keeps the repository each folder belongs to, which gh repo
+// view would otherwise ask GitHub for on every list.
+var repoNames sync.Map
+
 // PullRequests lists the open PRs of the repository dir belongs to. It
 // needs gh on PATH and signed in; anything else lands in Err.
 func PullRequests(ctx context.Context, dir string) PRList {
 	l := PRList{Branch: Branch(ctx, dir)}
-	repo, err := gh(ctx, dir, "repo", "view", "--json", "nameWithOwner")
-	if err != nil {
-		l.Err = err.Error()
-		return l
+	if v, ok := repoNames.Load(dir); ok {
+		l.Repo = v.(string)
+	} else {
+		repo, err := gh(ctx, dir, "repo", "view", "--json", "nameWithOwner")
+		if err != nil {
+			l.Err = err.Error()
+			return l
+		}
+		var rv struct {
+			NameWithOwner string `json:"nameWithOwner"`
+		}
+		if err := json.Unmarshal(repo, &rv); err != nil {
+			l.Err = "gh repo view: " + err.Error()
+			return l
+		}
+		l.Repo = rv.NameWithOwner
+		repoNames.Store(dir, l.Repo)
 	}
-	var rv struct {
-		NameWithOwner string `json:"nameWithOwner"`
-	}
-	if err := json.Unmarshal(repo, &rv); err != nil {
-		l.Err = "gh repo view: " + err.Error()
-		return l
-	}
-	l.Repo = rv.NameWithOwner
 	raw, err := gh(ctx, dir, "pr", "list", "--limit", "40", "--json", "number,title,url,headRefName,baseRefName,author,isDraft,reviewDecision,statusCheckRollup,updatedAt,latestReviews,reviewRequests")
 	if err != nil {
 		l.Err = err.Error()
@@ -243,6 +287,10 @@ type PRDetail struct {
 	HeadSHA string
 	Viewer  string
 	Remarks []Remark
+	// Activity is the newest of the PR's update time, its head commit,
+	// a check finishing and a remark: how lively it is, which sets how
+	// often the watch reads it.
+	Activity time.Time
 }
 
 // Remark is one comment on a pull request: on the conversation, on a
@@ -289,45 +337,137 @@ type Check struct {
 	URL    string
 }
 
-const prDetailQuery = `query($owner: String!, $name: String!, $number: Int!) {
-  viewer { login }
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      number title url headRefName headRefOid baseRefName isDraft reviewDecision updatedAt body state
-      additions deletions changedFiles mergeable mergeStateStatus
+// prDetailFields is what the watch reads of a PR. It is lean, since
+// every watched PR is read often: the last 30 review threads with their
+// last 10 comments, no description, labels or diff size. Five PRs in
+// one query cost 2 points of GitHub's 5,000 an hour.
+const prDetailFields = `number title url headRefName headRefOid baseRefName isDraft reviewDecision updatedAt state mergeable
       author { login }
-      labels(first: 20) { nodes { name } }
       reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
-      reviews(last: 50) { nodes { id author { login } state body url submittedAt } }
-      comments(last: 50) { nodes { id author { login } body url createdAt } }
-      reviewThreads(first: 100) {
+      reviews(last: 30) { nodes { id author { login } state body url submittedAt } }
+      comments(last: 30) { nodes { id author { login } body url createdAt } }
+      reviewThreads(last: 30) {
         nodes {
           isResolved isOutdated path line originalLine
-          comments(first: 50) { nodes { id author { login } body url createdAt } }
+          comments(last: 10) { nodes { id author { login } body url createdAt } }
         }
       }
       commits(last: 1) {
-        nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+        nodes { commit { committedDate statusCheckRollup { contexts(first: 100) { nodes {
           __typename
-          ... on CheckRun { name status conclusion detailsUrl }
-          ... on StatusContext { context state targetUrl }
+          ... on CheckRun { name status conclusion detailsUrl completedAt }
+          ... on StatusContext { context state targetUrl createdAt }
         } } } } }
-      }
-    }
-  }
-}`
+      }`
+
+// prDetailBatch is how many PRs one query reads. Each asks for about
+// 1,000 nodes at most, far under GitHub's 500,000.
+const prDetailBatch = 25
+
+// PRRead is one PR of a batch read: its detail, or why it could not be
+// read.
+type PRRead struct {
+	PRRef
+	Detail PRDetail
+	Err    error
+}
 
 // PullRequestDetail reads one PR of repo ("owner/name") in full.
 func PullRequestDetail(ctx context.Context, dir, repo string, number int) (PRDetail, error) {
-	owner, name, ok := strings.Cut(repo, "/")
-	if !ok {
-		return PRDetail{}, errors.New("unknown repository")
+	r := PullRequestDetails(ctx, dir, []PRRef{{Repo: repo, Number: number}})
+	return r[0].Detail, r[0].Err
+}
+
+// PullRequestDetails reads refs in one GraphQL query per prDetailBatch,
+// in the order given. A PR that cannot be read (deleted, no access) gets
+// its own error; the others are still read.
+func PullRequestDetails(ctx context.Context, dir string, refs []PRRef) []PRRead {
+	out := make([]PRRead, len(refs))
+	for i, r := range refs {
+		out[i].PRRef = r
 	}
-	raw, err := gh(ctx, dir, "api", "graphql", "-f", "query="+prDetailQuery, "-F", "owner="+owner, "-F", "name="+name, "-F", fmt.Sprintf("number=%d", number))
+	for lo := 0; lo < len(refs); lo += prDetailBatch {
+		hi := min(lo+prDetailBatch, len(refs))
+		readDetails(ctx, dir, out[lo:hi])
+	}
+	return out
+}
+
+func readDetails(ctx context.Context, dir string, rs []PRRead) {
+	var q strings.Builder
+	q.WriteString("query { viewer { login }")
+	for i, r := range rs {
+		owner, name, ok := strings.Cut(r.Repo, "/")
+		if !ok {
+			rs[i].Err = errors.New("unknown repository")
+			continue
+		}
+		fmt.Fprintf(&q, " pr%d: repository(owner: %q, name: %q) { pullRequest(number: %d) { %s } }", i, owner, name, r.Number, prDetailFields)
+	}
+	q.WriteString(" }")
+	raw, err := ghGraphQL(ctx, dir, q.String())
+	if err == nil {
+		err = decodeDetails(raw, rs)
+	}
 	if err != nil {
-		return PRDetail{}, err
+		for i := range rs {
+			if rs[i].Err == nil {
+				rs[i].Err = err
+			}
+		}
 	}
-	return decodePRDetail(raw)
+}
+
+// decodeDetails fills rs from a batch answer; an alias GitHub reported an
+// error for gets that error.
+func decodeDetails(raw []byte, rs []PRRead) error {
+	var resp struct {
+		Data   map[string]json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+			Path    []any  `json:"path"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return err
+	}
+	if resp.Data == nil {
+		if len(resp.Errors) > 0 {
+			return errors.New(resp.Errors[0].Message)
+		}
+		return errors.New("no data in the answer")
+	}
+	failed := map[string]string{}
+	for _, e := range resp.Errors {
+		if len(e.Path) > 0 {
+			if alias, ok := e.Path[0].(string); ok && failed[alias] == "" {
+				failed[alias] = e.Message
+			}
+		}
+	}
+	var viewer struct {
+		Login string `json:"login"`
+	}
+	json.Unmarshal(resp.Data["viewer"], &viewer)
+	for i := range rs {
+		if rs[i].Err != nil {
+			continue
+		}
+		alias := fmt.Sprintf("pr%d", i)
+		if msg := failed[alias]; msg != "" {
+			rs[i].Err = errors.New(msg)
+			continue
+		}
+		var n struct {
+			PullRequest *prDetailNode `json:"pullRequest"`
+		}
+		if err := json.Unmarshal(resp.Data[alias], &n); err != nil || n.PullRequest == nil {
+			rs[i].Err = errors.New("pull request not found")
+			continue
+		}
+		rs[i].Detail = n.PullRequest.detail(viewer.Login)
+	}
+	return nil
 }
 
 func decodePRDetail(raw []byte) (PRDetail, error) {
@@ -337,102 +477,7 @@ func decodePRDetail(raw []byte) (PRDetail, error) {
 				Login string `json:"login"`
 			} `json:"viewer"`
 			Repository struct {
-				PullRequest *struct {
-					Number       int    `json:"number"`
-					Title        string `json:"title"`
-					URL          string `json:"url"`
-					Head         string `json:"headRefName"`
-					HeadSHA      string `json:"headRefOid"`
-					Base         string `json:"baseRefName"`
-					Draft        bool   `json:"isDraft"`
-					Review       string `json:"reviewDecision"`
-					UpdatedAt    string `json:"updatedAt"`
-					Body         string `json:"body"`
-					State        string `json:"state"`
-					Additions    int    `json:"additions"`
-					Deletions    int    `json:"deletions"`
-					ChangedFiles int    `json:"changedFiles"`
-					Mergeable    string `json:"mergeable"`
-					MergeState   string `json:"mergeStateStatus"`
-					Author       struct {
-						Login string `json:"login"`
-					} `json:"author"`
-					Labels struct {
-						Nodes []struct {
-							Name string `json:"name"`
-						} `json:"nodes"`
-					} `json:"labels"`
-					ReviewRequests struct {
-						Nodes []struct {
-							RequestedReviewer struct {
-								Login string `json:"login"`
-							} `json:"requestedReviewer"`
-						} `json:"nodes"`
-					} `json:"reviewRequests"`
-					Comments struct {
-						Nodes []struct {
-							ID     string `json:"id"`
-							Author struct {
-								Login string `json:"login"`
-							} `json:"author"`
-							Body      string `json:"body"`
-							URL       string `json:"url"`
-							CreatedAt string `json:"createdAt"`
-						} `json:"nodes"`
-					} `json:"comments"`
-					Reviews struct {
-						Nodes []struct {
-							ID     string `json:"id"`
-							Author struct {
-								Login string `json:"login"`
-							} `json:"author"`
-							State       string `json:"state"`
-							Body        string `json:"body"`
-							URL         string `json:"url"`
-							SubmittedAt string `json:"submittedAt"`
-						} `json:"nodes"`
-					} `json:"reviews"`
-					ReviewThreads struct {
-						Nodes []struct {
-							IsResolved   bool   `json:"isResolved"`
-							IsOutdated   bool   `json:"isOutdated"`
-							Path         string `json:"path"`
-							Line         *int   `json:"line"`
-							OriginalLine *int   `json:"originalLine"`
-							Comments     struct {
-								Nodes []struct {
-									ID     string `json:"id"`
-									Author struct {
-										Login string `json:"login"`
-									} `json:"author"`
-									Body      string `json:"body"`
-									URL       string `json:"url"`
-									CreatedAt string `json:"createdAt"`
-								} `json:"nodes"`
-							} `json:"comments"`
-						} `json:"nodes"`
-					} `json:"reviewThreads"`
-					Commits struct {
-						Nodes []struct {
-							Commit struct {
-								Rollup *struct {
-									Contexts struct {
-										Nodes []struct {
-											Type       string `json:"__typename"`
-											Name       string `json:"name"`
-											Status     string `json:"status"`
-											Conclusion string `json:"conclusion"`
-											DetailsURL string `json:"detailsUrl"`
-											Context    string `json:"context"`
-											State      string `json:"state"`
-											TargetURL  string `json:"targetUrl"`
-										} `json:"nodes"`
-									} `json:"contexts"`
-								} `json:"statusCheckRollup"`
-							} `json:"commit"`
-						} `json:"nodes"`
-					} `json:"commits"`
-				} `json:"pullRequest"`
+				PullRequest *prDetailNode `json:"pullRequest"`
 			} `json:"repository"`
 		} `json:"data"`
 		Errors []struct {
@@ -449,13 +494,119 @@ func decodePRDetail(raw []byte) (PRDetail, error) {
 	if pr == nil {
 		return PRDetail{}, errors.New("pull request not found")
 	}
+	return pr.detail(resp.Data.Viewer.Login), nil
+}
+
+// prDetailNode is the GraphQL shape prDetailFields selects.
+type prDetailNode struct {
+	Number       int    `json:"number"`
+	Title        string `json:"title"`
+	URL          string `json:"url"`
+	Head         string `json:"headRefName"`
+	HeadSHA      string `json:"headRefOid"`
+	Base         string `json:"baseRefName"`
+	Draft        bool   `json:"isDraft"`
+	Review       string `json:"reviewDecision"`
+	UpdatedAt    string `json:"updatedAt"`
+	Body         string `json:"body"`
+	State        string `json:"state"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changedFiles"`
+	Mergeable    string `json:"mergeable"`
+	MergeState   string `json:"mergeStateStatus"`
+	Author       struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	Labels struct {
+		Nodes []struct {
+			Name string `json:"name"`
+		} `json:"nodes"`
+	} `json:"labels"`
+	ReviewRequests struct {
+		Nodes []struct {
+			RequestedReviewer struct {
+				Login string `json:"login"`
+			} `json:"requestedReviewer"`
+		} `json:"nodes"`
+	} `json:"reviewRequests"`
+	Comments struct {
+		Nodes []struct {
+			ID     string `json:"id"`
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			Body      string `json:"body"`
+			URL       string `json:"url"`
+			CreatedAt string `json:"createdAt"`
+		} `json:"nodes"`
+	} `json:"comments"`
+	Reviews struct {
+		Nodes []struct {
+			ID     string `json:"id"`
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			State       string `json:"state"`
+			Body        string `json:"body"`
+			URL         string `json:"url"`
+			SubmittedAt string `json:"submittedAt"`
+		} `json:"nodes"`
+	} `json:"reviews"`
+	ReviewThreads struct {
+		Nodes []struct {
+			IsResolved   bool   `json:"isResolved"`
+			IsOutdated   bool   `json:"isOutdated"`
+			Path         string `json:"path"`
+			Line         *int   `json:"line"`
+			OriginalLine *int   `json:"originalLine"`
+			Comments     struct {
+				Nodes []struct {
+					ID     string `json:"id"`
+					Author struct {
+						Login string `json:"login"`
+					} `json:"author"`
+					Body      string `json:"body"`
+					URL       string `json:"url"`
+					CreatedAt string `json:"createdAt"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"reviewThreads"`
+	Commits struct {
+		Nodes []struct {
+			Commit struct {
+				CommittedAt string `json:"committedDate"`
+				Rollup      *struct {
+					Contexts struct {
+						Nodes []struct {
+							Type        string `json:"__typename"`
+							Name        string `json:"name"`
+							Status      string `json:"status"`
+							Conclusion  string `json:"conclusion"`
+							DetailsURL  string `json:"detailsUrl"`
+							Context     string `json:"context"`
+							State       string `json:"state"`
+							TargetURL   string `json:"targetUrl"`
+							CompletedAt string `json:"completedAt"`
+							CreatedAt   string `json:"createdAt"`
+						} `json:"nodes"`
+					} `json:"contexts"`
+				} `json:"statusCheckRollup"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+}
+
+// detail turns the node into a PRDetail; viewer is the login gh reads as.
+func (pr *prDetailNode) detail(viewer string) PRDetail {
 	d := PRDetail{
 		PR:        PR{Number: pr.Number, Title: pr.Title, URL: pr.URL, Head: pr.Head, Base: pr.Base, Author: pr.Author.Login, Draft: pr.Draft},
 		State:     strings.ToLower(pr.State),
 		Body:      pr.Body,
 		Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles,
 		Mergeable: pr.Mergeable, MergeState: pr.MergeState,
-		HeadSHA: pr.HeadSHA, Viewer: resp.Data.Viewer.Login,
+		HeadSHA: pr.HeadSHA, Viewer: viewer,
 	}
 	d.UpdatedAt, _ = time.Parse(time.RFC3339, pr.UpdatedAt)
 	for _, l := range pr.Labels.Nodes {
@@ -548,12 +699,33 @@ func decodePRDetail(raw []byte) (PRDetail, error) {
 				}
 			}
 			d.Checks = append(d.Checks, ch)
+			done := c.CompletedAt
+			if c.Type == "StatusContext" && ch.Status != "pending" {
+				done = c.CreatedAt
+			}
+			d.active(done)
 			if ch.Status != "skipped" {
 				d.PR.Checks = worseCheck(d.PR.Checks, ch.Status)
 			}
 		}
 	}
-	return d, nil
+	d.active(pr.UpdatedAt)
+	if len(pr.Commits.Nodes) > 0 {
+		d.active(pr.Commits.Nodes[0].Commit.CommittedAt)
+	}
+	for _, r := range d.Remarks {
+		if r.CreatedAt.After(d.Activity) {
+			d.Activity = r.CreatedAt
+		}
+	}
+	return d
+}
+
+// active moves d.Activity up to the time at, an RFC 3339 stamp.
+func (d *PRDetail) active(at string) {
+	if t, err := time.Parse(time.RFC3339, at); err == nil && t.After(d.Activity) {
+		d.Activity = t
+	}
 }
 
 // Open is whether the PR can still be reviewed and merged.
@@ -651,12 +823,12 @@ func PullRequestStates(ctx context.Context, dir string, refs []PRRef) ([]PRState
 		fmt.Fprintf(&q, ` pr%d: repository(owner: %q, name: %q) { pullRequest(number: %d) { %s } }`, i, owner, name, r.Number, prStateFields)
 	}
 	q.WriteString(" }")
-	raw, err := gh(ctx, dir, "api", "graphql", "-f", "query="+q.String())
+	raw, err := ghGraphQL(ctx, dir, q.String())
 	if err != nil {
 		return nil, err
 	}
 	var resp struct {
-		Data map[string]struct {
+		Data map[string]*struct {
 			PullRequest *prNode `json:"pullRequest"`
 		} `json:"data"`
 	}
@@ -665,7 +837,7 @@ func PullRequestStates(ctx context.Context, dir string, refs []PRRef) ([]PRState
 	}
 	var out []PRState
 	for i, r := range refs {
-		if n, ok := resp.Data[fmt.Sprintf("pr%d", i)]; ok && n.PullRequest != nil {
+		if n := resp.Data[fmt.Sprintf("pr%d", i)]; n != nil && n.PullRequest != nil {
 			st := n.PullRequest.state()
 			st.Repo, st.Number = r.Repo, r.Number
 			out = append(out, st)

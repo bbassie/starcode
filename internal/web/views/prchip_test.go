@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"starcode/internal/store"
 )
@@ -44,5 +45,24 @@ func TestPRChipStates(t *testing.T) {
 	// Before the first poll or a stored URL, the link is built.
 	if got := prURL(store.PRState{PR: store.PR{Repo: "o/r", Number: 3}}); got != "https://github.com/o/r/pull/3" {
 		t.Errorf("prURL = %q", got)
+	}
+}
+
+// The watch's next read shows as a countdown the page's clock keeps
+// in the header.
+func TestPRCheck(t *testing.T) {
+	next := time.Now().Add(4*time.Minute + 10*time.Second)
+	var b strings.Builder
+	if err := PRCheck("t1", next).Render(context.Background(), &b); err != nil {
+		t.Fatal(err)
+	}
+	html := b.String()
+	for _, want := range []string{`id="pr-check"`, `/api/threads/t1/pr/check`, `data-until="` + next.UTC().Format(time.RFC3339) + `"`, `>4m</span>`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("lacks %q:\n%s", want, html)
+		}
+	}
+	if got := untilText(time.Now().Add(-time.Minute)); got != "now" {
+		t.Errorf("past = %q", got)
 	}
 }

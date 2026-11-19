@@ -33,12 +33,21 @@ import (
 // is. Held remarks ride along with a wake too, so the agent hears
 // everything once.
 //
+// The sweep ticks every minute but reads a PR only when it is due, by
+// how long ago it last saw activity (prWatchInterval): every minute for
+// a PR busy in the last hour, down to every half hour for one quiet for
+// a week. Pending checks and remarks waiting out the quiet time keep the
+// minute pace. The due PRs of a sweep are read in one GraphQL query, and
+// that read also keeps the sidebar's badge for them (store.PRState, whose
+// CheckedAt is the last read), so the badge poll leaves them out.
+//
 // Watching ends when the PR merges or closes, when it is unlinked, after
 // prWatchWakeLimit wakes in a row that brought only remarks (a bot and
 // the agent answering each other), or when the PR could not be read for
 // prWatchReadGrace. The design follows T3 Code's watch_pull_request.
 
 const (
+	// prWatchEvery is the sweep's tick and the fastest pace.
 	prWatchEvery     = time.Minute
 	prWatchWakeLimit = 10
 	prWatchReadGrace = 15 * time.Minute
@@ -72,6 +81,11 @@ type PRWatch struct {
 	// Held are remarks from others seen but not sent yet: ones that wait
 	// for the PR to go quiet, and ones that wait for the next prompt.
 	Held []heldRemark `json:"held,omitempty"`
+	// Active is the newest activity the watch has seen (gitx.PRDetail
+	// Activity), and Pending whether checks were still running at the
+	// last read; they set the pace (nextRead).
+	Active  time.Time `json:"active,omitzero"`
+	Pending bool      `json:"pending,omitempty"`
 	// Wakes counts wakes in a row that brought only remarks.
 	Wakes int `json:"wakes,omitempty"`
 	// Unread is since when reads of the PR have failed; zero after a
@@ -132,11 +146,70 @@ func checkNames(cs []gitx.Check) []string {
 	return names
 }
 
+func checksPending(cs []gitx.Check) bool {
+	return slices.ContainsFunc(cs, func(c gitx.Check) bool { return c.Status == "pending" })
+}
+
+// prWatchPace is how often the watch reads a PR by how long ago it saw
+// activity on it; one quiet for longer is read every prWatchSlowest.
+var prWatchPace = []struct{ within, every time.Duration }{
+	{time.Hour, time.Minute},
+	{24 * time.Hour, 5 * time.Minute},
+	{7 * 24 * time.Hour, 15 * time.Minute},
+}
+
+const prWatchSlowest = 30 * time.Minute
+
+// prWatchInterval is the time between reads of a PR whose last activity
+// was at last.
+func prWatchInterval(last, now time.Time) time.Duration {
+	age := now.Sub(last)
+	for _, p := range prWatchPace {
+		if age < p.within {
+			return p.every
+		}
+	}
+	return prWatchSlowest
+}
+
+// nextRead is when the watch reads the PR again, after a read at
+// checked. Checks still running, remarks waiting out the quiet time and
+// failed reads keep the minute pace.
+func (w PRWatch) nextRead(checked time.Time) time.Time {
+	if checked.IsZero() {
+		return checked
+	}
+	settling := slices.ContainsFunc(w.Held, func(h heldRemark) bool { return h.Asks })
+	if w.Pending || settling || !w.Unread.IsZero() {
+		return checked.Add(prWatchEvery)
+	}
+	last := w.Active
+	if w.Started.After(last) {
+		last = w.Started
+	}
+	return checked.Add(prWatchInterval(last, checked))
+}
+
+// PRWatchNext is when the watch reads t's pull request next, given the
+// time of the last read (store.PRState CheckedAt); zero when t does not
+// watch it.
+func PRWatchNext(t store.Thread, checked time.Time) time.Time {
+	var w PRWatch
+	if !Watching(t) || json.Unmarshal([]byte(t.PRWatch), &w) != nil {
+		return time.Time{}
+	}
+	if checked.Before(w.Started) {
+		checked = w.Started
+	}
+	return w.nextRead(checked)
+}
+
 // prWatchBaseline is a new watch on the PR as it stands: nothing in it
 // is news.
 func prWatchBaseline(d gitx.PRDetail, now time.Time) PRWatch {
 	w := PRWatch{Started: now, Head: d.HeadSHA, Failed: checkNames(failedChecks(d.Checks)), Conflicting: d.Mergeable == "CONFLICTING", Through: now}
 	w.Passed, _ = checksPassed(d.Checks)
+	w.Active, w.Pending = d.Activity, checksPending(d.Checks)
 	for _, r := range d.Remarks {
 		if r.CreatedAt.After(w.Through) {
 			w.Through = r.CreatedAt
@@ -284,6 +357,12 @@ func evaluatePRWatch(w PRWatch, d gitx.PRDetail, now time.Time) prEval {
 		passed = ok
 	}
 	next.Head, next.Failed, next.Passed = d.HeadSHA, failed, passed
+	if d.Activity.After(next.Active) {
+		next.Active = d.Activity
+	}
+	if len(d.Checks) > 0 || headMoved {
+		next.Pending = checksPending(d.Checks)
+	}
 
 	if d.Mergeable == "CONFLICTING" && !w.Conflicting {
 		e.changes = append(e.changes, prChange{kind: "conflict"})
@@ -481,8 +560,8 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// prDetail reads a pull request; tests replace it.
-var prDetail = gitx.PullRequestDetail
+// prRead reads pull requests in one batch; tests replace it.
+var prRead = gitx.PullRequestDetails
 
 // Reasons a watch stops by hand; ThreadPRWatchStopped Off keeps those
 // off, as it does the wake limit.
@@ -505,10 +584,12 @@ func (a *App) StartPRWatch(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	d, err := prDetail(ctx, p.Path, t.PRRepo, t.PRNumber)
+	r := prRead(ctx, p.Path, []gitx.PRRef{{Repo: t.PRRepo, Number: t.PRNumber}})[0]
+	d, err := r.Detail, r.Err
 	if err != nil {
 		return fmt.Errorf("could not read pull request #%d: %w", t.PRNumber, err)
 	}
+	a.savePRStates(ctx, []gitx.PRRead{r})
 	if !d.Open() {
 		return fmt.Errorf("pull request #%d is %s", t.PRNumber, d.State)
 	}
@@ -565,12 +646,16 @@ func (a *App) setPRWatch(ctx context.Context, id string, w PRWatch) error {
 // prWatchBusy keeps sweeps from overlapping when GitHub is slow.
 var prWatchBusy atomic.Bool
 
-// watchPRs reads every watched pull request once and wakes the agents
-// whose PR changed. A thread with a turn running or an approval waiting
-// is left for a later sweep, so the news reaches the agent between
-// turns and nothing is lost meanwhile. Threads with an open linked PR
-// and no watch get one when the watch_linked_prs setting is on, which
-// covers links made before the setting existed.
+// prWatchSlack lets a read due a moment after the tick go now rather
+// than a whole tick late.
+const prWatchSlack = 5 * time.Second
+
+// watchPRs reads the watched pull requests that are due, in one batch,
+// and wakes the agents whose PR changed. A thread with a turn running or
+// an approval waiting is left for a later sweep, so the news reaches the
+// agent between turns and nothing is lost meanwhile. Threads with an
+// open linked PR and no watch get one when the watch_linked_prs setting
+// is on, which covers links made before the setting existed.
 func (a *App) watchPRs(ctx context.Context, now time.Time) {
 	if !prWatchBusy.CompareAndSwap(false, true) {
 		return
@@ -580,48 +665,115 @@ func (a *App) watchPRs(ctx context.Context, now time.Time) {
 	if err != nil {
 		return
 	}
+	states, _ := a.Store.PRStates(ctx)
 	auto := a.Store.WatchLinkedPRs(ctx)
-	var states map[store.PR]store.PRState
+	var due []store.Thread
 	for _, t := range ts {
 		select {
 		case <-a.stop:
 			return
 		default:
 		}
+		pr := store.PR{Repo: t.PRRepo, Number: t.PRNumber}
 		if auto && t.PRNumber > 0 && t.PRWatch == "" && !t.PRWatchOff && !t.Archived {
 			// Only PRs the badge poll knows to be open, so a merged one is
 			// not read every minute. A settled thread keeps a watch it
 			// has, but gets none here: most of those PRs are long done.
-			if states == nil {
-				if states, _ = a.Store.PRStates(ctx); states == nil {
-					states = map[store.PR]store.PRState{}
-				}
-			}
-			if st, ok := states[store.PR{Repo: t.PRRepo, Number: t.PRNumber}]; ok && strings.EqualFold(st.State, "open") {
+			if st, ok := states[pr]; ok && strings.EqualFold(st.State, "open") {
 				a.autoWatchPR(ctx, t.ID)
 			}
 			continue
 		}
-		if Watching(t) && !busyThread(t) {
-			a.watchPR(ctx, t, now)
+		if Watching(t) && !busyThread(t) && !now.Before(PRWatchNext(t, states[pr].CheckedAt).Add(-prWatchSlack)) {
+			due = append(due, t)
 		}
 	}
+	a.readWatched(ctx, due, now)
 }
 
-func (a *App) watchPR(ctx context.Context, t store.Thread, now time.Time) {
-	var w PRWatch
-	if json.Unmarshal([]byte(t.PRWatch), &w) != nil {
-		a.StopPRWatch(ctx, t.ID, "its record could not be read")
+// CheckPRNow reads the thread's watched pull request right away, out of
+// its pace.
+func (a *App) CheckPRNow(ctx context.Context, id string) error {
+	t, err := a.Store.Thread(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !Watching(t) {
+		return errors.New("the thread does not watch a pull request")
+	}
+	a.readWatched(ctx, []store.Thread{t}, time.Now())
+	return nil
+}
+
+// readWatched reads the pull requests of ts in one batch and acts on
+// each read.
+func (a *App) readWatched(ctx context.Context, ts []store.Thread, now time.Time) {
+	if len(ts) == 0 {
 		return
 	}
-	p, err := a.Store.Project(ctx, t.ProjectID)
+	p, err := a.Store.Project(ctx, ts[0].ProjectID)
 	if err != nil {
 		return
 	}
-	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	d, err := prDetail(rctx, p.Path, t.PRRepo, t.PRNumber)
+	var refs []gitx.PRRef
+	for _, t := range ts {
+		ref := gitx.PRRef{Repo: t.PRRepo, Number: t.PRNumber}
+		if !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	rctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	reads := prRead(rctx, p.Path, refs)
 	cancel()
-	a.applyPRRead(ctx, t, w, d, err, now)
+	a.savePRStates(ctx, reads)
+	for _, t := range ts {
+		var w PRWatch
+		if json.Unmarshal([]byte(t.PRWatch), &w) != nil {
+			a.StopPRWatch(ctx, t.ID, "its record could not be read")
+			continue
+		}
+		for _, r := range reads {
+			if r.Repo == t.PRRepo && r.Number == t.PRNumber {
+				a.applyPRRead(ctx, t, w, r.Detail, r.Err, now)
+			}
+		}
+		a.Bus.Publish(domain.PRWatchRead{ThreadID: t.ID})
+	}
+}
+
+// savePRStates keeps the badge of each open PR read: the read has all a
+// badge shows, so the badge poll need not read a watched PR again. A
+// merged or closed one is left to the poll, which settles its threads on
+// the change.
+func (a *App) savePRStates(ctx context.Context, reads []gitx.PRRead) {
+	before, err := a.Store.PRStates(ctx)
+	if err != nil {
+		return
+	}
+	var states []store.PRState
+	changed := false
+	now := time.Now()
+	for _, r := range reads {
+		d := r.Detail
+		if r.Err != nil || !d.Open() {
+			continue
+		}
+		st := store.PRState{PR: store.PR{Repo: r.Repo, Number: r.Number}, Title: d.Title, URL: d.URL, State: "open", Review: d.Review, Checks: d.PR.Checks, Draft: d.Draft, Head: d.Head, CheckedAt: now}
+		if old, ok := before[st.PR]; !ok || old.Title != st.Title || old.State != st.State || old.Review != st.Review || old.Checks != st.Checks || old.Draft != st.Draft || old.Head != st.Head {
+			changed = true
+		}
+		states = append(states, st)
+	}
+	if len(states) == 0 {
+		return
+	}
+	if err := a.Store.SavePRStates(ctx, states); err != nil {
+		a.Log.Warn("save pull request states", "err", err)
+		return
+	}
+	if changed {
+		a.Bus.Publish(domain.PRStateChanged{})
+	}
 }
 
 // applyPRRead acts on one read of a watched PR. It holds promptMu and

@@ -187,13 +187,31 @@ func TestPRWatchSettles(t *testing.T) {
 	}
 }
 
+// stubPRs answers the watch's reads with read, one PR at a time, and
+// counts the batches.
+func stubPRs(t *testing.T, read func(gitx.PRRef) (gitx.PRDetail, error)) *int {
+	t.Helper()
+	old := prRead
+	n := new(int)
+	prRead = func(_ context.Context, _ string, refs []gitx.PRRef) []gitx.PRRead {
+		*n++
+		out := make([]gitx.PRRead, len(refs))
+		for i, r := range refs {
+			out[i].PRRef = r
+			out[i].Detail, out[i].Err = read(r)
+		}
+		return out
+	}
+	t.Cleanup(func() { prRead = old })
+	return n
+}
+
 func newWatchApp(t *testing.T, cur *gitx.PRDetail) (*App, *store.Store, *freshAgent, string) {
 	t.Helper()
 	ctx := context.Background()
 	a, st, ag := newFreshApp(t, "")
-	old := prDetail
-	prDetail = func(context.Context, string, string, int) (gitx.PRDetail, error) { return *cur, nil }
-	t.Cleanup(func() { a.bg.Wait(); prDetail = old })
+	stubPRs(t, func(gitx.PRRef) (gitx.PRDetail, error) { return *cur, nil })
+	t.Cleanup(func() { a.bg.Wait() })
 	id, _ := a.CreateThread(ctx, "p1", "fresh-test", "")
 	return a, st, ag, id
 }
@@ -279,7 +297,9 @@ func TestPRWatchHeldRidesWithNextPrompt(t *testing.T) {
 	a.bg.Wait()
 
 	cur.Remarks = []gitx.Remark{{ID: "c1", Author: "rev", Body: "Nice, thanks", URL: "https://c/1", CreatedAt: time.Now().Add(time.Second)}}
-	a.watchPRs(ctx, time.Now())
+	if err := a.CheckPRNow(ctx, id); err != nil {
+		t.Fatal(err)
+	}
 	if us := userItems(t, st, id); len(us) != 0 {
 		t.Fatalf("a plain comment woke the agent: %+v", us)
 	}
@@ -303,7 +323,7 @@ func TestPRWatchHeldRidesWithNextPrompt(t *testing.T) {
 		t.Fatalf("not marked told: %+v", w)
 	}
 	finishTurn(t, st, id, ag.session(0), "a1")
-	a.watchPRs(ctx, time.Now().Add(time.Hour))
+	a.watchPRs(ctx, time.Now().Add(2*time.Hour))
 	if err := a.SendPrompt(ctx, id, "third"); err != nil {
 		t.Fatal(err)
 	}
@@ -329,9 +349,7 @@ func TestWatchPRWakesTheAgent(t *testing.T) {
 	a.SetThreadSettings(ctx, id, ThreadSettings{Agent: "fake", PermissionMode: "yolo"})
 
 	cur := prAt("aaa1111", gitx.Check{Name: "test", Status: "pending"})
-	old := prDetail
-	prDetail = func(context.Context, string, string, int) (gitx.PRDetail, error) { return cur, nil }
-	defer func() { prDetail = old }()
+	stubPRs(t, func(gitx.PRRef) (gitx.PRDetail, error) { return cur, nil })
 
 	if err := a.StartPRWatch(ctx, id); err == nil {
 		t.Fatal("watching without a linked PR")
@@ -347,7 +365,7 @@ func TestWatchPRWakesTheAgent(t *testing.T) {
 	}
 
 	cur = prAt("aaa1111", gitx.Check{Name: "test", Status: "failure", URL: "https://ci/1"})
-	a.watchPRs(ctx, time.Now())
+	a.watchPRs(ctx, time.Now().Add(time.Hour))
 	us := userItems(t, st, id)
 	if len(us) != 1 || !strings.Contains(us[0].Body, "Checks failed on aaa1111") || !strings.Contains(us[0].Body, "test https://ci/1") {
 		t.Fatalf("prompts = %+v", us)
@@ -364,7 +382,7 @@ func TestWatchPRWakesTheAgent(t *testing.T) {
 	}
 
 	cur.State = "merged"
-	a.watchPRs(ctx, time.Now())
+	a.watchPRs(ctx, time.Now().Add(2*time.Hour))
 	th, _ = st.Thread(ctx, id)
 	if Watching(th) {
 		t.Fatal("still watching a merged PR")
@@ -380,5 +398,104 @@ func TestWatchPRWakesTheAgent(t *testing.T) {
 	a.UnlinkPR(ctx, id)
 	if th, _ = st.Thread(ctx, id); th.PRWatch != "" {
 		t.Error("unlink kept the watch")
+	}
+}
+
+func TestPRWatchInterval(t *testing.T) {
+	for _, c := range []struct {
+		age  time.Duration
+		want time.Duration
+	}{
+		{0, time.Minute},
+		{59 * time.Minute, time.Minute},
+		{time.Hour, 5 * time.Minute},
+		{23 * time.Hour, 5 * time.Minute},
+		{24 * time.Hour, 15 * time.Minute},
+		{6 * 24 * time.Hour, 15 * time.Minute},
+		{7 * 24 * time.Hour, 30 * time.Minute},
+		{90 * 24 * time.Hour, 30 * time.Minute},
+	} {
+		if got := prWatchInterval(t0.Add(-c.age), t0); got != c.want {
+			t.Errorf("age %v: every %v, want %v", c.age, got, c.want)
+		}
+	}
+}
+
+// A quiet PR is read less often; running checks, a remark waiting out
+// the quiet time and a failed read keep the minute pace.
+func TestPRWatchNextRead(t *testing.T) {
+	week := PRWatch{Started: t0.Add(-30 * 24 * time.Hour), Active: t0.Add(-8 * 24 * time.Hour)}
+	for _, c := range []struct {
+		name string
+		edit func(*PRWatch)
+		want time.Duration
+	}{
+		{"quiet for a week", func(*PRWatch) {}, 30 * time.Minute},
+		{"a comment an hour ago", func(w *PRWatch) { w.Active = t0.Add(-90 * time.Minute) }, 5 * time.Minute},
+		{"watch just started", func(w *PRWatch) { w.Started = t0.Add(-time.Minute) }, time.Minute},
+		{"checks running", func(w *PRWatch) { w.Pending = true }, time.Minute},
+		{"mention settling", func(w *PRWatch) { w.Held = []heldRemark{{Asks: true}} }, time.Minute},
+		{"plain comment held", func(w *PRWatch) { w.Held = []heldRemark{{}} }, 30 * time.Minute},
+		{"read failing", func(w *PRWatch) { w.Unread = t0 }, time.Minute},
+	} {
+		w := week
+		c.edit(&w)
+		if got := w.nextRead(t0).Sub(t0); got != c.want {
+			t.Errorf("%s: next read in %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// The sweep reads only the PRs that are due, all in one batch, and keeps
+// their badge.
+func TestWatchPRsBatchesDueReads(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	busy := prAt("aaa1111")
+	busy.Activity = now
+	quiet := prAt("bbb2222")
+	quiet.Number, quiet.Title = 8, "old"
+	quiet.Activity = now.Add(-10 * 24 * time.Hour)
+	a, st, _, id := newWatchApp(t, &busy)
+	var read []int
+	batches := stubPRs(t, func(r gitx.PRRef) (gitx.PRDetail, error) {
+		read = append(read, r.Number)
+		if r.Number == 7 {
+			return busy, nil
+		}
+		return quiet, nil
+	})
+	id2, _ := a.CreateThread(ctx, "p1", "fresh-test", "")
+	a.LinkPR(ctx, id, "o/r", 7, "")
+	a.LinkPR(ctx, id2, "o/r", 8, "")
+	a.bg.Wait()
+	// Both watches started a while ago.
+	for _, tid := range []string{id, id2} {
+		_, w := watchOf(t, st, tid)
+		w.Started = now.Add(-time.Hour)
+		a.setPRWatch(ctx, tid, w)
+	}
+	*batches, read = 0, nil
+
+	a.watchPRs(ctx, now.Add(30*time.Second))
+	if *batches != 0 {
+		t.Fatalf("read before anything was due: %v", read)
+	}
+	a.watchPRs(ctx, now.Add(time.Minute))
+	if *batches != 1 || len(read) != 1 || read[0] != 7 {
+		t.Fatalf("a minute on: %d batches, read %v", *batches, read)
+	}
+	*batches, read = 0, nil
+	a.watchPRs(ctx, now.Add(31*time.Minute))
+	if *batches != 1 || len(read) != 2 {
+		t.Fatalf("half an hour on: %d batches, read %v", *batches, read)
+	}
+	states, _ := st.PRStates(ctx)
+	if s := states[store.PR{Repo: "o/r", Number: 8}]; s.Title != "old" || s.State != "open" || s.CheckedAt.Before(now) {
+		t.Fatalf("badge = %+v", s)
+	}
+	th, _ := st.Thread(ctx, id)
+	if next := PRWatchNext(th, states[store.PR{Repo: "o/r", Number: 7}].CheckedAt); next.Sub(time.Now()) > time.Minute+time.Second {
+		t.Fatalf("busy PR next read in %v", time.Until(next))
 	}
 }

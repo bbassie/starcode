@@ -186,6 +186,7 @@ func New(a *app.App, log *slog.Logger, token, attachDir string, prov *providers.
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/unlink", s.unlinkPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/watch", s.watchPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/pr/unwatch", s.unwatchPR)
+	s.mux.HandleFunc("POST /api/threads/{id}/pr/check", s.checkPR)
 	s.mux.HandleFunc("POST /api/threads/{id}/rules/revoke", s.revokeRule)
 	s.mux.HandleFunc("POST /api/drafts/{key}", s.saveDraft)
 	s.mux.HandleFunc("POST /api/threads/{id}/settings", s.setThreadSettings)
@@ -610,6 +611,6 @@ func (s *Server) threadData(ctx context.Context, id string) (views.ThreadData, e
 		return views.ThreadData{}, err
 	}
 	bg, _ := s.App.Store.Background(ctx, id)
-	return views.ThreadData{Thread: t, Project: p, Items: items, Parent: parent, Scheduled: scheduled, Notify: s.App.Store.NotifyLevel(ctx, id), Queued: queued, Steering: steering, Background: bg, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
+	return views.ThreadData{Thread: t, Project: p, Items: items, Parent: parent, Scheduled: scheduled, Notify: s.App.Store.NotifyLevel(ctx, id), Queued: queued, Steering: steering, Background: bg, Approvals: aps, Rules: s.App.SessionRules(ctx, id), Branch: branch, PR: pr, PRNext: app.PRWatchNext(t, pr.CheckedAt), Limits: s.agentLimits(t.Agent), Stashed: s.App.Store.StashCount(ctx),
 		Settings: views.SettingsData{Agents: s.agentNames(), Looks: s.agentLooks(), Caps: caps, CapsErrs: capsErrs, Agent: t.Agent, Model: t.Model, Effort: t.Effort, Mode: t.PermissionMode}}, nil
 }

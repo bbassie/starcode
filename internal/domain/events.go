@@ -508,6 +508,12 @@ type SeenChanged struct {
 // state that differs from the last one, so sidebars redraw their chips.
 type PRStateChanged struct{}
 
+// PRWatchRead is bus-only: the watch read the pull request of ThreadID,
+// so that thread's header shows the time of the next read.
+type PRWatchRead struct {
+	ThreadID string `json:"thread_id"`
+}
+
 // BinaryUpdated is bus-only: the starcode executable on disk is newer than
 // the running one, so every open page shows the restart banner.
 type BinaryUpdated struct{}
@@ -619,6 +625,8 @@ func TypeOf(p any) string {
 		return "pr.state_changed"
 	case SeenChanged, *SeenChanged:
 		return "seen.changed"
+	case PRWatchRead, *PRWatchRead:
+		return "pr.watch_read"
 	}
 	panic(fmt.Sprintf("domain: unknown event payload %T", p))
 }

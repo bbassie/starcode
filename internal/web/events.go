@@ -11,6 +11,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/starfederation/datastar-go/datastar"
 
+	"starcode/internal/app"
 	"starcode/internal/bus"
 	"starcode/internal/domain"
 	"starcode/internal/store"
@@ -119,6 +120,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				}
 			case domain.BinaryUpdated:
 				err = c.renderUpdateBanner(ctx)
+			case domain.PRWatchRead:
+				if view == "thread" && m.ThreadID == threadID {
+					err = c.renderPRCheck(ctx)
+				}
 			case domain.NotifyLevelChanged:
 				if view == "thread" && m.ThreadID == threadID {
 					err = c.renderHead(ctx, false)
@@ -376,6 +381,20 @@ func (c *conn) renderSidebar(ctx context.Context) error {
 // with the model lists of every agent in it, is only redrawn when
 // composer is set: a settings change, or the first item, which locks
 // the agent chip.
+// renderPRCheck redraws the time to the next read of the thread's
+// watched pull request, without the rest of the header.
+func (c *conn) renderPRCheck(ctx context.Context) error {
+	t, err := c.s.App.Store.Thread(ctx, c.threadID)
+	if err != nil || !app.Watching(t) {
+		return nil
+	}
+	states, err := c.s.App.Store.PRStates(ctx)
+	if err != nil {
+		return nil
+	}
+	return c.sse.PatchElementTempl(views.PRCheck(t.ID, app.PRWatchNext(t, states[store.PR{Repo: t.PRRepo, Number: t.PRNumber}].CheckedAt)))
+}
+
 func (c *conn) renderHead(ctx context.Context, composer bool) error {
 	d, err := c.s.threadData(ctx, c.threadID)
 	if err != nil {
