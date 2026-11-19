@@ -642,7 +642,7 @@ templ SettingsPage(d SettingsPageData) {
 							<div class="setting-row">
 								<div>
 									<label for="watch-prs">Watch linked pull requests</label>
-									<p class="dim">Every thread with an open linked pull request watches it. The agent wakes for a failed check, all checks passing, a new conflict, a review that requests changes, or a comment that @mentions your GitHub account. Comments wake it only after two quiet minutes, so a burst is one wake. Other comments show in the thread and reach the agent with its next prompt. A watch you stop with the eye button stays off for that thread.</p>
+									<p class="dim">Every thread with an open linked pull request watches it. The agent wakes for a failed check, all checks passing, a new conflict, or someone with write access to the repository requesting changes or @mentioning your GitHub account. Mentions from anyone else never wake it. Comments wake it only after two quiet minutes, so a burst is one wake. Other comments show in the thread and reach the agent with its next prompt. A watch you stop with the eye button stays off for that thread.</p>
 								</div>
 								<input id="watch-prs" type="checkbox" data-bind:watch-prs data-on:change="@post('/api/settle')"/>
 							</div>

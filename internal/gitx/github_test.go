@@ -208,7 +208,7 @@ func TestPRDetailState(t *testing.T) {
 func TestDecodeDetailsPartial(t *testing.T) {
 	raw := []byte(`{"data":{"viewer":{"login":"me"},
 	  "pr0":{"pullRequest":{"number":7,"title":"t","state":"OPEN","updatedAt":"2026-09-06T05:00:00Z","author":{"login":"me"},
-	    "comments":{"nodes":[{"id":"c","author":{"login":"rev"},"body":"hi","url":"u","createdAt":"2026-09-07T01:00:00Z"}]},
+	    "comments":{"nodes":[{"id":"c","author":{"login":"rev"},"authorAssociation":"MEMBER","body":"hi","url":"u","createdAt":"2026-09-07T01:00:00Z"}]},
 	    "commits":{"nodes":[{"commit":{"committedDate":"2026-09-05T00:00:00Z","statusCheckRollup":{"contexts":{"nodes":[
 	      {"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","completedAt":"2026-09-08T00:00:00Z"}]}}}}]}}},
 	  "pr1":null,
@@ -219,7 +219,7 @@ func TestDecodeDetailsPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := rs[0].Detail
-	if rs[0].Err != nil || d.Number != 7 || d.Viewer != "me" || len(d.Remarks) != 1 || !d.Open() {
+	if rs[0].Err != nil || d.Number != 7 || d.Viewer != "me" || len(d.Remarks) != 1 || d.Remarks[0].Role != "MEMBER" || !d.Open() {
 		t.Fatalf("pr0 = %+v, %v", d, rs[0].Err)
 	}
 	if want := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC); !d.Activity.Equal(want) {

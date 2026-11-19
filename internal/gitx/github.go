@@ -303,6 +303,9 @@ type Remark struct {
 	Path      string
 	State     string
 	CreatedAt time.Time
+	// Role is the author's tie to the repository as GitHub reports it
+	// (authorAssociation): OWNER, MEMBER and COLLABORATOR can push.
+	Role string
 }
 
 // Review is one submitted review; only the latest per reviewer is kept.
@@ -344,12 +347,12 @@ type Check struct {
 const prDetailFields = `number title url headRefName headRefOid baseRefName isDraft reviewDecision updatedAt state mergeable
       author { login }
       reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
-      reviews(last: 30) { nodes { id author { login } state body url submittedAt } }
-      comments(last: 30) { nodes { id author { login } body url createdAt } }
+      reviews(last: 30) { nodes { id author { login } authorAssociation state body url submittedAt } }
+      comments(last: 30) { nodes { id author { login } authorAssociation body url createdAt } }
       reviewThreads(last: 30) {
         nodes {
           isResolved isOutdated path line originalLine
-          comments(last: 10) { nodes { id author { login } body url createdAt } }
+          comments(last: 10) { nodes { id author { login } authorAssociation body url createdAt } }
         }
       }
       commits(last: 1) {
@@ -536,6 +539,7 @@ type prDetailNode struct {
 			Author struct {
 				Login string `json:"login"`
 			} `json:"author"`
+			Role      string `json:"authorAssociation"`
 			Body      string `json:"body"`
 			URL       string `json:"url"`
 			CreatedAt string `json:"createdAt"`
@@ -547,6 +551,7 @@ type prDetailNode struct {
 			Author struct {
 				Login string `json:"login"`
 			} `json:"author"`
+			Role        string `json:"authorAssociation"`
 			State       string `json:"state"`
 			Body        string `json:"body"`
 			URL         string `json:"url"`
@@ -566,6 +571,7 @@ type prDetailNode struct {
 					Author struct {
 						Login string `json:"login"`
 					} `json:"author"`
+					Role      string `json:"authorAssociation"`
 					Body      string `json:"body"`
 					URL       string `json:"url"`
 					CreatedAt string `json:"createdAt"`
@@ -649,18 +655,18 @@ func (pr *prDetailNode) detail(viewer string) PRDetail {
 		if r.State == "PENDING" || r.State == "COMMENTED" && strings.TrimSpace(r.Body) == "" {
 			continue
 		}
-		rm := Remark{ID: r.ID, Author: r.Author.Login, Body: r.Body, URL: r.URL, State: r.State}
+		rm := Remark{ID: r.ID, Author: r.Author.Login, Body: r.Body, URL: r.URL, State: r.State, Role: r.Role}
 		rm.CreatedAt, _ = time.Parse(time.RFC3339, r.SubmittedAt)
 		d.Remarks = append(d.Remarks, rm)
 	}
 	for _, c := range pr.Comments.Nodes {
-		rm := Remark{ID: c.ID, Author: c.Author.Login, Body: c.Body, URL: c.URL}
+		rm := Remark{ID: c.ID, Author: c.Author.Login, Body: c.Body, URL: c.URL, Role: c.Role}
 		rm.CreatedAt, _ = time.Parse(time.RFC3339, c.CreatedAt)
 		d.Remarks = append(d.Remarks, rm)
 	}
 	for _, t := range pr.ReviewThreads.Nodes {
 		for _, c := range t.Comments.Nodes {
-			rm := Remark{ID: c.ID, Author: c.Author.Login, Body: c.Body, URL: c.URL, Path: t.Path}
+			rm := Remark{ID: c.ID, Author: c.Author.Login, Body: c.Body, URL: c.URL, Path: t.Path, Role: c.Role}
 			rm.CreatedAt, _ = time.Parse(time.RFC3339, c.CreatedAt)
 			d.Remarks = append(d.Remarks, rm)
 		}

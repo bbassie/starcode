@@ -2193,7 +2193,7 @@ func MainHead(d ThreadData) templ.Component {
 }
 
 // prWatchWhat says what a watch on a pull request does.
-const prWatchWhat = "starcode reads it on GitHub and wakes the agent when a check fails or they all pass, the branch starts to conflict, a review requests changes, or a comment @mentions the agent's account. Other comments reach the agent with its next prompt. It stops when the PR merges or closes."
+const prWatchWhat = "starcode reads it on GitHub and wakes the agent when a check fails or they all pass, the branch starts to conflict, or someone with write access requests changes or @mentions the agent's account. Other comments reach the agent with its next prompt. It stops when the PR merges or closes."
 
 // PRCheck is the time to the watch's next read of the pull request,
 // ticking down in the page ([data-until]), and reads it now when
